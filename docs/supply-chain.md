@@ -21,6 +21,8 @@ SBOM 内层 manifest 的路径相对仓库根目录，因此必须从仓库根�
 CI 固定使用 Rust 1.98.0，并固定发布工具版本：`cargo-audit 0.22.2`、
 `cargo-cyclonedx 0.5.9`、`cargo-license 0.7.0`。升级时要重新验证输出格式和许可证。
 
+Unsigned community prerelease 只能从同一 `main` commit 的成功 CI artifact 创建，并标记为 GitHub prerelease。允许上传 unsigned DMG、单独的 SBOM/许可证 ZIP 和针对最终上传资产生成的扁平路径 SHA-256 清单；禁止上传 `.app` 压缩包、完整 CI artifact、`latest.json`、`.app.tar.gz` 或 updater `.sig`。发布后必须回下载并逐字节验证资产，确保它不会进入稳定 updater 通道。该路径不接触 updater 私钥、Apple 凭据或签名 release workflow。
+
 Tauri updater 的公钥可提交，私钥/密码不得进入仓库、缓存、artifact、SBOM 或日志。两个 checkout 都禁用凭据持久化；发布工作流先用私钥签名临时探针并以配置公钥验签，再创建只含 updater artifact 开关和 Apple signing identity 的临时配置。工作流只创建 draft；Tauri 完成 `.app` 信任链和 updater archive 后，DMG 另行 notarize/staple 并覆盖同名草稿资产。草稿阶段还验证 `.app.tar.gz`/`.sig`、版本、GitHub Release tarball asset ID 对应的精确 API URL，以及 `latest.json` 的平台键/签名对应。工作流使用的 `tauri-action` 当前同时需要更新签名私钥和 `contents: write`，这是已记录的 P1 剩余风险；受保护 Environment、人工审批、固定 action SHA、main-only 源和 draft-only 是当前约束。
 
 2026-08-27 本机验证已将 npm、Cargo 和 Tauri 版本统一为 `0.1.0`，生成 4 份可解析 CycloneDX JSON、Cargo/npm 许可证 JSON 和 notices，两层 manifest 校验通过。`npm audit` 与 `cargo audit` 都报告 0 vulnerabilities；Cargo 仍有 18 条可见 warning，应在每次公开发布前重新审查，不能被静默忽略。

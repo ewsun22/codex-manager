@@ -8,7 +8,7 @@ Codex Manager 是一个独立运行、本地优先的开源 Codex 桌面管理�
 
 ## 当前状态
 
-当前代码是 **macOS 本地 beta 候选版**：P1 本地数据层、P2 使用记录 UI、P3 项目与 AGENTS 管理、P4 隐私/安全/供应链与本地打包都已实现并通过本机验证。应用内手动检查更新和 GitHub Releases 草稿发布流程已接入；2026-08-27 仍只存在 `0.1.0` arm64 unsigned `.app`/`.dmg`、SBOM、许可证清单和 SHA-256 manifest，Developer ID 签名、Apple 公证、stapling 和公开二进制 Release 尚未发生。
+当前代码是 **macOS 本地 beta 候选版**：P1 本地数据层、P2 使用记录 UI、P3 项目与 AGENTS 管理、P4 隐私/安全/供应链与本地打包都已实现并通过本机验证。公开发布采用双轨：没有 Apple Developer ID 时，只提供明确标注的 `Unsigned Community Build` GitHub prerelease，供开发者和愿意手动确认 Gatekeeper 警告的测试者使用；它不上传 `latest.json` 或 updater bundle，不进入稳定在线更新通道。Developer ID 签名、Apple 公证、stapling 和真实旧版到新版更新验收完成后，才发布面向普通用户的正式 macOS beta。
 
 已实现的主要能力：
 

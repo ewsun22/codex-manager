@@ -2,7 +2,7 @@
 
 ## 支持状态
 
-项目目前是未发布的 macOS beta 候选版。源码与 unsigned 本机构建可供验证，但尚无签名、公证或公开下载版本。Windows 尚未进入安全支持范围。
+项目目前是 macOS beta 候选版。源码和明确标注的 `Unsigned Community Build` prerelease 可供开发者验证，但它没有 Apple 身份保证，不属于正式支持的 macOS beta artifact。签名、公证的稳定下载通道尚未建立；Windows 尚未进入安全支持范围。
 
 ## 报告问题
 
@@ -30,7 +30,7 @@
 
 - rollout JSONL 是内部兼容源；畸形或未来事件会降级 source health，不能被视为稳定安全协议。
 - macOS no-follow/原子替换路径已实现；Windows portable fallback 尚未完成 reparse-point 等价安全验证。
-- unsigned 构建没有 Apple 身份保证，Gatekeeper 警告是预期行为。只有 Developer ID 签名、Apple accepted、公证 ticket stapled 并验证后，才能称为正式 macOS beta artifact。
+- unsigned 构建没有 Apple 身份保证，Gatekeeper 警告是预期行为。它只能作为 GitHub prerelease 的 `Unsigned Community Build` 分发，并且不得携带稳定 updater manifest。只有 Developer ID 签名、Apple accepted、公证 ticket stapled 并验证后，才能称为正式 macOS beta artifact。
 - 应用数据对同一 OS 用户可见；当前未提供应用层加密或 OS keychain 封装。
 - 当前没有启动时自动更新或远程撤回机制。在线更新会将完整更新包读入内存后验签；严格下载字节上限是后续加固项。
 - `tauri-action` 目前在同一受保护 job 中同时持有 updater 签名私钥和 GitHub `contents: write`；这是已知 P1 剩余风险，由 Environment 人工审批、main-only SHA、完整 action SHA 固定与 draft-only 限制。updater 私钥的独立离线恢复备份也必须在首次发布前完成。
@@ -41,4 +41,6 @@
 
 ## 发布安全门
 
-发布人员必须逐项确认：测试与 clippy 通过、依赖审计无未处置高风险项、secret scan 通过、SBOM/许可证完整、Developer ID 身份准确、Hardened Runtime 签名验证通过、notarytool 返回 accepted、stapler validate 通过、Tauri updater 签名与 `latest.json` 中绑定该版本 tarball asset ID 的 GitHub API URL 匹配、最终 artifact SHA-256 与发布记录一致。任何一步缺失都必须保持相应的 `unsigned`、`signed`、`notarized`、`draft` 或 `unreleased` 状态，不能越级表述。
+Community prerelease 必须确认测试、clippy、依赖审计、secret scan、SBOM/许可证、DMG 完整性与下载后 SHA-256，并确认没有 `latest.json` 或 updater bundle；发布文案必须披露 unsigned/unnotarized 状态。
+
+签名稳定发布还必须确认 Developer ID 身份准确、Hardened Runtime 签名验证通过、notarytool 返回 accepted、stapler validate 通过、Tauri updater 签名与 `latest.json` 中绑定该版本 tarball asset ID 的 GitHub API URL 匹配、最终 artifact SHA-256 与发布记录一致。任何一步缺失都必须保持相应的 `unsigned community prerelease`、`signed`、`notarized`、`draft` 或 `unreleased` 状态，不能越级表述。

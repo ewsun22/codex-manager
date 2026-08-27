@@ -2,21 +2,32 @@
 
 ## 状态边界
 
-1. `unsigned local build`：本机生成 `.app`/`.dmg`，没有 Apple 签名。
-2. `signed`：Developer ID Application 签名并启用 Hardened Runtime。
-3. `notarized`：`xcrun notarytool` 获得 Apple accepted 结果。
-4. `stapled`：`xcrun stapler staple` 固化 ticket，并执行 `stapler validate`。
-5. `draft uploaded`：签名产物、Tauri updater 包/签名、`latest.json`、SBOM 和 provenance 已进入 GitHub 草稿 Release，仍不会被在线更新发现。
-6. `published`：人工复核草稿和下载验收后发布；只有此时 GitHub `releases/latest` 稳定通道才可能对客户端可见。
+1. `unsigned local build`：本机或 CI 生成 `.app`/`.dmg`，没有 Apple 签名。
+2. `unsigned community prerelease`：从可追溯的 `main` commit 和成功 CI artifact 发布源码、unsigned DMG、SBOM、许可证与校验和；GitHub 必须标记 prerelease，并明确展示 Gatekeeper 警告。不得包含 `latest.json`、`.app.tar.gz` 或 updater `.sig`，不属于稳定在线更新。
+3. `signed`：Developer ID Application 签名并启用 Hardened Runtime。
+4. `notarized`：`xcrun notarytool` 获得 Apple accepted 结果。
+5. `stapled`：`xcrun stapler staple` 固化 ticket，并执行 `stapler validate`。
+6. `draft uploaded`：签名产物、Tauri updater 包/签名、`latest.json`、SBOM 和 provenance 已进入 GitHub 草稿 Release，仍不会被在线更新发现。
+7. `published stable`：人工复核草稿和下载验收后发布；只有这个签名通道才允许提供 `latest.json` 并对客户端启用稳定在线更新。
 
-`ci.yml` 默认只做 unsigned artifact。`release.yml` 只能手动运行，并且只允许 `main` 当前远端 SHA；它使用受保护的 GitHub `release` Environment，凭据不齐时必须失败。没有证书、Team ID 和 notarization 凭据时，禁止模拟签名成功、绕过门禁或发布草稿。
+`ci.yml` 默认只做 unsigned artifact，可用于人工创建上述 community prerelease。`release.yml` 只服务签名稳定通道：只能手动运行，并且只允许 `main` 当前远端 SHA；它使用受保护的 GitHub `release` Environment，凭据不齐时必须失败。没有证书、Team ID 和 notarization 凭据时，禁止模拟签名成功、绕过门禁或向 community prerelease 添加 updater manifest。
+
+## Unsigned Community Build 发布
+
+1. 只使用 `main` 当前 commit 的成功 `CI` run 所上传的 `codex-manager-macos-unsigned` artifact，不使用本机历史产物。
+2. 验证 artifact 中的 `SHA256SUMS-unsigned`、SBOM 内层 manifest、DMG 的 `hdiutil verify`、版本和 `BUILD-SOURCE-unsigned.txt` source SHA。
+3. GitHub Release 必须标记为 prerelease，标题和正文包含 `Unsigned Community Build`，并明确说明没有 Developer ID 签名、没有 Apple 公证、Gatekeeper 警告是预期行为。
+4. 只上传 unsigned DMG、单独打包的 SBOM ZIP、单独打包的许可证 ZIP，以及针对这些最终上传资产重新生成的扁平路径 SHA-256 清单；源码归档由 GitHub 根据 tag 自动提供。CI 内层 `SHA256SUMS-unsigned` 含仓库相对路径，只作为构建证据，不能原样充当 Release 下载校验文件。
+5. 发布后回下载每个资产并逐字节核对；确认 Release 中不存在 `latest.json`、`.app.tar.gz` 或 `.sig`，固定 updater endpoint 仍返回非 2xx。
+
+该通道不是“正式 macOS beta artifact”，不能写成 signed、notarized、stapled、stable update 或普通用户无警告安装。后续签名版本必须提高 SemVer，不得用签名资产覆盖同一个 community tag。
 
 ## 2026-08-27 当前实际状态
 
 - 已完成 `unsigned local build`：`artifacts/release/Codex Manager.app` 和 `artifacts/release/Codex Manager_0.1.0_aarch64.dmg`。该目录与 Vite 的 `dist/` 分离，普通前端构建不得删除发布物。
 - DMG 为 arm64、9.4 MiB，`hdiutil verify` 通过，SHA-256 为 `a66968a63b3d246f8a1a3ee6e61800e01c2adf94f8dd0e7bdd4be145117fff74`；以 `artifacts/release/SHA256SUMS-unsigned` 为准。
 - SBOM、许可证清单和 `SHA256SUMS-unsigned` 完整性验证通过。
-- 本机没有 Developer ID Application identity；strict `codesign` 和 Gatekeeper 拒绝该产物是预期结果。未运行 notarization/stapling，未上传或发布。
+- 本机没有 Developer ID Application identity；strict `codesign` 和 Gatekeeper 拒绝 unsigned 产物是预期结果。未运行 notarization/stapling；这不阻止按上面的严格边界发布 community prerelease。
 - 现有本机 unsigned 产物生成时仓库尚无 commit，`BUILD-SOURCE-unsigned.txt` 记录 `unversioned-working-tree`。首次提交之后，正式 beta 必须从可追溯 commit 重新构建。
 - 应用代码已配置 GitHub `latest.json` endpoint 和 Tauri updater 公钥；生产构建只通过 `src-tauri/tauri.updater.conf.json` 开启 updater artifact，日常 unsigned 构建不会要求私钥。
 - GitHub `release` Environment 已配置为只允许 `main`，并要求仓库所有者人工批准。`TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 已作为 Environment secrets 写入；私钥还有一份密码保护的仓库外本机副本，密码保存在 macOS Keychain 服务 `cc.codex.manager.updater`。
