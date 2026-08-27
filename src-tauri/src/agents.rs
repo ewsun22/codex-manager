@@ -379,6 +379,14 @@ pub fn discover_all(project: &Path, config: &DocConfig) -> Result<FileDiscovery,
     })
 }
 
+pub fn has_root_agents_file(project: &Path) -> bool {
+    let Ok(project) = canonical_directory(project) else {
+        return false;
+    };
+    fs::symlink_metadata(project.join("AGENTS.md"))
+        .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+}
+
 fn should_visit_entry(entry: &walkdir::DirEntry) -> bool {
     if !entry.file_type().is_dir() || entry.depth() == 0 {
         return true;
@@ -487,6 +495,35 @@ mod tests {
         .unwrap();
         assert_eq!(resolved.effective_paths.len(), 1);
         assert!(resolved.effective_paths[0].ends_with("codex/AGENTS.md"));
+    }
+
+    #[test]
+    fn root_agents_status_only_accepts_a_regular_root_agents_file() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        fs::create_dir_all(project.join("src")).unwrap();
+        fs::write(project.join("src/AGENTS.md"), "nested").unwrap();
+        fs::write(project.join("AGENTS.override.md"), "override").unwrap();
+
+        assert!(!has_root_agents_file(&project));
+
+        fs::write(project.join("AGENTS.md"), "root").unwrap();
+        assert!(has_root_agents_file(&project));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn root_agents_status_rejects_a_symlinked_agents_file() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        let outside = root.path().join("outside.md");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(&outside, "outside").unwrap();
+        symlink(&outside, project.join("AGENTS.md")).unwrap();
+
+        assert!(!has_root_agents_file(&project));
     }
 
     #[test]

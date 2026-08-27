@@ -16,6 +16,8 @@ Codex Desktop / CLI
                                       explicit Tauri IPC
                                              │
                                         React desktop UI
+
+User click ─ GitHub latest.json ─ Rust updater + embedded public key ─ native confirm ─ signed app replacement
 ```
 
 ## 采集层
@@ -78,11 +80,19 @@ SQLite 位于平台应用数据目录，启用 WAL、foreign keys、busy timeout
 2. 从项目根到选定 cwd，逐目录按 override、AGENTS、配置的 fallback 顺序取首个非空文件。
 3. 合并到 `project_doc_max_bytes` 后停止；应用另设 2 MiB 硬读取上限。
 
+前端首次加载项目链时优先打开 Codex home 顶级 `AGENTS.md`，不存在时再回退到其他全局或项目文件；未授予写权限时仍可只读展示。项目状态点使用独立的 `hasAgentsFile` 字段，只在 canonical 项目根目录存在非符号链接普通 `AGENTS.md` 时为绿色；嵌套文件、fallback 与 `AGENTS.override.md` 仍计入发现数量，但不会冒充根文件存在。
+
 发现文件不等于写授权。写入必须同时通过已知项目、显式授权根目录、canonical containment、文件名 allowlist、逐段 no-follow、安全文件身份、expected SHA/mtime 和最大大小检查。Unix 上从 `/` 开始打开根目录链，每个组件均通过 `openat(O_DIRECTORY | O_NOFOLLOW)` 验证；随后在同一目录创建临时文件、fsync，并在 atomic swap 后以同一安全路径重验 CAS，冲突时原子回滚，最后提交 revision。应用不会执行或信任 AGENTS 内容中的命令。
 
 ## 前端与 IPC
 
-React 只使用 18 个显式 Tauri commands；其中 OTel 凭据只在用户点击显示配置时返回前端。Tauri capability 清单不授予通用 shell 或任意文件系统 API，WebView 使用严格 CSP。浏览器开发模式使用人工构造的 demo adapter，不读取本机 Codex 数据。
+React 只使用 20 个显式 Tauri commands；其中 OTel 凭据只在用户点击显示配置时返回前端。Tauri capability 清单不授予通用 shell、任意文件系统、HTTP、process、dialog 或 updater 插件 API，WebView 使用严格 CSP。浏览器开发模式使用人工构造的 demo adapter，不读取本机 Codex 数据。
+
+## 在线更新信任边界
+
+更新源和 minisign 公钥固定在 Tauri 配置中。WebView 只能调用 `check_for_update` 和 `install_pending_update`：前者返回当前/可用版本、日期和最多 4,000 字符的纯文本说明，不返回 URL、签名或原始 JSON；后者只能消费 Rust 内存中上一次成功检查所得的同一 `Update` 对象，期望版本不一致或应用重启后都必须重新检查。清单检查超时为 30 秒，已检查对象的下载/安装超时为 10 分钟；两者共用单飞行锁，下载/验签/安装失败不保留 pending update。
+
+网络请求由 Rust updater 执行，不放宽 WebView `connect-src`。安装前通过 Rust dialog 插件显示原生确认框；前端未被授予 dialog 或 updater 插件权限。Tauri 更新签名用于应用内包验证，Developer ID、Hardened Runtime、Apple notarization 和 stapling 用于 macOS Gatekeeper 信任，两条链都必须通过。
 
 ## 跨平台边界
 

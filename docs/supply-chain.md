@@ -2,6 +2,7 @@
 
 - `package-lock.json` 与 `Cargo.lock` 必须进入版本控制；CI 使用 `npm ci`。
 - GitHub Actions 第三方 action 以完整 commit SHA 固定，并在行尾注释 tag。
+- 手动 release workflow 只接受 `main` 当前 SHA，使用有 required reviewer 和 main-only 规则的 `release` Environment；Tauri/Apple 私密凭据只存在 Environment secrets。缺少任一凭据必须 fail closed。
 - 发布前运行 `npm audit`、`cargo audit`（环境安装时）。
 - `scripts/scan-secrets.sh` 对仓库文件做高风险凭据格式回归检查，仅输出命中文件名。
 - `scripts/sbom.sh` 生成 npm 应用 SBOM，并为 `codex-core`、`codex-storage`、`codex-manager-desktop` 三个 Rust package 分别生成 CycloneDX JSON；`scripts/licenses.sh` 生成许可证清单。
@@ -19,5 +20,7 @@ SBOM 内层 manifest 的路径相对仓库根目录，因此必须从仓库根�
 
 CI 固定使用 Rust 1.98.0，并固定发布工具版本：`cargo-audit 0.22.2`、
 `cargo-cyclonedx 0.5.9`、`cargo-license 0.7.0`。升级时要重新验证输出格式和许可证。
+
+Tauri updater 的公钥可提交，私钥/密码不得进入仓库、缓存、artifact、SBOM 或日志。两个 checkout 都禁用凭据持久化；发布工作流先用私钥签名临时探针并以配置公钥验签，再创建只含 updater artifact 开关和 Apple signing identity 的临时配置。工作流只创建 draft；Tauri 完成 `.app` 信任链和 updater archive 后，DMG 另行 notarize/staple 并覆盖同名草稿资产。草稿阶段还验证 `.app.tar.gz`/`.sig`、版本、GitHub Release tarball asset ID 对应的精确 API URL，以及 `latest.json` 的平台键/签名对应。工作流使用的 `tauri-action` 当前同时需要更新签名私钥和 `contents: write`，这是已记录的 P1 剩余风险；受保护 Environment、人工审批、固定 action SHA、main-only 源和 draft-only 是当前约束。
 
 2026-08-27 本机验证已将 npm、Cargo 和 Tauri 版本统一为 `0.1.0`，生成 4 份可解析 CycloneDX JSON、Cargo/npm 许可证 JSON 和 notices，两层 manifest 校验通过。`npm audit` 与 `cargo audit` 都报告 0 vulnerabilities；Cargo 仍有 18 条可见 warning，应在每次公开发布前重新审查，不能被静默忽略。

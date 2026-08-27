@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { invokeBackend, isDesktopRuntime } from "./app/client.ts";
+import { preferredAgentsFile } from "./app/agents.ts";
 import {
   confidenceLabel,
   formatCount,
@@ -18,6 +19,7 @@ import {
   type AgentsFileSnapshot,
   type AgentsRevision,
   type AppSettings,
+  type AppUpdateStatus,
   type BootstrapPayload,
   type CreateAgentsFileInput,
   type MetricValue,
@@ -25,6 +27,7 @@ import {
   type PricingRule,
   type ProjectSummary,
   type SourceHealth,
+  type UpdateInstallResult,
 } from "./shared/contracts.ts";
 
 type View = "overview" | "activity" | "projects" | "pricing" | "settings";
@@ -518,6 +521,10 @@ function ProjectList({
         <div>
           <h2 id="projects-heading">已发现项目</h2>
           <p>来自本地观测路径和你授权的根目录。</p>
+          <div className="agents-status-legend" aria-label="AGENTS 文件状态图例">
+            <span><i className="agents-file-indicator has-agents-file" aria-hidden="true" />有 AGENTS.md</span>
+            <span><i className="agents-file-indicator no-agents-file" aria-hidden="true" />无 AGENTS.md</span>
+          </div>
         </div>
         <button type="button" className="button button-secondary" onClick={onDiscover} disabled={discovering}>
           {discovering ? "扫描中…" : "重新发现"}
@@ -537,6 +544,9 @@ function ProjectList({
                 <small>{project.canonicalPath}</small>
               </span>
               <span className="project-flags">
+                <span className="agents-file-status" role="img" aria-label={project.hasAgentsFile ? "项目根目录存在 AGENTS.md" : "项目根目录没有 AGENTS.md"} title={project.hasAgentsFile ? "项目根目录存在 AGENTS.md" : "项目根目录没有 AGENTS.md"}>
+                  <i className={`agents-file-indicator ${project.hasAgentsFile ? "has-agents-file" : "no-agents-file"}`} aria-hidden="true" />
+                </span>
                 {project.isGit ? <span>Git</span> : null}
                 {project.worktree ? <span>Worktree</span> : null}
                 <span>{project.agentsFileCount} 个 AGENTS</span>
@@ -592,7 +602,10 @@ function AgentsEditor({
           <h2 id="agents-editor-heading">AGENTS 层级与编辑器</h2>
           <p>有效文件由后端按 canonical path 与授权根目录确认；应用不会执行文件内容。</p>
         </div>
-        {snapshot ? <span className={`state-pill ${snapshot.writable && canSave ? "state-healthy" : "state-unavailable"}`}>{snapshot.writable && canSave ? "可编辑" : "未授权或只读"}</span> : null}
+        <div className="agents-header-actions">
+          {snapshot ? <span className={`state-pill ${snapshot.writable && canSave ? "state-healthy" : "state-unavailable"}`}>{snapshot.writable && canSave ? "可编辑" : "未授权或只读"}</span> : null}
+          {canCreate ? <button type="button" className="button button-secondary" onClick={onCreate} disabled={busy}>{busy ? "创建中…" : "创建项目级 AGENTS.md"}</button> : null}
+        </div>
       </div>
 
       <div className="chain-summary">
@@ -702,9 +715,7 @@ function ProjectsView({
     try {
       const nextChain = await invokeBackend<AgentsChain>(COMMANDS.getAgentsChain, { projectPath: project.canonicalPath, selectedCwd: project.canonicalPath });
       setChain(nextChain);
-      const projectPrefix = `${project.canonicalPath.replace(/\/$/, "")}/`;
-      const candidate = nextChain.files.find((file) => file.path.startsWith(projectPrefix) && file.effective && file.writable)
-        ?? nextChain.files.find((file) => file.path.startsWith(projectPrefix) && file.writable);
+      const candidate = preferredAgentsFile(nextChain);
       if (!candidate) {
         setSnapshot(null);
         setRevisions([]);
@@ -791,7 +802,15 @@ function ProjectsView({
       const result = await invokeBackend<{ snapshot: AgentsFileSnapshot; revisionId: string }>(COMMANDS.createAgentsFile, { input });
       setSnapshot(result.snapshot);
       setRevisions(await invokeBackend<AgentsRevision[]>(COMMANDS.listAgentsRevisions, { path: result.snapshot.path }));
-      await loadChain(selectedProject);
+      const [refreshedChain, refreshedProjects] = await Promise.all([
+        invokeBackend<AgentsChain>(COMMANDS.getAgentsChain, {
+          projectPath: selectedProject.canonicalPath,
+          selectedCwd: selectedProject.canonicalPath,
+        }),
+        invokeBackend<ProjectSummary[]>(COMMANDS.listProjects),
+      ]);
+      setChain(refreshedChain);
+      onProjectsChange(refreshedProjects);
       showNotice({ tone: "success", message: `已创建项目级 AGENTS.md，并生成 revision ${result.revisionId}。` });
     } catch (error: unknown) {
       showNotice({ tone: "error", message: `创建被拒绝或未完成：${appError(error)}` });
@@ -881,6 +900,9 @@ function SettingsView({
   const [draft, setDraft] = useState(settings);
   const [otelConfig, setOtelConfig] = useState<OtelConfig | null>(null);
   const [otelConfigError, setOtelConfigError] = useState<string | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
+  const [updateBusy, setUpdateBusy] = useState<"check" | "install" | null>(null);
+  const [updateMessage, setUpdateMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   useEffect(() => setDraft(settings), [settings]);
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -893,6 +915,37 @@ function SettingsView({
     } catch (error: unknown) {
       setOtelConfig(null);
       setOtelConfigError(appError(error));
+    }
+  };
+  const checkUpdate = async () => {
+    setUpdateBusy("check");
+    setUpdateMessage(null);
+    try {
+      const status = await invokeBackend<AppUpdateStatus>(COMMANDS.checkForUpdate);
+      setUpdateStatus(status);
+      if (!status.available) setUpdateMessage({ tone: "success", text: "当前已是最新版本。" });
+    } catch (error: unknown) {
+      setUpdateStatus(null);
+      setUpdateMessage({ tone: "error", text: appError(error) });
+    } finally {
+      setUpdateBusy(null);
+    }
+  };
+  const installUpdate = async () => {
+    if (!updateStatus?.version) return;
+    setUpdateBusy("install");
+    setUpdateMessage(null);
+    try {
+      const result = await invokeBackend<UpdateInstallResult>(COMMANDS.installPendingUpdate, { expectedVersion: updateStatus.version });
+      setUpdateMessage(result.accepted
+        ? { tone: "success", text: "更新已安装；桌面版将自动重启。" }
+        : { tone: "success", text: "已取消安装；再次安装前请重新检查更新。" });
+      setUpdateStatus(null);
+    } catch (error: unknown) {
+      setUpdateStatus(null);
+      setUpdateMessage({ tone: "error", text: appError(error) });
+    } finally {
+      setUpdateBusy(null);
     }
   };
   return (
@@ -916,11 +969,22 @@ function SettingsView({
           <div className="privacy-lock"><strong>隐私锁定</strong><span>metadataOnly = true，消息正文、Authorization、Cookie、API Key 与完整环境变量不会保存。</span></div>
           <div className="editor-actions"><span className="muted">价格目录版本：{draft.priceCatalogVersion}</span><button className="button button-primary" type="submit" disabled={saving}>{saving ? "保存中…" : "保存设置"}</button></div>
         </form>
-        <section className="panel capability-panel" aria-labelledby="capability-heading">
-          <div className="panel-title-row"><div><h2 id="capability-heading">Codex capability</h2><p>仅探测 CLI schema，不会接管私有 app-server 进程。</p></div><button type="button" className="button button-secondary" onClick={onProbe} disabled={saving}>{saving ? "探测中…" : "重新探测"}</button></div>
-          {capability ? <dl className="capability-list"><div><dt>可用性</dt><dd>{capability.available ? "可用" : "unavailable"}</dd></div><div><dt>版本</dt><dd>{capability.version ?? "unavailable"}</dd></div><div><dt>Schema SHA-256</dt><dd><code>{capability.schemaSha256 ?? "unavailable"}</code></dd></div><div><dt>上次探测</dt><dd>{formatDate(capability.checkedAt)}</dd></div><div><dt>可执行文件</dt><dd><code>{capability.executablePath}</code></dd></div></dl> : <EmptyState title="尚未探测 capability" detail="运行探测前不会将本机 Codex 数据格式描述为稳定 API。" />}
-          {capability?.message ? <p className="capability-message">{capability.message}</p> : null}
-        </section>
+        <div className="settings-side-stack">
+          <section className="panel capability-panel" aria-labelledby="capability-heading">
+            <div className="panel-title-row"><div><h2 id="capability-heading">Codex capability</h2><p>仅探测 CLI schema，不会接管私有 app-server 进程。</p></div><button type="button" className="button button-secondary" onClick={onProbe} disabled={saving}>{saving ? "探测中…" : "重新探测"}</button></div>
+            {capability ? <dl className="capability-list"><div><dt>可用性</dt><dd>{capability.available ? "可用" : "unavailable"}</dd></div><div><dt>版本</dt><dd>{capability.version ?? "unavailable"}</dd></div><div><dt>Schema SHA-256</dt><dd><code>{capability.schemaSha256 ?? "unavailable"}</code></dd></div><div><dt>上次探测</dt><dd>{formatDate(capability.checkedAt)}</dd></div><div><dt>可执行文件</dt><dd><code>{capability.executablePath}</code></dd></div></dl> : <EmptyState title="尚未探测 capability" detail="运行探测前不会将本机 Codex 数据格式描述为稳定 API。" />}
+            {capability?.message ? <p className="capability-message">{capability.message}</p> : null}
+          </section>
+          <section className="panel update-panel" aria-labelledby="update-heading">
+            <div className="panel-title-row"><div><h2 id="update-heading">应用更新</h2><p>仅在点击后检查 GitHub Releases，不会在启动时自动联网。</p></div><button type="button" className="button button-secondary" onClick={() => void checkUpdate()} disabled={updateBusy !== null}>{updateBusy === "check" ? "检查中…" : "检查更新"}</button></div>
+            {updateStatus ? <>
+              <dl className="capability-list"><div><dt>当前版本</dt><dd>{updateStatus.currentVersion}</dd></div><div><dt>可用版本</dt><dd>{updateStatus.version ?? "已是最新"}</dd></div>{updateStatus.date ? <div><dt>发布日期</dt><dd>{formatDate(updateStatus.date)}</dd></div> : null}</dl>
+              {updateStatus.notes ? <p className="update-notes">{updateStatus.notes}</p> : null}
+              {updateStatus.available && updateStatus.version ? <div className="update-actions"><span>安装前会显示 macOS 原生确认框，并校验更新签名。</span><button type="button" className="button button-primary" onClick={() => void installUpdate()} disabled={updateBusy !== null}>{updateBusy === "install" ? "安装中…" : `安装 ${updateStatus.version}`}</button></div> : null}
+            </> : <p className="capability-message">尚未检查。更新包来源、公钥和目标平台由桌面后端固定，网页层不能修改。</p>}
+            {updateMessage ? <p className={`update-message update-message-${updateMessage.tone}`} role={updateMessage.tone === "error" ? "alert" : "status"}>{updateMessage.text}</p> : null}
+          </section>
+        </div>
       </div>
     </div>
   );

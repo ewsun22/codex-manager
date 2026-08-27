@@ -35,6 +35,7 @@ timeline 中只保存消息正文的 UTF-8 byte 长度。解析器和 OTel recei
 - 默认不监听端口。用户在设置中明确开启后，receiver 首次只在 IPv4 loopback 随机分配空闲端口，然后在应用私有配置中持久化并复用。持久化端口被占用时安全失败，不自动改用其他端口。
 - receiver 使用应用私有目录中的 localhost TLS 身份：Codex exporter 通过私有 CA 校验 receiver 身份，receiver 在读取/解码 body 前通过专用 header token 认证调用方。它拒绝带 `Origin` 的浏览器请求，请求体上限 128 KiB，空闲连接 10 秒超时，并限制连接/请求并发、频率、处理时间和解码后基数。专用 token 只在用户点击显示配置时进入 WebView，不写入管理器数据库或日志。
 - 应用不会安装 CA、系统代理、root helper 或系统服务，也不会自动修改 Codex 配置。
+- 应用不会自动检查更新。只有用户在设置页主动点击时，Rust 后端才访问 `https://github.com/ewsun22/codex-manager/releases/latest/download/latest.json`，并在确认安装后下载该清单指向的固定版本产物。不上传 Codex 消息、项目、AGENTS 或本地设置；GitHub 作为下载服务会常规看到网络请求元数据。
 - 本项目没有内置云同步、远程分析或自动上传。构建和依赖安装阶段访问包仓库不属于运行时数据上传。
 
 ## 保留与删除

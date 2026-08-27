@@ -109,6 +109,7 @@ export interface ProjectSummary {
   worktree: boolean;
   lastSeenAt: string | null;
   agentsFileCount: number;
+  hasAgentsFile: boolean;
 }
 
 export type AgentsFileKind = "global" | "project" | "nested" | "fallback";
@@ -194,6 +195,18 @@ export interface OtelConfig {
   configSnippet: string;
 }
 
+export interface AppUpdateStatus {
+  currentVersion: string;
+  available: boolean;
+  version: string | null;
+  date: string | null;
+  notes: string | null;
+}
+
+export interface UpdateInstallResult {
+  accepted: boolean;
+}
+
 export interface BootstrapPayload {
   summary: DashboardSummary;
   activity: ActivityPage;
@@ -223,4 +236,6 @@ export const COMMANDS = {
   updateSettings: "update_settings",
   rescan: "rescan",
   probeCodex: "probe_codex",
+  checkForUpdate: "check_for_update",
+  installPendingUpdate: "install_pending_update",
 } as const;

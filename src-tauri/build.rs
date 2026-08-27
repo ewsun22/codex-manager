@@ -14,9 +14,12 @@ fn main() {
         "list_sources",
         "list_pricing_rules",
         "get_settings",
+        "get_otel_config",
         "update_settings",
         "rescan",
         "probe_codex",
+        "check_for_update",
+        "install_pending_update",
     ];
 
     tauri_build::try_build(

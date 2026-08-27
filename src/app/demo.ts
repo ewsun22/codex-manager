@@ -6,6 +6,7 @@ import type {
   AgentsFileSnapshot,
   AgentsRevision,
   AppSettings,
+  AppUpdateStatus,
   BootstrapPayload,
   CodexCapability,
   CreateAgentsFileInput,
@@ -15,11 +16,13 @@ import type {
   SaveAgentsInput,
   SaveAgentsResult,
   SourceHealth,
+  UpdateInstallResult,
 } from "../shared/contracts.ts";
 import { COMMANDS } from "../shared/contracts.ts";
 
 const observedAt = "2026-08-27T10:32:00.000Z";
 const projectPath = "/Users/example/Projects/signal-catalog";
+const infraProjectPath = "/Users/example/Projects/infra-scripts";
 const globalAgentsPath = "/Users/example/.codex/AGENTS.md";
 const projectAgentsPath = `${projectPath}/AGENTS.md`;
 
@@ -172,17 +175,19 @@ const projects: ProjectSummary[] = [
     worktree: false,
     lastSeenAt: observedAt,
     agentsFileCount: 2,
+    hasAgentsFile: true,
   },
   {
     id: "project-infra",
     name: "infra-scripts",
-    canonicalPath: "/Users/example/Projects/infra-scripts",
+    canonicalPath: infraProjectPath,
     source: "observed",
     exists: true,
     isGit: true,
     worktree: true,
     lastSeenAt: "2026-08-27T10:30:52.000Z",
     agentsFileCount: 1,
+    hasAgentsFile: true,
   },
   {
     id: "project-marketing",
@@ -194,6 +199,7 @@ const projects: ProjectSummary[] = [
     worktree: false,
     lastSeenAt: null,
     agentsFileCount: 0,
+    hasAgentsFile: false,
   },
 ];
 
@@ -300,7 +306,7 @@ const capability: CodexCapability = {
 };
 
 let currentAgentsContent = `# signal-catalog agent guidance\n\n## 范围\n\n- 优先修复用户路径，不执行未授权的部署。\n- 数据采集默认仅保留元数据。\n\n## 验收\n\n- 修改后运行相关测试，并报告实际结果。\n`;
-const createdProjectAgents = new Set<string>([projectAgentsPath]);
+const createdProjectAgents = new Set<string>([projectAgentsPath, `${infraProjectPath}/AGENTS.md`]);
 let revisionCounter = 2;
 let revisions: AgentsRevision[] = [
   {
@@ -322,18 +328,20 @@ let revisions: AgentsRevision[] = [
 ];
 
 function agentsSnapshot(path = projectAgentsPath): AgentsFileSnapshot {
+  const isGlobal = path === globalAgentsPath;
+  const content = isGlobal ? "# 全局规则\n\n- 保持说明简洁。\n" : currentAgentsContent;
   return {
     path,
-    relativePath: path === globalAgentsPath ? "~/.codex/AGENTS.md" : "AGENTS.md",
-    kind: path === globalAgentsPath ? "global" : "project",
-    precedence: path === globalAgentsPath ? 10 : 40,
-    effective: path !== globalAgentsPath,
-    overridden: path === globalAgentsPath,
+    relativePath: isGlobal ? "~/.codex/AGENTS.md" : "AGENTS.md",
+    kind: isGlobal ? "global" : "project",
+    precedence: isGlobal ? 10 : 40,
+    effective: true,
+    overridden: false,
     sha256: "f2d3…2aa8",
     mtimeMs: 1_787_999_000_000,
-    sizeBytes: currentAgentsContent.length,
-    writable: true,
-    content: path === globalAgentsPath ? "# 全局规则\n\n- 保持说明简洁。\n" : currentAgentsContent,
+    sizeBytes: content.length,
+    writable: !isGlobal,
+    content,
     newline: "lf",
   };
 }
@@ -345,18 +353,7 @@ function chainFor(project: ProjectSummary): AgentsChain {
     project,
     selectedCwd: project.canonicalPath,
     files: [
-      {
-        path: globalAgentsPath,
-        relativePath: "~/.codex/AGENTS.md",
-        kind: "global",
-        precedence: 10,
-        effective: false,
-        overridden: true,
-        sha256: "61d9…ab5e",
-        mtimeMs: 1_787_100_000_000,
-        sizeBytes: 56,
-        writable: true,
-      },
+      agentsSnapshot(globalAgentsPath),
       ...(hasProjectAgents ? [{
         ...agentsSnapshot(candidatePath),
         path: candidatePath,
@@ -365,7 +362,7 @@ function chainFor(project: ProjectSummary): AgentsChain {
         overridden: false,
       }] : []),
     ],
-    effectivePaths: hasProjectAgents ? [candidatePath] : [],
+    effectivePaths: [globalAgentsPath, ...(hasProjectAgents ? [candidatePath] : [])],
     warnings:
       hasProjectAgents
         ? ["演示模式：保存操作只写入内存，不会改动本机文件。"]
@@ -428,7 +425,6 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
     }
     case COMMANDS.openAgentsFile: {
       const path = String(args.path ?? projectAgentsPath);
-      if (path === globalAgentsPath) throw new Error("全局 AGENTS.md 不在项目授权根目录内。");
       return agentsSnapshot(path) as T;
     }
     case COMMANDS.createAgentsFile: {
@@ -438,6 +434,11 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
         throw new Error("项目级 AGENTS.md 已存在，或文件名不受支持。");
       }
       createdProjectAgents.add(path);
+      const project = projects.find((candidate) => candidate.canonicalPath === input.projectPath);
+      if (project) {
+        project.hasAgentsFile = true;
+        project.agentsFileCount = Math.max(1, project.agentsFileCount + 1);
+      }
       currentAgentsContent = input.content;
       revisionCounter += 1;
       const revisionId = `revision-${String(revisionCounter).padStart(2, "0")}`;
@@ -464,7 +465,7 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
       return { snapshot: agentsSnapshot(input.path), revisionId } satisfies SaveAgentsResult as T;
     }
     case COMMANDS.listAgentsRevisions:
-      return revisions as T;
+      return String(args.path ?? "") === globalAgentsPath ? [] as T : revisions as T;
     case COMMANDS.restoreAgentsRevision:
       currentAgentsContent = "# signal-catalog agent guidance\n\n- 已从本地 revision 演示恢复。\n";
       return { snapshot: agentsSnapshot(), revisionId: "revision-restored" } satisfies SaveAgentsResult as T;
@@ -495,6 +496,17 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
       return { started: true, observedAt: new Date().toISOString() } as T;
     case COMMANDS.probeCodex:
       return capability as T;
+    case COMMANDS.checkForUpdate:
+      return {
+        currentVersion: "0.1.0",
+        available: true,
+        version: "0.2.0",
+        date: "2026-08-27T10:00:00.000Z",
+        notes: "演示更新：新增 GitHub Releases 在线更新与签名校验。",
+      } satisfies AppUpdateStatus as T;
+    case COMMANDS.installPendingUpdate:
+      if (args.expectedVersion !== "0.2.0") throw new Error("更新版本已变化，请重新检查后再安装。");
+      return { accepted: true } satisfies UpdateInstallResult as T;
     default:
       throw new Error(`演示适配器不支持命令：${command}`);
   }

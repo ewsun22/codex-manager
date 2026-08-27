@@ -8,7 +8,7 @@ Codex Manager 是一个独立运行、本地优先的开源 Codex 桌面管理�
 
 ## 当前状态
 
-当前代码是 **macOS 本地 beta 候选版**：P1 本地数据层、P2 使用记录 UI、P3 项目与 AGENTS 管理、P4 隐私/安全/供应链与本地打包都已实现并通过本机验证。2026-08-27 已生成 `0.1.0` arm64 unsigned `.app`/`.dmg`、SBOM、许可证清单和 SHA-256 manifest；Developer ID 签名、Apple 公证、stapling 和公开二进制 Release 尚未发生。
+当前代码是 **macOS 本地 beta 候选版**：P1 本地数据层、P2 使用记录 UI、P3 项目与 AGENTS 管理、P4 隐私/安全/供应链与本地打包都已实现并通过本机验证。应用内手动检查更新和 GitHub Releases 草稿发布流程已接入；2026-08-27 仍只存在 `0.1.0` arm64 unsigned `.app`/`.dmg`、SBOM、许可证清单和 SHA-256 manifest，Developer ID 签名、Apple 公证、stapling 和公开二进制 Release 尚未发生。
 
 已实现的主要能力：
 
@@ -19,8 +19,10 @@ Codex Manager 是一个独立运行、本地优先的开源 Codex 桌面管理�
 - 版本化 API 等价价格目录，按一次 model call 分桶计算普通输入、缓存读、缓存写和输出；reasoning output 不重复计费。
 - 用户主动开启的 TLS loopback OTLP/HTTP receiver：首次启用时随机分配空闲端口，后续复用应用私有配置。客户端必须通过本机 CA 校验服务端身份，receiver 再用专用 header 认证调用方；认证发生在 body 解码前，请求体上限 128 KiB，空闲连接 10 秒超时，日志 body 从不读取或持久化。
 - 从已观测 cwd 与用户授权根目录发现项目、Git root 和 worktree，解析 Codex 当前的全局到 cwd `AGENTS` 有效链。
+- “项目与 AGENTS”会优先展示顶级 Codex home `AGENTS.md`；项目列表以绿点表示项目根目录存在普通 `AGENTS.md`，以黄点表示缺失，并保留递归发现数量供核对。
 - 在授权根目录内创建项目级 `AGENTS.md`，并以 canonical path、逐段 no-follow、SHA/mtime 冲突检查、同目录原子交换和本地 revision 完成保存与恢复。
 - 探测 Desktop 内置或 PATH 中的 Codex CLI，并生成 App Server JSON Schema 指纹；不附着 Codex Desktop 的私有 stdio。
+- 设置页提供用户主动的 GitHub Releases 更新检查；Rust 后端固定 endpoint 和公钥，复用已检查的更新对象，安装前显示 macOS 原生确认框并验证 Tauri 更新签名。
 
 ## 观测边界
 
@@ -47,6 +49,7 @@ npm run tauri:dev
 ```
 
 首次启动会尝试发现现有 `~/.codex`。要编辑项目文件，仍需在“设置”中明确保存授权项目根目录；只观察到项目并不自动授予写权限。
+更新检查也不会在启动时自动运行；只有用户在“设置 → 应用更新”中点击检查时才访问固定的 GitHub `latest.json`。
 
 浏览器预览使用人工构造的脱敏 demo 数据：
 
@@ -85,7 +88,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 ./scripts/verify-release.sh unsigned
 ```
 
-本机没有 Developer ID 时，`package-macos.sh` 只能生成 unsigned `.app`/`.dmg`。发布目录固定为不受 Vite `dist/` 清理影响的 `artifacts/release/`；当前本机产物为 `artifacts/release/Codex Manager_0.1.0_aarch64.dmg`，SHA-256 为 `a66968a63b3d246f8a1a3ee6e61800e01c2adf94f8dd0e7bdd4be145117fff74`。该值对应首次提交前的本机工作树产物，并以 `artifacts/release/SHA256SUMS-unsigned` 为准；它不是从可追溯 Git commit 构建的公开 Release。签名、公证与发布的状态边界见 [发布运行手册](docs/release.md)。
+本机没有 Developer ID 时，`package-macos.sh` 只能生成 unsigned `.app`/`.dmg`。发布目录固定为不受 Vite `dist/` 清理影响的 `artifacts/release/`；当前本机产物为 `artifacts/release/Codex Manager_0.1.0_aarch64.dmg`，SHA-256 为 `a66968a63b3d246f8a1a3ee6e61800e01c2adf94f8dd0e7bdd4be145117fff74`。该值对应首次提交前的本机工作树产物，并以 `artifacts/release/SHA256SUMS-unsigned` 为准；它不是从可追溯 Git commit 构建的公开 Release。`.github/workflows/release.yml` 仅能手动从 `main` 当前 SHA 创建草稿 Release，缺少 Tauri 或 Apple 签名凭据时失败。签名、公证、更新清单与发布的状态边界见 [发布运行手册](docs/release.md)。
 
 ## 隐私与开源
 

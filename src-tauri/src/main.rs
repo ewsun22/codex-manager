@@ -28,6 +28,8 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager, State};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_updater::{Update, UpdaterExt};
 use uuid::Uuid;
 
 const MAX_JSONL_LINE_BYTES: usize = 4 * 1024 * 1024;
@@ -42,6 +44,9 @@ const WATCH_RECONCILE_INTERVAL: Duration = Duration::from_secs(60);
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(350);
 const REVISION_LIMIT: i64 = 20;
 const MAX_SCHEMA_PROBE_BYTES: u64 = 64 * 1024 * 1024;
+const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+const UPDATE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const MAX_UPDATE_NOTES_CHARS: usize = 4_000;
 
 struct AppState {
     store: Mutex<Store>,
@@ -54,6 +59,8 @@ struct AppState {
     capability: Mutex<Option<Capability>>,
     scan_warning: Mutex<Option<String>>,
     project_warning: Mutex<Option<String>>,
+    update_gate: tokio::sync::Mutex<()>,
+    pending_update: Mutex<Option<Update>>,
 }
 
 enum WatchSignal {
@@ -206,6 +213,7 @@ struct Project {
     worktree: bool,
     last_seen_at: Option<String>,
     agents_file_count: i64,
+    has_agents_file: bool,
 }
 
 #[derive(Serialize)]
@@ -300,6 +308,22 @@ struct Capability {
     checked_at: String,
     available: bool,
     message: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppUpdateStatus {
+    current_version: String,
+    available: bool,
+    version: Option<String>,
+    date: Option<String>,
+    notes: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateInstallResult {
+    accepted: bool,
 }
 
 #[derive(Serialize)]
@@ -461,6 +485,108 @@ fn probe_codex(state: State<'_, AppState>) -> Result<Capability, String> {
     let capability = probe_codex_inner(&state)?;
     *state.capability.lock().map_err(lock_err)? = Some(capability.clone());
     Ok(capability)
+}
+
+#[tauri::command]
+async fn check_for_update(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AppUpdateStatus, String> {
+    let _guard = state.update_gate.lock().await;
+    *state.pending_update.lock().map_err(lock_err)? = None;
+
+    let current_version = app.package_info().version.to_string();
+    let update = app
+        .updater_builder()
+        .timeout(UPDATE_CHECK_TIMEOUT)
+        .build()
+        .map_err(|_| "更新服务配置无效，请检查安装包来源。".to_string())?
+        .check()
+        .await
+        .map_err(|_| "暂时无法连接 GitHub 更新服务，请稍后重试。".to_string())?;
+
+    let Some(mut update) = update else {
+        return Ok(AppUpdateStatus {
+            current_version,
+            available: false,
+            version: None,
+            date: None,
+            notes: None,
+        });
+    };
+    update.timeout = Some(UPDATE_DOWNLOAD_TIMEOUT);
+
+    let status = AppUpdateStatus {
+        current_version,
+        available: true,
+        version: Some(update.version.clone()),
+        date: update.date.and_then(|value| {
+            chrono::DateTime::<Utc>::from_timestamp(value.unix_timestamp(), 0)
+                .map(|date| date.to_rfc3339())
+        }),
+        notes: sanitize_update_notes(update.body.clone()),
+    };
+    *state.pending_update.lock().map_err(lock_err)? = Some(update);
+    Ok(status)
+}
+
+#[tauri::command]
+async fn install_pending_update(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    expected_version: String,
+) -> Result<UpdateInstallResult, String> {
+    let _guard = state.update_gate.lock().await;
+    let update = state
+        .pending_update
+        .lock()
+        .map_err(lock_err)?
+        .take()
+        .ok_or_else(|| "待安装更新已失效，请重新检查更新。".to_string())?;
+
+    if update.version != expected_version {
+        return Err("更新版本已变化，请重新检查后再安装。".to_string());
+    }
+
+    let accepted = app
+        .dialog()
+        .message(format!(
+            "将下载并安装 Codex Manager {}。安装完成后应用会自动重启。",
+            update.version
+        ))
+        .title("安装 Codex Manager 更新")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "下载并安装".into(),
+            "取消".into(),
+        ))
+        .blocking_show();
+
+    if !accepted {
+        return Ok(UpdateInstallResult { accepted: false });
+    }
+
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|_| "更新包下载、签名验证或安装失败；未应用该更新，请重新检查。".to_string())?;
+    app.restart()
+}
+
+fn sanitize_update_notes(notes: Option<String>) -> Option<String> {
+    let notes = notes?.trim().to_string();
+    if notes.is_empty() {
+        return None;
+    }
+    let mut chars = notes.chars();
+    let mut sanitized = chars
+        .by_ref()
+        .take(MAX_UPDATE_NOTES_CHARS)
+        .collect::<String>();
+    if chars.next().is_some() {
+        sanitized.push_str("\n…");
+    }
+    Some(sanitized)
 }
 
 fn dashboard_inner(state: &AppState) -> Result<Summary, String> {
@@ -1234,6 +1360,8 @@ fn list_projects_inner(state: &AppState) -> Result<Vec<Project>, String> {
         .into_iter()
         .map(|mut row| {
             row.exists = canonical_directory(Path::new(&row.canonical_path)).is_ok();
+            let has_agents_file =
+                row.exists && agents::has_root_agents_file(Path::new(&row.canonical_path));
             let count = if row.exists {
                 agents::discover_all(Path::new(&row.canonical_path), &doc_config)
                     .map(|result| result.files.len() as i64)
@@ -1241,12 +1369,12 @@ fn list_projects_inner(state: &AppState) -> Result<Vec<Project>, String> {
             } else {
                 0
             };
-            project_public(row, count)
+            project_public(row, count, has_agents_file)
         })
         .collect())
 }
 
-fn project_public(row: ProjectRow, agents_file_count: i64) -> Project {
+fn project_public(row: ProjectRow, agents_file_count: i64, has_agents_file: bool) -> Project {
     Project {
         id: path_id(&row.canonical_path),
         name: row.name,
@@ -1257,6 +1385,7 @@ fn project_public(row: ProjectRow, agents_file_count: i64) -> Project {
         worktree: row.worktree,
         last_seen_at: row.last_seen_at,
         agents_file_count,
+        has_agents_file,
     }
 }
 
@@ -1284,12 +1413,13 @@ fn agents_chain_inner(
         &agents::load_doc_config(codex_home.as_deref()),
     )?;
     let file_count = discovery.files.len() as i64;
+    let has_agents_file = agents::has_root_agents_file(Path::new(&project_row.canonical_path));
     let mut warnings = resolution.warnings;
     if let Some(warning) = discovery.warning {
         warnings.push(warning);
     }
     Ok(AgentsChain {
-        project: project_public(project_row, file_count),
+        project: project_public(project_row, file_count, has_agents_file),
         selected_cwd: fs::canonicalize(selected_cwd)
             .map_err(display_error)?
             .to_string_lossy()
@@ -2026,6 +2156,8 @@ fn display_error(error: impl std::fmt::Display) -> String {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let directories = ProjectDirs::from("cc", "codex", "Codex Manager")
                 .ok_or_else(|| anyhow!("无法确定平台数据目录"))?;
@@ -2046,6 +2178,8 @@ fn main() {
                 capability: Mutex::new(None),
                 scan_warning: Mutex::new(None),
                 project_warning: Mutex::new(None),
+                update_gate: tokio::sync::Mutex::new(()),
+                pending_update: Mutex::new(None),
             };
             app.manage(state);
             let handle = app.handle().clone();
@@ -2089,6 +2223,8 @@ fn main() {
             update_settings,
             rescan,
             probe_codex,
+            check_for_update,
+            install_pending_update,
         ])
         .run(tauri::generate_context!())
         .expect("Codex Manager 运行失败");
@@ -2098,6 +2234,22 @@ fn main() {
 mod tests {
     use super::*;
     use std::io::{Cursor, Write};
+
+    #[test]
+    fn update_notes_are_plain_text_trimmed_and_bounded() {
+        assert_eq!(
+            sanitize_update_notes(Some("  release notes  ".into())).as_deref(),
+            Some("release notes")
+        );
+        assert_eq!(sanitize_update_notes(Some("  ".into())), None);
+        let oversized = "x".repeat(MAX_UPDATE_NOTES_CHARS + 1);
+        let sanitized = sanitize_update_notes(Some(oversized)).unwrap();
+        assert_eq!(
+            sanitized.chars().filter(|value| *value == 'x').count(),
+            MAX_UPDATE_NOTES_CHARS
+        );
+        assert!(sanitized.ends_with("\n…"));
+    }
 
     #[test]
     fn bounded_reader_preserves_partial_line_and_skips_oversize_line() {
@@ -2173,6 +2325,8 @@ mod tests {
             capability: Mutex::new(None),
             scan_warning: Mutex::new(None),
             project_warning: Mutex::new(None),
+            update_gate: tokio::sync::Mutex::new(()),
+            pending_update: Mutex::new(None),
         };
         let event = |ordinal: i64, kind: &str, payload: serde_json::Value| {
             serde_json::json!({
@@ -2302,6 +2456,8 @@ mod tests {
             capability: Mutex::new(None),
             scan_warning: Mutex::new(None),
             project_warning: Mutex::new(None),
+            update_gate: tokio::sync::Mutex::new(()),
+            pending_update: Mutex::new(None),
         };
 
         let created = create_agents_inner(

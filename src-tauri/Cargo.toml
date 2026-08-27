@@ -29,6 +29,8 @@ serde_json.workspace = true
 sha2.workspace = true
 subtle = "2.6.1"
 tauri = { version = "2.6.2", features = [] }
+tauri-plugin-dialog = "2.7.2"
+tauri-plugin-updater = "2.10.1"
 tempfile.workspace = true
 thiserror.workspace = true
 tokio = { version = "1.45.1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
@@ -39,4 +41,6 @@ wait-timeout = "0.2.1"
 walkdir.workspace = true
 
 [dev-dependencies]
+base64 = "0.22.1"
+minisign-verify = "0.2.5"
 tower = { version = "0.5.2", features = ["util"] }

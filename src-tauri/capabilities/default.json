@@ -22,6 +22,8 @@
     "allow-get-otel-config",
     "allow-update-settings",
     "allow-rescan",
-    "allow-probe-codex"
+    "allow-probe-codex",
+    "allow-check-for-update",
+    "allow-install-pending-update"
   ]
 }

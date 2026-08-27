@@ -1,64 +1,442 @@
-name: Release package
+name: Release macOS arm64 updater
+
+# Releases are deliberately operator-initiated. This workflow never runs on push,
+# tags, pull requests, or schedules.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version label
+        description: Exact source version to release, for example 0.1.0
         required: true
         type: string
-permissions:
-  contents: read
+
+concurrency:
+  group: release-macos-arm64-${{ inputs.version }}
+  cancel-in-progress: false
+
 jobs:
-  package:
-    runs-on: macos-14
-    timeout-minutes: 60
+  preflight:
+    name: Validate release source
+    runs-on: macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.value }}
     steps:
-      - name: Checkout (v4.2.2)
+      - name: Check out the manually selected source revision
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Setup Node (v4.4.0)
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
           cache: npm
-      - name: Install Rust
-        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy --no-self-update
-      - name: Validate release version
+
+      - name: Set up the locked Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable on 2026-08-27
+        with:
+          toolchain: 1.98.0
+
+      - name: Reject non-main source revisions
+        env:
+          DISPATCH_SHA: ${{ github.sha }}
+          DISPATCH_REF: ${{ github.ref }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          test "$DISPATCH_REF" = "refs/heads/main"
+          remote_main_sha="$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          test "$(git rev-parse HEAD)" = "$DISPATCH_SHA"
+          test "$remote_main_sha" = "$DISPATCH_SHA"
+
+      - name: Verify source versions and updater configuration
         id: version
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+          EXPECTED_UPDATER_ENDPOINT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
         run: |
-          if [[ ! "$RELEASE_VERSION" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
-            echo "Version must be v?MAJOR.MINOR.PATCH with an optional prerelease suffix." >&2
+          set -euo pipefail
+          if ! [[ "$REQUESTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "The manually supplied version is not a supported release version." >&2
             exit 1
           fi
-          printf 'normalized=%s\n' "${RELEASE_VERSION#v}" >> "$GITHUB_OUTPUT"
-      - name: Match release label to source version
+
+          ./scripts/check-version-sync.sh "$REQUESTED_VERSION"
+          EXPECTED_UPDATER_ENDPOINT="$EXPECTED_UPDATER_ENDPOINT" node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
+            const releaseConfig = JSON.parse(readFileSync("src-tauri/tauri.updater.conf.json", "utf8"));
+            const updater = config.plugins?.updater;
+            if (releaseConfig.bundle?.createUpdaterArtifacts !== true) {
+              throw new Error("the release config must enable bundle.createUpdaterArtifacts");
+            }
+            if (typeof updater?.pubkey !== "string" || updater.pubkey.length === 0) {
+              throw new Error("plugins.updater.pubkey is required");
+            }
+            if (!Array.isArray(updater.endpoints) || !updater.endpoints.includes(process.env.EXPECTED_UPDATER_ENDPOINT)) {
+              throw new Error("plugins.updater.endpoints must contain the fixed GitHub latest.json endpoint");
+            }
+          '
+          rg -q '^tauri-plugin-updater[[:space:]]*=' src-tauri/Cargo.toml
+          rg -q 'tauri_plugin_updater::' src-tauri/src
+          echo "value=$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: Build and draft release
+    needs: preflight
+    runs-on: macos-15
+    timeout-minutes: 90
+    # Administrators must configure this GitHub Environment with required
+    # reviewers and main-only deployment rules. All listed credentials are
+    # environment secrets; do not duplicate them as repository secrets.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the validated source revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify the runner is macOS arm64
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = "Darwin"
+          test "$(uname -m)" = "arm64"
+
+      - name: Fail closed when release environment credentials are unavailable
         env:
-          RELEASE_LABEL: ${{ steps.version.outputs.normalized }}
-        run: ./scripts/check-version-sync.sh "$RELEASE_LABEL"
-      - name: Install JavaScript dependencies
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          required_secrets=(
+            TAURI_SIGNING_PRIVATE_KEY
+            TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+            APPLE_CERTIFICATE
+            APPLE_CERTIFICATE_PASSWORD
+            KEYCHAIN_PASSWORD
+            APPLE_SIGNING_IDENTITY
+            APPLE_ID
+            APPLE_PASSWORD
+            APPLE_TEAM_ID
+          )
+          for secret_name in "${required_secrets[@]}"; do
+            if [ -z "${!secret_name}" ]; then
+              echo "Required release environment credential $secret_name is unavailable." >&2
+              exit 1
+            fi
+          done
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Set up the locked Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable on 2026-08-27
+        with:
+          toolchain: 1.98.0
+          components: rustfmt, clippy
+
+      - name: Install locked frontend dependencies
         run: npm ci
-      - name: JavaScript checks
-        run: npm run typecheck && npm test && npm run build
+
+      - name: Verify the updater private key matches the configured public key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          probe_dir="$RUNNER_TEMP/codex-manager-updater-key-probe"
+          mkdir -p "$probe_dir"
+          printf 'codex-manager updater key pairing probe\n' > "$probe_dir/probe.bin"
+          npm run tauri signer sign -- "$probe_dir/probe.bin" >/dev/null
+          unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          PUBLIC_KEY_PATH="$probe_dir/updater.pub" node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
+            const encoded = config.plugins?.updater?.pubkey;
+            if (typeof encoded !== "string" || encoded.length === 0) {
+              throw new Error("plugins.updater.pubkey is required");
+            }
+            const decoded = Buffer.from(encoded, "base64");
+            if (decoded.length === 0) {
+              throw new Error("plugins.updater.pubkey is not valid base64 key material");
+            }
+            writeFileSync(process.env.PUBLIC_KEY_PATH, decoded, { mode: 0o600 });
+          '
+          cargo run --quiet --manifest-path src-tauri/Cargo.toml --example verify_updater_signature -- \
+            "$probe_dir/probe.bin" \
+            "$probe_dir/probe.bin.sig" \
+            "$probe_dir/updater.pub"
+
+      - name: JavaScript checks and production build
+        run: npm run check && npm run build
+
       - name: Secret regression scan
         run: ./scripts/scan-secrets.sh
+
       - name: Rust checks
         run: cargo fmt --all -- --check && cargo check --workspace --all-targets && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Install locked release-audit tools
+        run: cargo install cargo-audit --locked --version 0.22.2 && cargo install cargo-cyclonedx --locked --version 0.5.9 && cargo install cargo-license --locked --version 0.7.0
+
       - name: Dependency audit
-        run: cargo install cargo-audit --locked --version 0.22.2 && ./scripts/audit-dependencies.sh
-      - name: Install SBOM and license tools
-        run: cargo install cargo-cyclonedx --locked --version 0.5.9 && cargo install cargo-license --locked --version 0.7.0
-      - name: Build unsigned artifact
-        run: ./scripts/package-macos.sh
-      - name: Generate SBOM and notices
-        run: ./scripts/sbom.sh && ./scripts/licenses.sh
-      - name: Verify release bundle
+        run: ./scripts/audit-dependencies.sh
+
+      - name: Generate SBOM and license inventories
+        run: ./scripts/sbom.sh && ./scripts/licenses.sh && shasum -a 256 -c artifacts/release/sbom/SHA256SUMS
+
+      - name: Import the Developer ID certificate into an ephemeral keychain
         env:
-          RELEASE_LABEL: ${{ steps.version.outputs.normalized }}
-        run: ./scripts/verify-release.sh "$RELEASE_LABEL"
-      - name: Upload package (v4.6.2)
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          certificate_path="$RUNNER_TEMP/codex-manager-certificate.p12"
+          keychain_path="$RUNNER_TEMP/codex-manager-signing.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate_path"
+          chmod 600 "$certificate_path"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security default-keychain -s "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 3600 "$keychain_path"
+          security import "$certificate_path" -k "$keychain_path" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path"
+          identity_info="$(security find-identity -v -p codesigning "$keychain_path")"
+          grep -F "\"$APPLE_SIGNING_IDENTITY\"" <<< "$identity_info" >/dev/null
+
+      - name: Create the ephemeral signed release configuration
+        id: release_config
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          config_path="$RUNNER_TEMP/codex-manager-release-config.json"
+          RELEASE_CONFIG_PATH="$config_path" node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            const config = JSON.parse(readFileSync("src-tauri/tauri.updater.conf.json", "utf8"));
+            config.bundle ??= {};
+            config.bundle.macOS ??= {};
+            config.bundle.macOS.signingIdentity = process.env.APPLE_SIGNING_IDENTITY;
+            writeFileSync(process.env.RELEASE_CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+          '
+          printf 'path=%s\n' "$config_path" >> "$GITHUB_OUTPUT"
+
+      # Residual P1: official tauri-action v1 couples building/updater signing
+      # and GitHub Release asset upload. It therefore receives both the updater
+      # signing secret and contents:write. The protected `release` environment,
+      # required reviewers, main-only source check, and draft-only release are
+      # the containment boundary; never add these secrets at repository scope.
+      # Tauri must notarize and staple the .app during this build. Its macOS
+      # updater archive is generated from that completed app bundle afterwards;
+      # never post-process the app without regenerating and re-signing the
+      # updater tarball and latest.json.
+      - name: Build, sign, notarize, staple, and create the draft release
+        id: tauri
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: .
+          tauriScript: npm run tauri
+          args: --target aarch64-apple-darwin --config ${{ steps.release_config.outputs.path }}
+          tagName: v__VERSION__
+          releaseName: Codex Manager v__VERSION__
+          releaseBody: Signed macOS arm64 build. This release remains a draft until explicitly reviewed and published.
+          releaseDraft: true
+          prerelease: false
+          releaseCommitish: ${{ github.sha }}
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
+          uploadWorkflowArtifacts: false
+
+      - name: Notarize and staple the DMG, then replace its draft asset
+        id: notarized_dmg
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          search_roots=()
+          [ -d target ] && search_roots+=(target)
+          [ -d src-tauri/target ] && search_roots+=(src-tauri/target)
+          test "${#search_roots[@]}" -gt 0
+          dmg="$(find "${search_roots[@]}" -type f -name '*.dmg' -print -quit)"
+          test -f "$dmg"
+          notary_result="$(xcrun notarytool submit "$dmg" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait \
+            --output-format json)"
+          printf '%s' "$notary_result" | jq -e '.status == "Accepted"' >/dev/null
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          gh release upload "v$VERSION" "$dmg" --clobber
+          remote_check_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$remote_check_dir"' EXIT
+          gh release download "v$VERSION" --pattern "$(basename "$dmg")" --dir "$remote_check_dir"
+          cmp -s "$dmg" "$remote_check_dir/$(basename "$dmg")"
+          printf 'dmg=%s\n' "$dmg" >> "$GITHUB_OUTPUT"
+
+      - name: Verify signed, notarized, and stapled local artifacts
+        id: signed_artifacts
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          DMG_PATH: ${{ steps.notarized_dmg.outputs.dmg }}
+        run: |
+          set -euo pipefail
+          search_roots=()
+          [ -d target ] && search_roots+=(target)
+          [ -d src-tauri/target ] && search_roots+=(src-tauri/target)
+          test "${#search_roots[@]}" -gt 0
+          tarball="$(find "${search_roots[@]}" -type f -name '*.app.tar.gz' -print -quit)"
+          app_bundle="$(find "${search_roots[@]}" -type d -name '*.app' -print -quit)"
+          dmg="$DMG_PATH"
+          test -f "$tarball"
+          test -s "$tarball"
+          test -f "$tarball.sig"
+          test -s "$tarball.sig"
+          test -d "$app_bundle"
+          test -f "$dmg"
+          codesign --verify --deep --strict --verbose=2 "$app_bundle"
+          codesign_info="$(codesign --display --verbose=4 "$app_bundle" 2>&1)"
+          [[ "$codesign_info" == *"Authority=$APPLE_SIGNING_IDENTITY"* ]]
+          grep -E 'flags=.*runtime' <<< "$codesign_info" >/dev/null
+          xcrun stapler validate "$app_bundle"
+          xcrun stapler validate "$dmg"
+          spctl --assess --type execute --verbose=4 "$app_bundle"
+          spctl --assess --type open --verbose=4 "$dmg"
+          printf 'tarball=%s\nsignature=%s\ndmg=%s\napp_bundle=%s\n' "$tarball" "$tarball.sig" "$dmg" "$app_bundle" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the draft updater manifest and signature pairs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          TAR_PATH: ${{ steps.signed_artifacts.outputs.tarball }}
+          SIG_PATH: ${{ steps.signed_artifacts.outputs.signature }}
+          REPOSITORY: ${{ github.repository }}
+          GITHUB_API_URL: ${{ github.api_url }}
+        run: |
+          set -euo pipefail
+          evidence_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$evidence_dir"' EXIT
+          release_json="$(gh api "repos/$REPOSITORY/releases/tags/v$VERSION")"
+          printf '%s' "$release_json" | jq -e '.draft == true' >/dev/null
+          printf '%s' "$release_json" | jq -e '[.assets[].name] | any(endswith(".app.tar.gz"))' >/dev/null
+          printf '%s' "$release_json" | jq -e '[.assets[].name] | any(endswith(".app.tar.gz.sig"))' >/dev/null
+          printf '%s' "$release_json" | jq -e '[.assets[].name] | any(. == "latest.json")' >/dev/null
+          tar_asset_name="$(basename "$TAR_PATH")"
+          expected_asset_api_url="$(printf '%s' "$release_json" | jq -er --arg name "$tar_asset_name" '.assets[] | select(.name == $name) | .url')"
+          [[ "$expected_asset_api_url" == "$GITHUB_API_URL/repos/$REPOSITORY/releases/assets/"* ]]
+          gh release download "v$VERSION" --pattern latest.json --dir "$evidence_dir"
+          EXPECTED_ASSET_API_URL="$expected_asset_api_url" VERSION="$VERSION" SIG_PATH="$SIG_PATH" node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const manifest = JSON.parse(readFileSync(process.argv[1], "utf8"));
+            const expected = readFileSync(process.env.SIG_PATH, "utf8");
+            const expectedUrl = process.env.EXPECTED_ASSET_API_URL;
+            const allowed = ["darwin-aarch64", "darwin-aarch64-app"];
+            const keys = Object.keys(manifest.platforms ?? {}).sort();
+            if (manifest.version !== process.env.VERSION || JSON.stringify(keys) !== JSON.stringify(allowed)) {
+              throw new Error("latest.json version or platform keys are unexpected");
+            }
+            for (const key of allowed) {
+              const platform = manifest.platforms[key];
+              if (typeof platform?.signature !== "string" || platform.signature !== expected) {
+                throw new Error(`latest.json signature does not match ${key}`);
+              }
+              if (platform?.url !== expectedUrl) {
+                throw new Error(`latest.json URL is not the exact draft tarball asset for ${key}`);
+              }
+            }
+          ' "$evidence_dir/latest.json"
+
+      - name: Record signed artifact checksums and provenance
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          SOURCE_SHA: ${{ github.sha }}
+          TAR_PATH: ${{ steps.signed_artifacts.outputs.tarball }}
+          SIG_PATH: ${{ steps.signed_artifacts.outputs.signature }}
+          DMG_PATH: ${{ steps.signed_artifacts.outputs.dmg }}
+        run: |
+          set -euo pipefail
+          provenance_dir="artifacts/release/provenance"
+          mkdir -p "$provenance_dir"
+          shasum -a 256 "$TAR_PATH" "$SIG_PATH" "$DMG_PATH" > "$provenance_dir/SHA256SUMS-signed"
+          VERSION="$VERSION" SOURCE_SHA="$SOURCE_SHA" TAR_PATH="$TAR_PATH" SIG_PATH="$SIG_PATH" DMG_PATH="$DMG_PATH" node --input-type=module -e '
+            import { createHash } from "node:crypto";
+            import { readFileSync, writeFileSync } from "node:fs";
+            const digest = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
+            const result = {
+              version: process.env.VERSION,
+              sourceSha: process.env.SOURCE_SHA,
+              target: "aarch64-apple-darwin",
+              artifacts: [process.env.TAR_PATH, process.env.SIG_PATH, process.env.DMG_PATH].map((file) => ({ file, sha256: digest(file) })),
+            };
+            writeFileSync("artifacts/release/provenance/BUILD-PROVENANCE.json", `${JSON.stringify(result, null, 2)}\n`);
+          '
+
+      - name: Attach SBOM, licenses, checksums, and provenance to the draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release upload "v$VERSION" \
+            artifacts/release/sbom/* \
+            artifacts/release/licenses/* \
+            artifacts/release/provenance/* \
+            --clobber
+
+      - name: Upload release evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: codex-manager-macos-${{ steps.version.outputs.normalized }}-unsigned
+          name: codex-manager-macos-${{ needs.preflight.outputs.version }}-release-evidence
           path: artifacts/release/
           if-no-files-found: error
+
+      - name: Remove the ephemeral signing keychain
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          keychain_path="$RUNNER_TEMP/codex-manager-signing.keychain-db"
+          certificate_path="$RUNNER_TEMP/codex-manager-certificate.p12"
+          release_config_path="$RUNNER_TEMP/codex-manager-release-config.json"
+          updater_probe_dir="$RUNNER_TEMP/codex-manager-updater-key-probe"
+          if [ -f "$keychain_path" ]; then
+            security delete-keychain "$keychain_path"
+          fi
+          rm -f -- "$certificate_path" "$release_config_path"
+          if [ -d "$updater_probe_dir" ]; then
+            rm -rf -- "$updater_probe_dir"
+          fi

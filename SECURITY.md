@@ -16,7 +16,8 @@
 - 不持久化 Codex 消息正文、Authorization、Cookie、API Key、OAuth code、完整环境变量或请求 query。
 - OTel 只监听 IPv4 loopback 的首次随机、后续持久化端口，使用 localhost TLS 身份和 body 解码前专用 header 认证；持久化端口被占用时 fail closed。请求体上限 128 KiB，连接 10 秒无读写进展即超时，并限制连接/请求并发、频率、处理时间、解码基数与属性 allowlist；日志 body 不被读取。
 - OTel event/provider 仅保存固定枚举，未知 model/thread/turn 仅保存带类型的 SHA-256 截断伪名，endpoint 仅保存 provider/origin/route 分类，避免将攻击者控制的高基数字符串持久化。
-- Tauri WebView 使用严格 CSP，IPC 只暴露显式 command，不授予通用 shell 或任意文件 API。
+- Tauri WebView 使用严格 CSP，IPC 只暴露显式 command，不授予通用 shell、任意文件、HTTP、process、dialog 或 updater 插件 API。
+- 在线更新只由用户手动触发；Rust 固定 GitHub endpoint 和 Tauri 公钥，只返回有界纯文本元数据。安装只消费同一次检查所得的内存中 `Update`，要求版本一致、原生确认、minisign 验证和安装后重启。
 - rollout/config 从文件系统根开始通过授权目录链逐段 no-follow 打开普通文件，身份、大小与内容来自同一句柄；限制遍历、字节、事件、时间和 4 MiB 单行大小。
 - 不同 rollout 文件使用独立 source namespace 防止所有权转移；内容等价副本只在读取查询时通过 logical fingerprint 折叠。token 桶还要通过数值上限和语义一致性检查，矛盾数据标记为 `unavailable`。
 - AGENTS 写入同时要求已知项目与显式授权根目录，并执行 canonical containment、逐段 no-follow、文件名 allowlist、SHA/mtime CAS、同目录临时文件、fsync 与原子替换。
@@ -31,7 +32,8 @@
 - macOS no-follow/原子替换路径已实现；Windows portable fallback 尚未完成 reparse-point 等价安全验证。
 - unsigned 构建没有 Apple 身份保证，Gatekeeper 警告是预期行为。只有 Developer ID 签名、Apple accepted、公证 ticket stapled 并验证后，才能称为正式 macOS beta artifact。
 - 应用数据对同一 OS 用户可见；当前未提供应用层加密或 OS keychain 封装。
-- 当前没有自动更新器，也没有远程撤回机制。
+- 当前没有启动时自动更新或远程撤回机制。在线更新会将完整更新包读入内存后验签；严格下载字节上限是后续加固项。
+- `tauri-action` 目前在同一受保护 job 中同时持有 updater 签名私钥和 GitHub `contents: write`；这是已知 P1 剩余风险，由 Environment 人工审批、main-only SHA、完整 action SHA 固定与 draft-only 限制。updater 私钥的独立离线恢复备份也必须在首次发布前完成。
 
 ## 已完成的安全验证
 
@@ -39,4 +41,4 @@
 
 ## 发布安全门
 
-发布人员必须逐项确认：测试与 clippy 通过、依赖审计无未处置高风险项、secret scan 通过、SBOM/许可证完整、Developer ID 身份准确、Hardened Runtime 签名验证通过、notarytool 返回 accepted、stapler validate 通过、最终 artifact SHA-256 与发布记录一致。任何一步缺失都必须保持相应的 `unsigned`、`signed`、`notarized` 或 `unreleased` 状态，不能越级表述。
+发布人员必须逐项确认：测试与 clippy 通过、依赖审计无未处置高风险项、secret scan 通过、SBOM/许可证完整、Developer ID 身份准确、Hardened Runtime 签名验证通过、notarytool 返回 accepted、stapler validate 通过、Tauri updater 签名与 `latest.json` 中绑定该版本 tarball asset ID 的 GitHub API URL 匹配、最终 artifact SHA-256 与发布记录一致。任何一步缺失都必须保持相应的 `unsigned`、`signed`、`notarized`、`draft` 或 `unreleased` 状态，不能越级表述。

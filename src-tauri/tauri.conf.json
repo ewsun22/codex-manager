@@ -45,5 +45,12 @@
       "hardenedRuntime": true
     }
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMwMUI4MkUxQkJCQkZCOEMKUldTTSs3dTc0WUlid002a1NvWHZ1ZlR1Ynl3YUhnOUlJMS8rYUNsMnU2SmdjbWtEcjdDQVRua2UK",
+      "endpoints": [
+        "https://github.com/ewsun22/codex-manager/releases/latest/download/latest.json"
+      ]
+    }
+  }
 }

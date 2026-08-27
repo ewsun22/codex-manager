@@ -14,6 +14,7 @@
 | 项目发现 | cwd observed | 不负责 | 不负责 | 不负责 | 已观测 cwd + 用户授权扫描根 |
 | AGENTS 有效链 | 文件系统 adapter | 不负责 | 不负责 | 文档规则对齐 | 全局到选定 cwd |
 | AGENTS 安全写入 / revision | 不适用 | 不适用 | 不适用 | 不适用 | 仅显式授权根目录 |
+| 应用在线更新 | 不负责 | 不负责 | 不负责 | 不负责 | 用户手动触发；GitHub Releases + Tauri 签名 + macOS 原生确认 |
 
 ## 不承诺的能力
 
