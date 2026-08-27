@@ -1,0 +1,97 @@
+# Codex Manager
+
+Codex Manager 是一个独立运行、本地优先的开源 Codex 桌面管理器。它不接管 Codex、不做反向代理，主要用于观察本机 Codex 的模型交互元数据，并集中发现和安全编辑各项目的 `AGENTS.md`。
+
+> 非官方项目，与 OpenAI 无隶属或背书关系。
+
+源代码仓库：[github.com/ewsun22/codex-manager](https://github.com/ewsun22/codex-manager)
+
+## 当前状态
+
+当前代码是 **macOS 本地 beta 候选版**：P1 本地数据层、P2 使用记录 UI、P3 项目与 AGENTS 管理、P4 隐私/安全/供应链与本地打包都已实现并通过本机验证。2026-08-27 已生成 `0.1.0` arm64 unsigned `.app`/`.dmg`、SBOM、许可证清单和 SHA-256 manifest；Developer ID 签名、Apple 公证、stapling 和公开二进制 Release 尚未发生。
+
+已实现的主要能力：
+
+- 增量读取配置的 Codex home 下 `sessions` 与 `archived_sessions` rollout JSONL；从同一个 no-follow 文件句柄取得身份、大小和内容，使用 UTF-8 byte checkpoint、完整行提交和定期 reconciliation。
+- 将 session、turn、模型、provider、推理等级、token、缓存读、缓存写、reasoning output、首个可见输出和总耗时规范化到本机 SQLite。
+- 以 session、ordinal、事件类型和累计 token 向量去重；重复快照不累加，非单调快照隔离为诊断。不同采集文件使用独立所有权 namespace，完全等价的 rollout 副本另通过 logical fingerprint 在查询时折叠，不会转移或删除原来投影。
+- 总览、活动筛选、游标分页、详情抽屉、来源健康与缺失值 provenance；得不到的字段显示 `unavailable`，不会填 0。
+- 版本化 API 等价价格目录，按一次 model call 分桶计算普通输入、缓存读、缓存写和输出；reasoning output 不重复计费。
+- 用户主动开启的 TLS loopback OTLP/HTTP receiver：首次启用时随机分配空闲端口，后续复用应用私有配置。客户端必须通过本机 CA 校验服务端身份，receiver 再用专用 header 认证调用方；认证发生在 body 解码前，请求体上限 128 KiB，空闲连接 10 秒超时，日志 body 从不读取或持久化。
+- 从已观测 cwd 与用户授权根目录发现项目、Git root 和 worktree，解析 Codex 当前的全局到 cwd `AGENTS` 有效链。
+- 在授权根目录内创建项目级 `AGENTS.md`，并以 canonical path、逐段 no-follow、SHA/mtime 冲突检查、同目录原子交换和本地 revision 完成保存与恢复。
+- 探测 Desktop 内置或 PATH 中的 Codex CLI，并生成 App Server JSON Schema 指纹；不附着 Codex Desktop 的私有 stdio。
+
+## 观测边界
+
+Codex Manager 同时保留“来源”和“可信度”，不同来源不能混为一谈：
+
+- rollout 适合历史、模型、effort、token 和 Codex 报告的耗时，但它是内部 JSONL，不是稳定公开 API；累计 token 增长也不能天然宣称为唯一网络请求。
+- OTel `codex.api_request` 日志可提供请求级状态、耗时和安全化 endpoint 分类。本地只保存固定 event/provider/origin/route 枚举；已知价格模型保留标识，未知 model/thread/turn 仅保存不可逆的本地伪名指纹。原始 host/path、租户子域、用户名、密码、query 或 fragment 不落库。
+- 当前 Codex 的 token OTel 日志位于 `codex.sse_event`，而聚合 metrics 通常没有 conversation id；本版不会猜测性地把这些记录拼到某个 API 请求上。
+- 当前原生 Codex OTel 不提供可靠 wire response bytes，因此通常显示 `unavailable`。真实完整 URL、网络 TTFB、wire bytes 和供应商实际账单仍需要未来可选反代或服务端对账。
+- API 等价价格不是 ChatGPT 套餐扣费，也不是中转站账单。未知模型或字段不完整时不估价。
+
+详见 [能力矩阵](docs/capability-matrix.md) 与 [架构说明](docs/architecture.md)。
+
+## 本地开发
+
+首发目标为 macOS 13+。开发环境固定 Node.js 24 与 Rust 1.98.0：
+
+```bash
+npm ci
+npm run typecheck
+npm test
+cargo test --workspace
+npm run tauri:dev
+```
+
+首次启动会尝试发现现有 `~/.codex`。要编辑项目文件，仍需在“设置”中明确保存授权项目根目录；只观察到项目并不自动授予写权限。
+
+浏览器预览使用人工构造的脱敏 demo 数据：
+
+```bash
+npm run dev
+```
+
+## 可选 OTel 增强
+
+先在 Codex Manager 设置中启用本机 receiver，再点击“显示 OTel 配置”。应用首次从 IPv4 loopback 随机分配空闲端口，将端口与 localhost TLS 身份保存在应用私有目录后复用；如果该端口被其他进程占用，receiver 会安全失败，不会无声切换到未配置的端口。它不会改写 Codex 配置。界面会按当前 endpoint、CA 路径和专用 token 生成完整片段，结构如下：
+
+```toml
+[otel]
+log_user_prompt = false
+exporter = { otlp-http = { endpoint = "https://localhost:<persisted-random-port>/v1/logs", protocol = "binary", headers = { "x-codex-manager-token" = "<generated-token>" }, tls = { ca-certificate = "/absolute/app-data/localhost-cert.pem" } } }
+metrics_exporter = { otlp-http = { endpoint = "https://localhost:<persisted-random-port>/v1/metrics", protocol = "binary", headers = { "x-codex-manager-token" = "<generated-token>" }, tls = { ca-certificate = "/absolute/app-data/localhost-cert.pem" } } }
+```
+
+`log_user_prompt` 必须保持 `false` 才符合本项目默认隐私边界。官方配置字段以 [Codex Configuration Reference](https://learn.chatgpt.com/docs/config-file/config-reference) 为准。
+
+## 检查与打包
+
+```bash
+npm run typecheck
+npm test
+npm run build
+./scripts/check-version-sync.sh
+cargo fmt --all -- --check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+./scripts/audit-dependencies.sh
+./scripts/scan-secrets.sh
+./scripts/package-macos.sh
+./scripts/sbom.sh
+./scripts/licenses.sh
+./scripts/verify-release.sh unsigned
+```
+
+本机没有 Developer ID 时，`package-macos.sh` 只能生成 unsigned `.app`/`.dmg`。发布目录固定为不受 Vite `dist/` 清理影响的 `artifacts/release/`；当前本机产物为 `artifacts/release/Codex Manager_0.1.0_aarch64.dmg`，SHA-256 为 `a66968a63b3d246f8a1a3ee6e61800e01c2adf94f8dd0e7bdd4be145117fff74`。该值对应首次提交前的本机工作树产物，并以 `artifacts/release/SHA256SUMS-unsigned` 为准；它不是从可追溯 Git commit 构建的公开 Release。签名、公证与发布的状态边界见 [发布运行手册](docs/release.md)。
+
+## 隐私与开源
+
+- 默认只保存模型使用元数据、项目路径、checkpoint 和设置；不保存 Codex 消息正文、Authorization、Cookie、API Key、OAuth code、完整环境变量或请求 query。
+- AGENTS 编辑功能需要在本地保存有限 revision，因此这些 revision 会包含用户主动编辑的 AGENTS 文本；每个文件最多保留 20 版。
+- 数据默认不上传；唯一监听服务是用户显式开启的 loopback OTel receiver。
+- 本项目采用 Apache-2.0。EasyCLIProxyAPI 只作为产品信息架构参考；项目采用 clean-room 实现，不复制其源码、样式、图标或品牌资产。
+
+完整说明见 [PRIVACY.md](PRIVACY.md)、[SECURITY.md](SECURITY.md) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

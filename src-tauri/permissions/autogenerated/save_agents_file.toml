@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-agents-file"
+description = "Enables the save_agents_file command without any pre-configured scope."
+commands.allow = ["save_agents_file"]
+
+[[permission]]
+identifier = "deny-save-agents-file"
+description = "Denies the save_agents_file command without any pre-configured scope."
+commands.deny = ["save_agents_file"]

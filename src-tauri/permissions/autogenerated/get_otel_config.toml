@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-otel-config"
+description = "Enables the get_otel_config command without any pre-configured scope."
+commands.allow = ["get_otel_config"]
+
+[[permission]]
+identifier = "deny-get-otel-config"
+description = "Denies the get_otel_config command without any pre-configured scope."
+commands.deny = ["get_otel_config"]

@@ -1,0 +1,59 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: macos-14
+    steps:
+      - name: Checkout (v4.2.2)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup Node (v4.4.0)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install Rust
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy --no-self-update
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Version consistency
+        run: ./scripts/check-version-sync.sh
+      - name: JavaScript checks
+        run: npm run typecheck && npm test && npm run build
+      - name: Secret regression scan
+        run: ./scripts/scan-secrets.sh
+      - name: Rust checks
+        run: cargo fmt --all -- --check && cargo check --workspace --all-targets && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
+      - name: Dependency audit
+        run: cargo install cargo-audit --locked --version 0.22.2 && ./scripts/audit-dependencies.sh
+  package-macos:
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: macos-14
+    steps:
+      - name: Checkout (v4.2.2)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup Node (v4.4.0)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install Rust
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy --no-self-update
+      - name: Install SBOM and license tools
+        run: cargo install cargo-cyclonedx --locked --version 0.5.9 && cargo install cargo-license --locked --version 0.7.0
+      - name: Build unsigned macOS artifact
+        run: ./scripts/package-macos.sh
+      - name: Generate SBOM and notices
+        run: ./scripts/sbom.sh && ./scripts/licenses.sh
+      - name: Verify unsigned macOS artifact
+        run: ./scripts/verify-release.sh unsigned
+      - name: Upload artifact (v4.6.2)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: codex-manager-macos-unsigned
+          path: artifacts/release/
+          if-no-files-found: error

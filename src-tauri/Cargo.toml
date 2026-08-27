@@ -1,0 +1,42 @@
+[package]
+name = "codex-manager-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2.3.0", features = [] }
+
+[dependencies]
+anyhow.workspace = true
+axum = { version = "0.8.4", features = ["json"] }
+axum-server = { version = "0.7.2", default-features = false, features = ["tls-rustls-no-provider"] }
+chrono.workspace = true
+codex-core = { path = "../crates/codex-core" }
+codex-storage = { path = "../crates/codex-storage" }
+directories-next = "2.0.0"
+hex.workspace = true
+libc = "0.2.175"
+notify = "8.0.0"
+opentelemetry-proto = { version = "0.32.0", default-features = false, features = ["gen-tonic-messages", "logs", "metrics", "with-serde"] }
+prost = "0.14.4"
+rcgen = { version = "0.14.3", default-features = false, features = ["crypto", "pem", "ring"] }
+rustls = { version = "0.23.32", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2.2.0"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle = "2.6.1"
+tauri = { version = "2.6.2", features = [] }
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { version = "1.45.1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+toml = "0.9.5"
+uuid = { version = "1.17.0", features = ["v4"] }
+url = "2.5.8"
+wait-timeout = "0.2.1"
+walkdir.workspace = true
+
+[dev-dependencies]
+tower = { version = "0.5.2", features = ["util"] }

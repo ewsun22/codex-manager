@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-agents-chain"
+description = "Enables the get_agents_chain command without any pre-configured scope."
+commands.allow = ["get_agents_chain"]
+
+[[permission]]
+identifier = "deny-get-agents-chain"
+description = "Denies the get_agents_chain command without any pre-configured scope."
+commands.deny = ["get_agents_chain"]

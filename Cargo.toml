@@ -1,0 +1,21 @@
+[workspace]
+members = ["crates/codex-core", "crates/codex-storage", "src-tauri"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.85"
+
+[workspace.dependencies]
+anyhow = "1.0.98"
+chrono = { version = "0.4.41", features = ["serde"] }
+hex = "0.4.3"
+rusqlite = { version = "0.35.0", features = ["bundled", "chrono"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+sha2 = "0.10.9"
+tempfile = "3.20.0"
+thiserror = "2.0.12"
+walkdir = "2.5.0"

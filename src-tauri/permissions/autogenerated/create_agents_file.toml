@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-create-agents-file"
+description = "Enables the create_agents_file command without any pre-configured scope."
+commands.allow = ["create_agents_file"]
+
+[[permission]]
+identifier = "deny-create-agents-file"
+description = "Denies the create_agents_file command without any pre-configured scope."
+commands.deny = ["create_agents_file"]

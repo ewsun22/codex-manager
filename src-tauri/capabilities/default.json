@@ -1,0 +1,27 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "仅允许主窗口调用本地 Rust 命令；前端没有任意文件或 Shell 权限。",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "allow-bootstrap",
+    "allow-get-dashboard",
+    "allow-list-activity",
+    "allow-list-projects",
+    "allow-discover-projects",
+    "allow-get-agents-chain",
+    "allow-open-agents-file",
+    "allow-create-agents-file",
+    "allow-save-agents-file",
+    "allow-list-agents-revisions",
+    "allow-restore-agents-revision",
+    "allow-list-sources",
+    "allow-list-pricing-rules",
+    "allow-get-settings",
+    "allow-get-otel-config",
+    "allow-update-settings",
+    "allow-rescan",
+    "allow-probe-codex"
+  ]
+}

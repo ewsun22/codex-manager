@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-dashboard"
+description = "Enables the get_dashboard command without any pre-configured scope."
+commands.allow = ["get_dashboard"]
+
+[[permission]]
+identifier = "deny-get-dashboard"
+description = "Denies the get_dashboard command without any pre-configured scope."
+commands.deny = ["get_dashboard"]

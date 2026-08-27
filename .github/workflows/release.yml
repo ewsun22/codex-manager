@@ -1,0 +1,64 @@
+name: Release package
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version label
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - name: Checkout (v4.2.2)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup Node (v4.4.0)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install Rust
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy --no-self-update
+      - name: Validate release version
+        id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$RELEASE_VERSION" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "Version must be v?MAJOR.MINOR.PATCH with an optional prerelease suffix." >&2
+            exit 1
+          fi
+          printf 'normalized=%s\n' "${RELEASE_VERSION#v}" >> "$GITHUB_OUTPUT"
+      - name: Match release label to source version
+        env:
+          RELEASE_LABEL: ${{ steps.version.outputs.normalized }}
+        run: ./scripts/check-version-sync.sh "$RELEASE_LABEL"
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: JavaScript checks
+        run: npm run typecheck && npm test && npm run build
+      - name: Secret regression scan
+        run: ./scripts/scan-secrets.sh
+      - name: Rust checks
+        run: cargo fmt --all -- --check && cargo check --workspace --all-targets && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
+      - name: Dependency audit
+        run: cargo install cargo-audit --locked --version 0.22.2 && ./scripts/audit-dependencies.sh
+      - name: Install SBOM and license tools
+        run: cargo install cargo-cyclonedx --locked --version 0.5.9 && cargo install cargo-license --locked --version 0.7.0
+      - name: Build unsigned artifact
+        run: ./scripts/package-macos.sh
+      - name: Generate SBOM and notices
+        run: ./scripts/sbom.sh && ./scripts/licenses.sh
+      - name: Verify release bundle
+        env:
+          RELEASE_LABEL: ${{ steps.version.outputs.normalized }}
+        run: ./scripts/verify-release.sh "$RELEASE_LABEL"
+      - name: Upload package (v4.6.2)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: codex-manager-macos-${{ steps.version.outputs.normalized }}-unsigned
+          path: artifacts/release/
+          if-no-files-found: error

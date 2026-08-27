@@ -1,0 +1,11 @@
+ALTER TABLE otel_events ADD COLUMN event_name TEXT;
+ALTER TABLE otel_events ADD COLUMN occurred_at TEXT;
+ALTER TABLE otel_events ADD COLUMN thread_id TEXT;
+ALTER TABLE otel_events ADD COLUMN turn_id TEXT;
+ALTER TABLE otel_events ADD COLUMN input_tokens INTEGER;
+ALTER TABLE otel_events ADD COLUMN cached_input_tokens INTEGER;
+ALTER TABLE otel_events ADD COLUMN cache_write_input_tokens INTEGER;
+ALTER TABLE otel_events ADD COLUMN output_tokens INTEGER;
+ALTER TABLE otel_events ADD COLUMN reasoning_output_tokens INTEGER;
+ALTER TABLE otel_events ADD COLUMN total_tokens INTEGER;
+CREATE INDEX IF NOT EXISTS idx_otel_events_occurred ON otel_events(occurred_at DESC, id DESC);

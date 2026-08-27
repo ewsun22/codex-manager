@@ -1,0 +1,1 @@
+ALTER TABLE ingest_files ADD COLUMN unparsed_events INTEGER NOT NULL DEFAULT 0;

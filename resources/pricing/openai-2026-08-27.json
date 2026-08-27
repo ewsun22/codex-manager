@@ -1,0 +1,57 @@
+{
+  "catalogVersion": "openai-api-2026-08-27",
+  "currency": "USD",
+  "effectiveFrom": "2026-08-27",
+  "usageLabel": "API 等价估算",
+  "disclaimer": "该目录用于本地估算，不代表 ChatGPT 套餐、中转服务或企业合同的实际账单。",
+  "rules": [
+    {
+      "provider": "openai",
+      "modelPattern": "gpt-5.6-sol",
+      "sourceUrl": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+      "ratesUsdPerMillion": {
+        "input": 4,
+        "cachedInput": 0.4,
+        "cacheWriteInput": 5,
+        "output": 20
+      },
+      "longContext": {
+        "inputTokenThresholdExclusive": 272000,
+        "inputMultiplier": 2,
+        "outputMultiplier": 1.5
+      }
+    },
+    {
+      "provider": "openai",
+      "modelPattern": "gpt-5.6-terra",
+      "sourceUrl": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+      "ratesUsdPerMillion": {
+        "input": 2,
+        "cachedInput": 0.2,
+        "cacheWriteInput": 2.5,
+        "output": 12
+      },
+      "longContext": {
+        "inputTokenThresholdExclusive": 272000,
+        "inputMultiplier": 2,
+        "outputMultiplier": 1.5
+      }
+    },
+    {
+      "provider": "openai",
+      "modelPattern": "gpt-5.6-luna",
+      "sourceUrl": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+      "ratesUsdPerMillion": {
+        "input": 0.2,
+        "cachedInput": 0.02,
+        "cacheWriteInput": 0.25,
+        "output": 1.2
+      },
+      "longContext": {
+        "inputTokenThresholdExclusive": 272000,
+        "inputMultiplier": 2,
+        "outputMultiplier": 1.5
+      }
+    }
+  ]
+}

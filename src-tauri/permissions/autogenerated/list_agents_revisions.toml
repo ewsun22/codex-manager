@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-agents-revisions"
+description = "Enables the list_agents_revisions command without any pre-configured scope."
+commands.allow = ["list_agents_revisions"]
+
+[[permission]]
+identifier = "deny-list-agents-revisions"
+description = "Denies the list_agents_revisions command without any pre-configured scope."
+commands.deny = ["list_agents_revisions"]

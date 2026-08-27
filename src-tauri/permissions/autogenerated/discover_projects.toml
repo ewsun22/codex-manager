@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-discover-projects"
+description = "Enables the discover_projects command without any pre-configured scope."
+commands.allow = ["discover_projects"]
+
+[[permission]]
+identifier = "deny-discover-projects"
+description = "Denies the discover_projects command without any pre-configured scope."
+commands.deny = ["discover_projects"]
