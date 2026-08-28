@@ -88,8 +88,8 @@ jobs:
               throw new Error("updater endpoint must contain the fixed GitHub latest.json URL");
             }
           '
-          rg -q '^tauri-plugin-updater[[:space:]]*=' src-tauri/Cargo.toml
-          rg -q 'tauri_plugin_updater::' src-tauri/src
+          grep -Eq '^tauri-plugin-updater[[:space:]]*=' src-tauri/Cargo.toml
+          grep -REq 'tauri_plugin_updater::' src-tauri/src
           printf 'value=%s\n' "$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
 
   build:
