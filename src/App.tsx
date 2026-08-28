@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { invokeBackend, isDesktopRuntime } from "./app/client.ts";
 import { preferredAgentsFile } from "./app/agents.ts";
 import {
@@ -20,7 +20,13 @@ import {
   type AgentsRevision,
   type AppSettings,
   type AppUpdateStatus,
+  type AuthProfile,
+  type AuthProfileOperationResult,
+  type AuthProfilesSnapshot,
   type BootstrapPayload,
+  type CodexAccountSnapshot,
+  type CodexLoginStartResult,
+  type CodexRateLimitWindow,
   type CreateAgentsFileInput,
   type MetricValue,
   type OtelConfig,
@@ -30,7 +36,7 @@ import {
   type UpdateInstallResult,
 } from "./shared/contracts.ts";
 
-type View = "overview" | "activity" | "projects" | "pricing" | "settings";
+type View = "overview" | "activity" | "projects" | "oauth" | "pricing" | "settings";
 
 interface Notice {
   tone: "success" | "error" | "info";
@@ -41,6 +47,7 @@ const navItems: Array<{ id: View; label: string; helper: string }> = [
   { id: "overview", label: "总览", helper: "采集与使用概览" },
   { id: "activity", label: "活动记录", helper: "每次模型调用的元数据" },
   { id: "projects", label: "项目与 AGENTS", helper: "项目发现与安全编辑" },
+  { id: "oauth", label: "OAuth", helper: "账户登录与额度" },
   { id: "pricing", label: "价格目录", helper: "估算来源与覆盖规则" },
   { id: "settings", label: "设置", helper: "本地路径与保留策略" },
 ];
@@ -462,7 +469,7 @@ function ActivityView({
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [query, onLoad]);
+  }, [initial, query, onLoad]);
 
   return (
     <div className="view-content">
@@ -884,6 +891,351 @@ function PricingView({ rules }: { rules: PricingRule[] }) {
   );
 }
 
+type OAuthTab = "login" | "credentials" | "quota";
+
+const oauthTabs: Array<{ id: OAuthTab; label: string }> = [
+  { id: "login", label: "OAuth 登录" },
+  { id: "credentials", label: "认证文件" },
+  { id: "quota", label: "额度查询" },
+];
+
+function authMethodLabel(method: string | null): string {
+  return {
+    chatgpt: "ChatGPT OAuth",
+    apiKey: "OpenAI API Key",
+    amazonBedrock: "Amazon Bedrock",
+  }[method ?? ""] ?? (method || "unavailable");
+}
+
+function accountStateLabel(snapshot: CodexAccountSnapshot): string {
+  if (snapshot.loginInProgress) return "登录中";
+  return {
+    authenticated: "已登录",
+    "signed-out": "未登录",
+    unavailable: "unavailable",
+  }[snapshot.state];
+}
+
+function quotaWindowLabel(window: CodexRateLimitWindow): string {
+  if (window.windowDurationMins === null) return "额度窗口";
+  if (window.windowDurationMins % 10_080 === 0) return `${window.windowDurationMins / 10_080} 周窗口`;
+  if (window.windowDurationMins % 1_440 === 0) return `${window.windowDurationMins / 1_440} 天窗口`;
+  if (window.windowDurationMins % 60 === 0) return `${window.windowDurationMins / 60} 小时窗口`;
+  return `${window.windowDurationMins} 分钟窗口`;
+}
+
+function QuotaWindow({ window, label }: { window: CodexRateLimitWindow; label: string }) {
+  const remaining = Math.max(0, Math.min(100 - window.usedPercent, 100));
+  return (
+    <div className="quota-window">
+      <div className="quota-window-heading">
+        <span>{label} · {quotaWindowLabel(window)}</span>
+        <strong>剩余 {remaining.toFixed(0)}%</strong>
+      </div>
+      <div className="quota-track" role="progressbar" aria-label={`${label}剩余额度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(remaining)}>
+        <span style={{ width: `${remaining}%` }} />
+      </div>
+      <small>重置时间：{formatDate(window.resetsAt)}</small>
+    </div>
+  );
+}
+
+function AuthProfilesPanel({
+  snapshot,
+  loading,
+  busy,
+  label,
+  onLabelChange,
+  onRefresh,
+  onImport,
+  onActivate,
+  onDelete,
+  onRestore,
+}: {
+  snapshot: AuthProfilesSnapshot | null;
+  loading: boolean;
+  busy: string | null;
+  label: string;
+  onLabelChange: (label: string) => void;
+  onRefresh: () => void;
+  onImport: () => void;
+  onActivate: (profile: AuthProfile) => void;
+  onDelete: (profile: AuthProfile) => void;
+  onRestore: (profile: AuthProfile) => void;
+}) {
+  const available = snapshot?.profiles.filter((profile) => profile.deletedAt === null) ?? [];
+  const deleted = snapshot?.profiles.filter((profile) => profile.deletedAt !== null) ?? [];
+  const activeIndex = available.findIndex((profile) => profile.isActive);
+  const nextProfile = available.length > 1
+    ? available[(activeIndex >= 0 ? activeIndex + 1 : 0) % available.length]
+    : null;
+
+  return (
+    <div className="auth-profile-stack">
+      <section className="panel auth-profile-toolbar" aria-labelledby="auth-profile-heading">
+        <div className="panel-title-row">
+          <div><h2 id="auth-profile-heading">认证档案</h2><p>导入文件由 Rust 原生选择器读取；前端不会获得路径、JSON 或 token。</p></div>
+          <span className="count-chip">{available.length} 个可用</span>
+        </div>
+        <div className="auth-profile-import-row">
+          <label><span>档案名称</span><input value={label} maxLength={64} onChange={(event) => onLabelChange(event.target.value)} placeholder="例如：个人 Pro" disabled={busy !== null} /></label>
+          <button type="button" className="button button-primary" onClick={onImport} disabled={busy !== null || !label.trim()}>{busy === "import" ? "验证并导入中…" : "选择 JSON 并导入"}</button>
+          <button type="button" className="button button-secondary" onClick={onRefresh} disabled={busy !== null || loading}>{loading ? "读取中…" : "刷新档案"}</button>
+          <button type="button" className="button button-secondary" onClick={() => nextProfile && onActivate(nextProfile)} disabled={busy !== null || !nextProfile || !snapshot?.activationAvailable || !snapshot.activeRevision}>轮换到下一个</button>
+        </div>
+        <p className="capability-message">{snapshot?.message ?? "正在读取认证档案…"}</p>
+      </section>
+
+      {loading && !snapshot ? <LoadingState label="正在读取 macOS Keychain 认证档案…" /> : null}
+      {snapshot && !snapshot.supported ? <EmptyState title="当前平台不支持认证档案" detail="首版只支持 macOS Keychain 与 file 模式 auth.json。" /> : null}
+      {snapshot && available.length === 0 ? <EmptyState title="还没有认证档案" detail="输入不含邮箱或路径的本地名称，然后从原生选择器导入官方 Codex auth.json。" /> : null}
+
+      {available.map((profile) => (
+        <section className={`panel auth-profile-row ${profile.isActive ? "is-active" : ""}`} key={profile.id}>
+          <div className="auth-profile-main">
+            <span className="oauth-provider-mark auth-profile-mark" aria-hidden="true">›_</span>
+            <div><h3>{profile.label}</h3><p>更新：{formatDate(profile.updatedAt)} · 凭据保存在应用专用 Keychain</p></div>
+            <span className={`state-pill ${profile.isActive ? "state-healthy" : "state-disabled"}`}>{profile.isActive ? "当前使用" : "待切换"}</span>
+          </div>
+          <div className="auth-profile-actions">
+            <button type="button" className="button button-secondary" onClick={() => onActivate(profile)} disabled={busy !== null || profile.isActive || !snapshot?.activationAvailable || !snapshot.activeRevision}>{busy === `activate:${profile.id}` ? "切换中…" : "设为当前"}</button>
+            <button type="button" className="button button-danger" onClick={() => onDelete(profile)} disabled={busy !== null || profile.isActive || available.length <= 1}>{busy === `delete:${profile.id}` ? "删除中…" : "删除"}</button>
+          </div>
+        </section>
+      ))}
+
+      {deleted.length > 0 ? (
+        <section className="panel auth-profile-trash">
+          <div className="panel-title-row"><div><h2>回收站</h2><p>软删除档案保留 {snapshot?.deletedRetentionDays ?? 30} 天，之后从应用专用 Keychain 清理。</p></div><span className="count-chip">{deleted.length}</span></div>
+          {deleted.map((profile) => (
+            <div className="auth-profile-trash-row" key={profile.id}>
+              <div><strong>{profile.label}</strong><small>删除：{formatDate(profile.deletedAt)}</small></div>
+              <button type="button" className="button button-secondary" onClick={() => onRestore(profile)} disabled={busy !== null}>{busy === `restore:${profile.id}` ? "恢复中…" : "恢复"}</button>
+            </div>
+          ))}
+        </section>
+      ) : null}
+
+      <div className="privacy-lock"><strong>共享状态提醒</strong><span>Codex CLI 与 IDE 扩展共享一个活动账户。轮换只影响之后读取凭据的新会话，不会把 Codex Manager 变成反向代理，也不会按请求自动换号。</span></div>
+    </div>
+  );
+}
+
+function OAuthView({ showNotice }: { showNotice: (notice: Notice) => void }) {
+  const [activeTab, setActiveTab] = useState<OAuthTab>("login");
+  const [snapshot, setSnapshot] = useState<CodexAccountSnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<"login" | "refresh" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [profiles, setProfiles] = useState<AuthProfilesSnapshot | null>(null);
+  const [profilesLoading, setProfilesLoading] = useState(false);
+  const [profileBusy, setProfileBusy] = useState<string | null>(null);
+  const [profileLabel, setProfileLabel] = useState("");
+  const refreshInFlight = useRef(false);
+  const profilesAutoRequested = useRef(false);
+
+  const refresh = useCallback(async (silent = false) => {
+    if (refreshInFlight.current) return null;
+    refreshInFlight.current = true;
+    if (!silent) setBusy("refresh");
+    try {
+      const next = await invokeBackend<CodexAccountSnapshot>(COMMANDS.getCodexAccount);
+      setSnapshot(next);
+      setError(null);
+      return next;
+    } catch (nextError: unknown) {
+      const message = appError(nextError);
+      setError(message);
+      return null;
+    } finally {
+      setLoading(false);
+      if (!silent) setBusy(null);
+      refreshInFlight.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh(true);
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!snapshot?.loginInProgress) return;
+    const timer = window.setInterval(() => void refresh(true), 2_000);
+    return () => window.clearInterval(timer);
+  }, [refresh, snapshot?.loginInProgress]);
+
+  const refreshProfiles = useCallback(async () => {
+    setProfilesLoading(true);
+    try {
+      const next = await invokeBackend<AuthProfilesSnapshot>(COMMANDS.listAuthProfiles);
+      setProfiles(next);
+      return next;
+    } catch (nextError: unknown) {
+      showNotice({ tone: "error", message: `认证档案读取失败：${appError(nextError)}` });
+      return null;
+    } finally {
+      setProfilesLoading(false);
+    }
+  }, [showNotice]);
+
+  useEffect(() => {
+    if (activeTab !== "credentials" || profiles || profilesAutoRequested.current) return;
+    profilesAutoRequested.current = true;
+    void refreshProfiles();
+  }, [activeTab, profiles, refreshProfiles]);
+
+  const finishProfileOperation = async (result: AuthProfileOperationResult) => {
+    showNotice({ tone: result.changed ? "success" : "info", message: result.message });
+    if (result.changed) {
+      await refreshProfiles();
+      await refresh(true);
+    }
+  };
+
+  const importProfile = async () => {
+    setProfileBusy("import");
+    try {
+      const result = await invokeBackend<AuthProfileOperationResult>(COMMANDS.importAuthProfile, { label: profileLabel.trim() });
+      if (result.changed) setProfileLabel("");
+      await finishProfileOperation(result);
+    } catch (nextError: unknown) {
+      showNotice({ tone: "error", message: `认证档案未导入：${appError(nextError)}` });
+    } finally {
+      setProfileBusy(null);
+    }
+  };
+
+  const activateProfile = async (profile: AuthProfile) => {
+    if (!profiles?.activeRevision) return;
+    setProfileBusy(`activate:${profile.id}`);
+    try {
+      const result = await invokeBackend<AuthProfileOperationResult>(COMMANDS.activateAuthProfile, {
+        profileId: profile.id,
+        activeRevision: profiles.activeRevision,
+      });
+      await finishProfileOperation(result);
+    } catch (nextError: unknown) {
+      showNotice({ tone: "error", message: `账户未切换：${appError(nextError)}` });
+      await refreshProfiles();
+    } finally {
+      setProfileBusy(null);
+    }
+  };
+
+  const deleteProfile = async (profile: AuthProfile) => {
+    setProfileBusy(`delete:${profile.id}`);
+    try {
+      const result = await invokeBackend<AuthProfileOperationResult>(COMMANDS.deleteAuthProfile, { profileId: profile.id });
+      await finishProfileOperation(result);
+    } catch (nextError: unknown) {
+      showNotice({ tone: "error", message: `认证档案未删除：${appError(nextError)}` });
+    } finally {
+      setProfileBusy(null);
+    }
+  };
+
+  const restoreProfile = async (profile: AuthProfile) => {
+    setProfileBusy(`restore:${profile.id}`);
+    try {
+      const result = await invokeBackend<AuthProfileOperationResult>(COMMANDS.restoreAuthProfile, { profileId: profile.id });
+      await finishProfileOperation(result);
+    } catch (nextError: unknown) {
+      showNotice({ tone: "error", message: `认证档案未恢复：${appError(nextError)}` });
+    } finally {
+      setProfileBusy(null);
+    }
+  };
+
+  const startLogin = async () => {
+    setBusy("login");
+    try {
+      const result = await invokeBackend<CodexLoginStartResult>(COMMANDS.startCodexLogin);
+      setSnapshot((current) => current ? { ...current, loginInProgress: result.loginInProgress } : current);
+      showNotice({
+        tone: "info",
+        message: result.started
+          ? "已启动官方 Codex 登录流程，请在系统浏览器中完成授权。"
+          : "已有 Codex 登录流程正在等待浏览器授权。",
+      });
+      await refresh(true);
+    } catch (nextError: unknown) {
+      showNotice({ tone: "error", message: `登录流程未启动：${appError(nextError)}` });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const statusClass = snapshot?.state === "authenticated"
+    ? "state-healthy"
+    : snapshot?.state === "signed-out"
+      ? "state-disabled"
+      : "state-degraded";
+
+  return (
+    <div className="view-content oauth-view">
+      <div className="oauth-tabs" role="tablist" aria-label="OAuth 功能">
+        {oauthTabs.map((tab) => (
+          <button key={tab.id} type="button" role="tab" aria-selected={activeTab === tab.id} className={activeTab === tab.id ? "is-active" : ""} onClick={() => setActiveTab(tab.id)}>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      <SectionHeader
+        title={activeTab === "login" ? "Codex OAuth 登录" : activeTab === "credentials" ? "Codex 认证文件" : "Codex 额度查询"}
+        subtitle={activeTab === "credentials"
+          ? "导入的认证秘密只保存在应用专用 macOS Keychain；token、文件路径与原始 JSON 不会返回 WebView、SQLite 或日志。"
+          : "由官方 Codex CLI 与 App Server 完成认证和额度读取；OAuth token 不会返回 WebView、SQLite 或日志。"}
+        action={<button type="button" className="button button-secondary" onClick={() => void refresh()} disabled={busy !== null}>{busy === "refresh" ? "刷新中…" : "刷新状态"}</button>}
+      />
+
+      {loading && !snapshot ? <LoadingState label="正在读取 Codex 账户状态…" /> : null}
+      {error && !snapshot ? <EmptyState title="账户状态暂不可用" detail={error} action={<button type="button" className="button button-primary" onClick={() => void refresh()}>重试</button>} /> : null}
+
+      {snapshot && activeTab === "login" ? (
+        <section className="panel oauth-login-card" aria-labelledby="codex-oauth-heading">
+          <div className="oauth-provider-heading">
+            <span className="oauth-provider-mark" aria-hidden="true">›_</span>
+            <div><h2 id="codex-oauth-heading">Codex OAuth</h2><p>系统浏览器会打开 OpenAI 登录页，回调、token 刷新与凭据存储全部由官方 Codex 处理。</p></div>
+            <span className={`state-pill ${statusClass}`}>{accountStateLabel(snapshot)}</span>
+          </div>
+          <dl className="oauth-summary">
+            <div><dt>当前方式</dt><dd>{authMethodLabel(snapshot.authMethod)}</dd></div>
+            <div><dt>账号</dt><dd>{snapshot.email ?? "unavailable"}</dd></div>
+            <div><dt>套餐</dt><dd>{snapshot.planType ?? "unavailable"}</dd></div>
+          </dl>
+          <p className="capability-message">{snapshot.message}</p>
+          <button type="button" className="button button-primary oauth-login-button" onClick={() => void startLogin()} disabled={busy !== null || snapshot.loginInProgress}>
+            {snapshot.loginInProgress ? "等待浏览器授权…" : busy === "login" ? "启动中…" : snapshot.authenticated ? "重新登录" : "开始登录"}
+          </button>
+          <p className="oauth-footnote">登录可能改变 Codex CLI 与 IDE 扩展共享的当前账户。认证档案的导入、删除与切换只会在“认证文件”页由你显式触发。</p>
+        </section>
+      ) : null}
+
+      {activeTab === "credentials" ? <AuthProfilesPanel snapshot={profiles} loading={profilesLoading} busy={profileBusy} label={profileLabel} onLabelChange={setProfileLabel} onRefresh={() => void refreshProfiles()} onImport={() => void importProfile()} onActivate={(profile) => void activateProfile(profile)} onDelete={(profile) => void deleteProfile(profile)} onRestore={(profile) => void restoreProfile(profile)} /> : null}
+
+      {snapshot && activeTab === "quota" ? (
+        <div className="quota-stack">
+          <div className="quota-summary-row">
+            <span>{snapshot.rateLimits.length} 个可展示额度桶</span>
+            <span>可用重置次数：{snapshot.availableResetCredits ?? "unavailable"}</span>
+          </div>
+          {!snapshot.rateLimitsAvailable ? <EmptyState title="额度不可用" detail="当前认证方式或 Codex 服务没有返回 ChatGPT 额度；不会用本地 token 消耗估算填充。" /> : null}
+          {snapshot.rateLimitsAvailable && snapshot.rateLimits.length === 0 ? <EmptyState title="没有可展示的额度窗口" detail="官方服务返回了额度响应，但没有可识别的窗口。" /> : null}
+          {snapshot.rateLimits.map((bucket) => (
+            <section key={bucket.limitId} className="panel quota-card">
+              <div className="panel-title-row"><div><h2>{bucket.limitName ?? bucket.limitId}</h2><p>{bucket.planType ?? snapshot.planType ?? "套餐 unavailable"} · {bucket.limitId}</p></div></div>
+              {bucket.primary ? <QuotaWindow window={bucket.primary} label="主要额度" /> : null}
+              {bucket.secondary ? <QuotaWindow window={bucket.secondary} label="次要额度" /> : null}
+              {!bucket.primary && !bucket.secondary ? <p className="capability-message">该额度桶没有可识别的时间窗口。</p> : null}
+            </section>
+          ))}
+          <p className="oauth-footnote">这里展示的是官方 ChatGPT Codex 额度窗口，不是 OpenAI Platform API 费率、API 等价成本或本地活动记录估算。</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SettingsView({
   settings,
   capability,
@@ -997,20 +1349,67 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [saving, setSaving] = useState(false);
+  const bootstrapInFlight = useRef(false);
+  const bootstrapPending = useRef<boolean | null>(null);
 
-  const refreshBootstrap = useCallback(async () => {
+  const refreshBootstrap = useCallback(async (rescan = false) => {
+    if (bootstrapInFlight.current) {
+      bootstrapPending.current = bootstrapPending.current === true || rescan;
+      return;
+    }
+    bootstrapInFlight.current = true;
     setLoading(true);
     setError(null);
     try {
+      if (rescan && isDesktopRuntime()) {
+        await invokeBackend<SourceHealth[]>(COMMANDS.rescan);
+      }
       setPayload(await invokeBackend<BootstrapPayload>(COMMANDS.bootstrap));
     } catch (nextError: unknown) {
       setError(appError(nextError));
     } finally {
+      const pendingRescan = bootstrapPending.current;
+      bootstrapPending.current = null;
+      bootstrapInFlight.current = false;
       setLoading(false);
+      if (pendingRescan !== null) void refreshBootstrap(pendingRescan);
     }
   }, []);
 
   useEffect(() => { void refreshBootstrap(); }, [refreshBootstrap]);
+
+  useEffect(() => {
+    if (!isDesktopRuntime()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    let pendingRefresh: number | undefined;
+    const stopListening = (listener: (() => void) | undefined) => {
+      if (!listener) return;
+      try {
+        void Promise.resolve(listener()).catch(() => undefined);
+      } catch {
+        // The window may already be gone during teardown or development reload.
+      }
+    };
+    void import("@tauri-apps/api/event")
+      .then(({ listen }) => listen("local-data-refreshed", () => {
+        if (pendingRefresh !== undefined) return;
+        pendingRefresh = window.setTimeout(() => {
+          pendingRefresh = undefined;
+          void refreshBootstrap();
+        }, 2_000);
+      }))
+      .then((listener) => {
+        if (disposed) stopListening(listener);
+        else unlisten = listener;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      if (pendingRefresh !== undefined) window.clearTimeout(pendingRefresh);
+      stopListening(unlisten);
+    };
+  }, [refreshBootstrap]);
 
   const loadActivity = useCallback((query: ActivityQuery) => invokeBackend<ActivityPage>(COMMANDS.listActivity, { query }), []);
   const updateSettings = async (next: AppSettings) => {
@@ -1047,6 +1446,7 @@ export function App() {
       case "overview": return <Overview payload={payload} onNavigate={setView} />;
       case "activity": return <ActivityView initial={payload.activity} projects={projects} onLoad={loadActivity} />;
       case "projects": return <ProjectsView projects={projects} authorizedRoots={payload.settings.authorizedRoots} onProjectsChange={(next) => setPayload((old) => old ? { ...old, projects: next } : old)} showNotice={setNotice} />;
+      case "oauth": return <OAuthView showNotice={setNotice} />;
       case "pricing": return <PricingView rules={payload.pricingRules} />;
       case "settings": return <SettingsView settings={payload.settings} capability={payload.capability} onSave={(next) => void updateSettings(next)} onProbe={() => void probe()} saving={saving} />;
     }
@@ -1062,7 +1462,7 @@ export function App() {
         <div className="sidebar-foot"><span className="runtime-mark" aria-hidden="true" />{shellLabel}<small>不做反向代理；不修改 Codex 配置。</small></div>
       </aside>
       <main className="main-area">
-        <header className="topbar"><div><span className="topbar-crumb">工作台</span><span className="topbar-separator">/</span><span>{navItems.find((item) => item.id === view)?.label}</span></div><button type="button" className="button button-secondary" onClick={() => void refreshBootstrap()} disabled={loading}>{loading ? "刷新中…" : "刷新本地数据"}</button></header>
+        <header className="topbar"><div><span className="topbar-crumb">工作台</span><span className="topbar-separator">/</span><span>{navItems.find((item) => item.id === view)?.label}</span></div><button type="button" className="button button-secondary" onClick={() => void refreshBootstrap(true)} disabled={loading}>{loading ? "刷新中…" : "刷新本地数据"}</button></header>
         {notice ? <InlineNotice notice={notice} onClose={() => setNotice(null)} /> : null}
         {loading && !payload ? <LoadingState /> : null}
         {error && !payload ? <div className="fatal-error"><EmptyState title="无法连接本地管理服务" detail={error} action={<button type="button" className="button button-primary" onClick={() => void refreshBootstrap()}>重试</button>} /></div> : null}

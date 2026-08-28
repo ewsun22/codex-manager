@@ -14,6 +14,12 @@
 | 项目发现 | cwd observed | 不负责 | 不负责 | 不负责 | 已观测 cwd + 用户授权扫描根 |
 | AGENTS 有效链 | 文件系统 adapter | 不负责 | 不负责 | 文档规则对齐 | 全局到选定 cwd |
 | AGENTS 安全写入 / revision | 不适用 | 不适用 | 不适用 | 不适用 | 仅显式授权根目录 |
+| Codex 登录状态 | 不负责 | 不负责 | 不负责 | `account/read`，短生命周期只读 | 仅白名单摘要；不展示 token/授权 URL |
+| ChatGPT Codex 额度 | 不负责 | 不负责 | 不负责 | `account/rateLimits/read` | 官方窗口；不是 API 费率或本地估算 |
+| OAuth 登录启动 | 不负责 | 不负责 | 不负责 | 官方 `codex login` | 用户点击后由系统浏览器和 Codex 完成 |
+| 认证文件导入 | 不负责 | 不负责 | 不负责 | 暂停进程动态验签后，以 `chatgptAuthTokens` 外部认证 + `account/read` + `account/rateLimits/read` 验证 access token | 原生选择器；refresh token 不交给在线探测；秘密进入应用专用 Keychain |
+| 多账户切换 | 不负责 | 不负责 | 不负责 | `config/read` 证明 file 模式，切换前后 `account/read` 复核 | 用户确认后 CAS + 原子替换；keyring/auto 拒绝 |
+| 认证档案删除/恢复 | 不负责 | 不负责 | 不负责 | 不负责 | 活动/最后档案不可删；软删除 30 天可恢复 |
 | 应用在线更新 | 不负责 | 不负责 | 不负责 | 不负责 | 用户手动触发；GitHub Releases + Tauri 签名 + macOS 原生确认 |
 
 ## 不承诺的能力
@@ -21,5 +27,8 @@
 - “活动记录总数”是本地来源的观测行数，不是经过跨来源关联后的唯一账单请求数。
 - rollout JSONL 是私有兼容源；版本变化可能造成 source health 降级。
 - 没有反代时，不能精确取得完整请求 URL、真实网络 TTFB、wire bytes 或供应商账单。
-- App Server 当前只做命令可用性与 Schema SHA-256 探测，没有附着 Codex Desktop 内部进程，也没有用它读取历史。
+- App Server 不附着 Codex Desktop 内部进程，也不读取历史。除 Schema probe 外，OAuth 页只创建短生命周期进程读取官方账户与额度 DTO。
+- 不提供认证文件导出/编辑、请求级自动轮换或 token 代理；显式“轮换到下一个”是共享活动账户切换，不迁移正在运行的会话。不把 ChatGPT Codex 额度宣称为 OpenAI Platform API 费率、API 等价成本或供应商账单。
+- OAuth 认证边界当前只在 macOS 启用，只执行从固定 ChatGPT bundle 复制到随机私有目录并在复制后通过 OpenAI identifier/Team ID 验证的 Codex；其他平台显示 `unavailable`，等待等价的发布者身份验证。
+- 导入依赖 App Server 当前的 `chatgptAuthTokens` 协议，该协议变更时会 fail closed。导入时必须有可用 access token；为避免触发 refresh token 轮换，不在导入探测中单独验证 refresh token。
 - OTel metrics 是聚合数据；当前 Codex metrics 缺少稳定的逐 conversation 关联时，本应用不会把 histogram/count 展开为虚假的单次请求。

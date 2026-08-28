@@ -24,6 +24,13 @@
     "allow-rescan",
     "allow-probe-codex",
     "allow-check-for-update",
-    "allow-install-pending-update"
+    "allow-install-pending-update",
+    "allow-get-codex-account",
+    "allow-start-codex-login",
+    "allow-list-auth-profiles",
+    "allow-import-auth-profile",
+    "allow-activate-auth-profile",
+    "allow-delete-auth-profile",
+    "allow-restore-auth-profile"
   ]
 }

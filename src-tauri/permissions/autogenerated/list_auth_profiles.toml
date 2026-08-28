@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-auth-profiles"
+description = "Enables the list_auth_profiles command without any pre-configured scope."
+commands.allow = ["list_auth_profiles"]
+
+[[permission]]
+identifier = "deny-list-auth-profiles"
+description = "Denies the list_auth_profiles command without any pre-configured scope."
+commands.deny = ["list_auth_profiles"]

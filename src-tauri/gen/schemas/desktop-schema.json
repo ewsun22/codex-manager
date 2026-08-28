@@ -177,6 +177,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the activate_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-activate-auth-profile",
+          "markdownDescription": "Enables the activate_auth_profile command without any pre-configured scope."
+        },
+        {
           "description": "Enables the bootstrap command without any pre-configured scope.",
           "type": "string",
           "const": "allow-bootstrap",
@@ -195,6 +201,12 @@
           "markdownDescription": "Enables the create_agents_file command without any pre-configured scope."
         },
         {
+          "description": "Enables the delete_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-auth-profile",
+          "markdownDescription": "Enables the delete_auth_profile command without any pre-configured scope."
+        },
+        {
           "description": "Enables the discover_projects command without any pre-configured scope.",
           "type": "string",
           "const": "allow-discover-projects",
@@ -205,6 +217,12 @@
           "type": "string",
           "const": "allow-get-agents-chain",
           "markdownDescription": "Enables the get_agents_chain command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_codex_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-codex-account",
+          "markdownDescription": "Enables the get_codex_account command without any pre-configured scope."
         },
         {
           "description": "Enables the get_dashboard command without any pre-configured scope.",
@@ -225,6 +243,12 @@
           "markdownDescription": "Enables the get_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the import_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-import-auth-profile",
+          "markdownDescription": "Enables the import_auth_profile command without any pre-configured scope."
+        },
+        {
           "description": "Enables the install_pending_update command without any pre-configured scope.",
           "type": "string",
           "const": "allow-install-pending-update",
@@ -241,6 +265,12 @@
           "type": "string",
           "const": "allow-list-agents-revisions",
           "markdownDescription": "Enables the list_agents_revisions command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_auth_profiles command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-auth-profiles",
+          "markdownDescription": "Enables the list_auth_profiles command without any pre-configured scope."
         },
         {
           "description": "Enables the list_pricing_rules command without any pre-configured scope.",
@@ -285,16 +315,34 @@
           "markdownDescription": "Enables the restore_agents_revision command without any pre-configured scope."
         },
         {
+          "description": "Enables the restore_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-restore-auth-profile",
+          "markdownDescription": "Enables the restore_auth_profile command without any pre-configured scope."
+        },
+        {
           "description": "Enables the save_agents_file command without any pre-configured scope.",
           "type": "string",
           "const": "allow-save-agents-file",
           "markdownDescription": "Enables the save_agents_file command without any pre-configured scope."
         },
         {
+          "description": "Enables the start_codex_login command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-codex-login",
+          "markdownDescription": "Enables the start_codex_login command without any pre-configured scope."
+        },
+        {
           "description": "Enables the update_settings command without any pre-configured scope.",
           "type": "string",
           "const": "allow-update-settings",
           "markdownDescription": "Enables the update_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the activate_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-activate-auth-profile",
+          "markdownDescription": "Denies the activate_auth_profile command without any pre-configured scope."
         },
         {
           "description": "Denies the bootstrap command without any pre-configured scope.",
@@ -315,6 +363,12 @@
           "markdownDescription": "Denies the create_agents_file command without any pre-configured scope."
         },
         {
+          "description": "Denies the delete_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-auth-profile",
+          "markdownDescription": "Denies the delete_auth_profile command without any pre-configured scope."
+        },
+        {
           "description": "Denies the discover_projects command without any pre-configured scope.",
           "type": "string",
           "const": "deny-discover-projects",
@@ -325,6 +379,12 @@
           "type": "string",
           "const": "deny-get-agents-chain",
           "markdownDescription": "Denies the get_agents_chain command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_codex_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-codex-account",
+          "markdownDescription": "Denies the get_codex_account command without any pre-configured scope."
         },
         {
           "description": "Denies the get_dashboard command without any pre-configured scope.",
@@ -345,6 +405,12 @@
           "markdownDescription": "Denies the get_settings command without any pre-configured scope."
         },
         {
+          "description": "Denies the import_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-import-auth-profile",
+          "markdownDescription": "Denies the import_auth_profile command without any pre-configured scope."
+        },
+        {
           "description": "Denies the install_pending_update command without any pre-configured scope.",
           "type": "string",
           "const": "deny-install-pending-update",
@@ -361,6 +427,12 @@
           "type": "string",
           "const": "deny-list-agents-revisions",
           "markdownDescription": "Denies the list_agents_revisions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_auth_profiles command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-auth-profiles",
+          "markdownDescription": "Denies the list_auth_profiles command without any pre-configured scope."
         },
         {
           "description": "Denies the list_pricing_rules command without any pre-configured scope.",
@@ -405,10 +477,22 @@
           "markdownDescription": "Denies the restore_agents_revision command without any pre-configured scope."
         },
         {
+          "description": "Denies the restore_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-restore-auth-profile",
+          "markdownDescription": "Denies the restore_auth_profile command without any pre-configured scope."
+        },
+        {
           "description": "Denies the save_agents_file command without any pre-configured scope.",
           "type": "string",
           "const": "deny-save-agents-file",
           "markdownDescription": "Denies the save_agents_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_codex_login command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-codex-login",
+          "markdownDescription": "Denies the start_codex_login command without any pre-configured scope."
         },
         {
           "description": "Denies the update_settings command without any pre-configured scope.",

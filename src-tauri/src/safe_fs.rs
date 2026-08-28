@@ -12,6 +12,7 @@ use std::{
     time::UNIX_EPOCH,
 };
 use uuid::Uuid;
+use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileStamp {
@@ -27,6 +28,11 @@ pub struct ReadResult {
     pub bytes: Vec<u8>,
     pub stamp: FileStamp,
     pub writable: bool,
+}
+
+pub struct SecretReadResult {
+    pub bytes: Zeroizing<Vec<u8>>,
+    pub stamp: FileStamp,
 }
 
 /// A regular file opened relative to an already-authorized directory tree.
@@ -313,6 +319,27 @@ mod unix {
         Ok((bytes, stamp))
     }
 
+    fn stamp_from_handle(file: File, max_bytes: u64) -> Result<FileStamp, String> {
+        let (mut bytes, stamp) = read_from_handle(file, max_bytes)?;
+        bytes.zeroize();
+        Ok(stamp)
+    }
+
+    fn matches_secret_expectation(
+        metadata: &fs::Metadata,
+        stamp: &FileStamp,
+        expected: &FileStamp,
+    ) -> bool {
+        metadata.is_file()
+            && metadata.uid() == unsafe { libc::geteuid() }
+            && metadata.nlink() == 1
+            && metadata.mode() & 0o077 == 0
+            && stamp.sha256 == expected.sha256
+            && stamp.mtime_ms == expected.mtime_ms
+            && stamp.identity == expected.identity
+            && stamp.size_bytes == expected.size_bytes
+    }
+
     pub fn read(
         root: &Path,
         relative_parent: &Path,
@@ -327,6 +354,33 @@ mod unix {
             bytes,
             stamp,
             writable,
+        })
+    }
+
+    pub fn read_secret(
+        root: &Path,
+        relative_parent: &Path,
+        name: &str,
+        max_bytes: u64,
+    ) -> Result<ReadResult, String> {
+        let parent = open_parent(root, relative_parent)?;
+        let file = open_file(&parent, name, false)?;
+        let metadata = file.metadata().map_err(display_error)?;
+        if !metadata.is_file()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.nlink() != 1
+        {
+            return Err("认证文件必须是当前用户拥有的单链接普通文件。".into());
+        }
+        if metadata.mode() & 0o077 != 0 {
+            return Err("认证文件权限过宽；必须限制为当前用户可读写。".into());
+        }
+        let (bytes, stamp) = read_from_handle(file, max_bytes)?;
+        Ok(ReadResult {
+            path: root.join(relative_parent).join(name),
+            bytes,
+            stamp,
+            writable: true,
         })
     }
 
@@ -377,6 +431,8 @@ mod unix {
         expectation: Option<WriteExpectation<'_>>,
         bytes: &[u8],
         max_bytes: u64,
+        create_mode: u32,
+        secret_expectation: Option<&FileStamp>,
         before_commit: F,
     ) -> Result<(ReadResult, T), String>
     where
@@ -394,16 +450,26 @@ mod unix {
                 let expected = expectation
                     .as_ref()
                     .ok_or_else(|| "保存现有文件必须携带冲突检测 token。".to_string())?;
-                if stamp.sha256 != expected.sha256 || stamp.mtime_ms != expected.mtime_ms {
+                if stamp.sha256 != expected.sha256
+                    || stamp.mtime_ms != expected.mtime_ms
+                    || secret_expectation.is_some_and(|secret| {
+                        !matches_secret_expectation(&metadata, &stamp, secret)
+                    })
+                {
                     return Err("文件已被外部修改；请重新加载后再保存。".into());
                 }
-                (before, metadata.mode() & 0o777)
+                let replacement_mode = if secret_expectation.is_some() {
+                    0o600
+                } else {
+                    metadata.mode() & 0o777
+                };
+                (Zeroizing::new(before), replacement_mode)
             }
             WriteMode::Create => {
                 if open_file(&parent, name, false).is_ok() {
                     return Err("AGENTS 文件已存在；请重新加载项目。".into());
                 }
-                (Vec::new(), 0o644)
+                (Zeroizing::new(Vec::new()), create_mode)
             }
         };
 
@@ -425,9 +491,16 @@ mod unix {
         // Re-open through the anchored directory immediately before committing.
         // This closes the interval between the UI snapshot and the atomic rename.
         if mode == WriteMode::Replace {
-            let (_, current) = read_from_handle(open_file(&parent, name, false)?, max_bytes)?;
+            let current_file = open_file(&parent, name, false)?;
+            let current_metadata = current_file.metadata().map_err(display_error)?;
+            let current = stamp_from_handle(current_file, max_bytes)?;
             let expected = expectation.as_ref().expect("replace checked above");
-            if current.sha256 != expected.sha256 || current.mtime_ms != expected.mtime_ms {
+            if current.sha256 != expected.sha256
+                || current.mtime_ms != expected.mtime_ms
+                || secret_expectation.is_some_and(|secret| {
+                    !matches_secret_expectation(&current_metadata, &current, secret)
+                })
+            {
                 cleanup();
                 return Err("文件已被外部修改；请重新加载后再保存。".into());
             }
@@ -479,19 +552,25 @@ mod unix {
             // After the atomic exchange, the temporary name refers to the exact
             // inode that was replaced. Validate that inode, not the pathname that
             // was checked before `before_commit` ran.
-            let (_, swapped_out) =
-                read_from_handle(open_file(&parent, &temp_name, false)?, max_bytes)?;
+            let swapped_file = open_file(&parent, &temp_name, false)?;
+            let swapped_metadata = swapped_file.metadata().map_err(display_error)?;
+            let swapped_out = stamp_from_handle(swapped_file, max_bytes)?;
             let expected = expectation.as_ref().expect("replace checked above");
-            if swapped_out.sha256 != expected.sha256 || swapped_out.mtime_ms != expected.mtime_ms {
+            if swapped_out.sha256 != expected.sha256
+                || swapped_out.mtime_ms != expected.mtime_ms
+                || secret_expectation.is_some_and(|secret| {
+                    !matches_secret_expectation(&swapped_metadata, &swapped_out, secret)
+                })
+            {
                 if let Err(error) = exchange(&parent, &c_temp, &c_name) {
                     return Err(format!(
                         "文件发生并发修改，且自动恢复失败：{error}；请保留 {temp_name} 并手工检查。"
                     ));
                 }
                 parent.sync_all().map_err(display_error)?;
-                let restored = read_from_handle(open_file(&parent, name, false)?, max_bytes)?.1;
+                let restored = stamp_from_handle(open_file(&parent, name, false)?, max_bytes)?;
                 let replacement =
-                    read_from_handle(open_file(&parent, &temp_name, false)?, max_bytes)?.1;
+                    stamp_from_handle(open_file(&parent, &temp_name, false)?, max_bytes)?;
                 if restored.sha256 == swapped_out.sha256
                     && restored.mtime_ms == swapped_out.mtime_ms
                     && replacement.sha256 == sha256(bytes)
@@ -506,7 +585,11 @@ mod unix {
             cleanup();
         }
         parent.sync_all().map_err(display_error)?;
-        let result = read(root, relative_parent, name, max_bytes)?;
+        let result = if secret_expectation.is_some() {
+            read_secret(root, relative_parent, name, max_bytes)?
+        } else {
+            read(root, relative_parent, name, max_bytes)?
+        };
         Ok((result, token))
     }
 }
@@ -574,6 +657,19 @@ mod portable {
         })
     }
 
+    pub fn read_secret(
+        root: &Path,
+        relative_parent: &Path,
+        name: &str,
+        max_bytes: u64,
+    ) -> Result<ReadResult, String> {
+        let result = read(root, relative_parent, name, max_bytes)?;
+        if !result.writable {
+            return Err("认证文件不可安全写入。".into());
+        }
+        Ok(result)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn write<F, T>(
         root: &Path,
@@ -583,6 +679,7 @@ mod portable {
         expectation: Option<WriteExpectation<'_>>,
         bytes: &[u8],
         max_bytes: u64,
+        create_mode: u32,
         before_commit: F,
     ) -> Result<(ReadResult, T), String>
     where
@@ -614,6 +711,21 @@ mod portable {
         let mut temp = tempfile::NamedTempFile::new_in(&parent).map_err(display_error)?;
         temp.write_all(bytes).map_err(display_error)?;
         temp.as_file().sync_all().map_err(display_error)?;
+        if mode == WriteMode::Create {
+            let mut permissions = temp
+                .as_file()
+                .metadata()
+                .map_err(display_error)?
+                .permissions();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                permissions.set_mode(create_mode);
+            }
+            temp.as_file()
+                .set_permissions(permissions)
+                .map_err(display_error)?;
+        }
         if mode == WriteMode::Create {
             temp.persist_noclobber(&path)
                 .map_err(|error| error.error.to_string())?;
@@ -689,6 +801,30 @@ pub fn read_authorized(
     }
 }
 
+pub fn read_secret_authorized(
+    root: &Path,
+    relative_parent: &Path,
+    name: &str,
+    max_bytes: u64,
+) -> Result<SecretReadResult, String> {
+    #[cfg(unix)]
+    {
+        let result = unix::read_secret(root, relative_parent, name, max_bytes)?;
+        Ok(SecretReadResult {
+            bytes: Zeroizing::new(result.bytes),
+            stamp: result.stamp,
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let result = portable::read_secret(root, relative_parent, name, max_bytes)?;
+        Ok(SecretReadResult {
+            bytes: Zeroizing::new(result.bytes),
+            stamp: result.stamp,
+        })
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn write_authorized<F, T>(
     root: &Path,
@@ -703,6 +839,37 @@ pub fn write_authorized<F, T>(
 where
     F: FnOnce(&[u8], &[u8]) -> Result<T, String>,
 {
+    write_authorized_with_create_mode(
+        root,
+        relative_parent,
+        name,
+        mode,
+        expectation,
+        bytes,
+        max_bytes,
+        0o644,
+        before_commit,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn write_authorized_with_create_mode<F, T>(
+    root: &Path,
+    relative_parent: &Path,
+    name: &str,
+    mode: WriteMode,
+    expectation: Option<WriteExpectation<'_>>,
+    bytes: &[u8],
+    max_bytes: u64,
+    create_mode: u32,
+    before_commit: F,
+) -> Result<(ReadResult, T), String>
+where
+    F: FnOnce(&[u8], &[u8]) -> Result<T, String>,
+{
+    if create_mode & !0o777 != 0 {
+        return Err("文件权限模式无效。".into());
+    }
     #[cfg(unix)]
     {
         unix::write(
@@ -713,6 +880,8 @@ where
             expectation,
             bytes,
             max_bytes,
+            create_mode,
+            None,
             before_commit,
         )
     }
@@ -726,8 +895,51 @@ where
             expectation,
             bytes,
             max_bytes,
+            create_mode,
             before_commit,
         )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn write_secret_authorized<F, T>(
+    root: &Path,
+    relative_parent: &Path,
+    name: &str,
+    expected: &FileStamp,
+    bytes: &[u8],
+    max_bytes: u64,
+    before_commit: F,
+) -> Result<(FileStamp, T), String>
+where
+    F: FnOnce(&[u8], &[u8]) -> Result<T, String>,
+{
+    #[cfg(unix)]
+    {
+        let expectation = WriteExpectation {
+            sha256: &expected.sha256,
+            mtime_ms: expected.mtime_ms,
+        };
+        let (mut result, token) = unix::write(
+            root,
+            relative_parent,
+            name,
+            WriteMode::Replace,
+            Some(expectation),
+            bytes,
+            max_bytes,
+            0o600,
+            Some(expected),
+            before_commit,
+        )?;
+        result.bytes.zeroize();
+        Ok((result.stamp, token))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (root, relative_parent, name, expected, bytes, max_bytes);
+        let _ = before_commit;
+        Err("认证文件安全替换当前仅支持 macOS。".into())
     }
 }
 
@@ -840,6 +1052,53 @@ mod tests {
 
         assert!(error.contains("外部修改"));
         assert_eq!(fs::read(&target).unwrap(), b"external\n");
+    }
+
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn secret_replace_rejects_permission_race_and_forces_private_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = canonical_authorized_root(directory.path()).unwrap();
+        let target = root.join("auth.json");
+        fs::write(&target, b"old-secret").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        let initial = read_secret_authorized(&root, Path::new(""), "auth.json", 1024).unwrap();
+
+        let error = write_secret_authorized(
+            &root,
+            Path::new(""),
+            "auth.json",
+            &initial.stamp,
+            b"new-secret",
+            1024,
+            |_, _| {
+                fs::set_permissions(&target, fs::Permissions::from_mode(0o644))
+                    .map_err(display_error)
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("外部修改"));
+        assert_eq!(fs::read(&target).unwrap(), b"old-secret");
+
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        let current = read_secret_authorized(&root, Path::new(""), "auth.json", 1024).unwrap();
+        write_secret_authorized(
+            &root,
+            Path::new(""),
+            "auth.json",
+            &current.stamp,
+            b"new-secret",
+            1024,
+            |_, _| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"new-secret");
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[cfg(unix)]

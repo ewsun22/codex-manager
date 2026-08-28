@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-activate-auth-profile"
+description = "Enables the activate_auth_profile command without any pre-configured scope."
+commands.allow = ["activate_auth_profile"]
+
+[[permission]]
+identifier = "deny-activate-auth-profile"
+description = "Denies the activate_auth_profile command without any pre-configured scope."
+commands.deny = ["activate_auth_profile"]

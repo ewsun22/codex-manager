@@ -7,8 +7,12 @@ import type {
   AgentsRevision,
   AppSettings,
   AppUpdateStatus,
+  AuthProfileOperationResult,
+  AuthProfilesSnapshot,
   BootstrapPayload,
   CodexCapability,
+  CodexAccountSnapshot,
+  CodexLoginStartResult,
   CreateAgentsFileInput,
   DashboardSummary,
   PricingRule,
@@ -305,6 +309,49 @@ const capability: CodexCapability = {
   message: "演示数据：schema 指纹仅用于兼容性提示。",
 };
 
+const account: CodexAccountSnapshot = {
+  state: "authenticated",
+  authenticated: true,
+  authMethod: "chatgpt",
+  email: "developer@example.test",
+  planType: "pro",
+  requiresOpenaiAuth: true,
+  loginInProgress: false,
+  rateLimitsAvailable: true,
+  rateLimits: [
+    {
+      limitId: "codex",
+      limitName: "Codex",
+      planType: "pro",
+      primary: { usedPercent: 38, windowDurationMins: 300, resetsAt: "2026-08-28T16:00:00.000Z" },
+      secondary: { usedPercent: 57, windowDurationMins: 10_080, resetsAt: "2026-09-03T16:00:00.000Z" },
+    },
+    {
+      limitId: "codex_other",
+      limitName: "其他 Codex 模型",
+      planType: "pro",
+      primary: { usedPercent: 12, windowDurationMins: 1_440, resetsAt: "2026-08-29T16:00:00.000Z" },
+      secondary: null,
+    },
+  ],
+  availableResetCredits: 1,
+  checkedAt: observedAt,
+  message: "演示数据：账户与额度来自官方 Codex App Server，凭据不会进入界面。",
+};
+
+let authProfiles: AuthProfilesSnapshot = {
+  supported: true,
+  activationAvailable: true,
+  activeProfileId: "profile-demo-primary",
+  activeRevision: "revision-demo-1",
+  profiles: [
+    { id: "profile-demo-primary", label: "个人 Pro", isActive: true, createdAt: "2026-08-27T08:00:00.000Z", updatedAt: observedAt, deletedAt: null },
+    { id: "profile-demo-team", label: "团队账户", isActive: false, createdAt: "2026-08-27T09:00:00.000Z", updatedAt: "2026-08-27T09:30:00.000Z", deletedAt: null },
+  ],
+  deletedRetentionDays: 30,
+  message: "演示模式：档案秘密位于应用专用 macOS Keychain，活动账户使用 file 模式 auth.json。",
+};
+
 let currentAgentsContent = `# signal-catalog agent guidance\n\n## 范围\n\n- 优先修复用户路径，不执行未授权的部署。\n- 数据采集默认仅保留元数据。\n\n## 验收\n\n- 修改后运行相关测试，并报告实际结果。\n`;
 const createdProjectAgents = new Set<string>([projectAgentsPath, `${infraProjectPath}/AGENTS.md`]);
 let revisionCounter = 2;
@@ -507,6 +554,46 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
     case COMMANDS.installPendingUpdate:
       if (args.expectedVersion !== "0.2.0") throw new Error("更新版本已变化，请重新检查后再安装。");
       return { accepted: true } satisfies UpdateInstallResult as T;
+    case COMMANDS.getCodexAccount:
+      return { ...account, checkedAt: new Date().toISOString() } as T;
+    case COMMANDS.startCodexLogin:
+      return { started: true, loginInProgress: true } satisfies CodexLoginStartResult as T;
+    case COMMANDS.listAuthProfiles:
+      return structuredClone(authProfiles) as T;
+    case COMMANDS.importAuthProfile: {
+      const now = new Date().toISOString();
+      const id = `profile-demo-${authProfiles.profiles.length + 1}`;
+      authProfiles.profiles.push({ id, label: String(args.label || "新认证档案"), isActive: false, createdAt: now, updatedAt: now, deletedAt: null });
+      return { changed: true, message: "演示模式：认证档案已导入。" } satisfies AuthProfileOperationResult as T;
+    }
+    case COMMANDS.activateAuthProfile: {
+      const id = String(args.profileId ?? "");
+      const target = authProfiles.profiles.find((profile) => profile.id === id);
+      if (!target || target.deletedAt !== null) throw new Error("认证档案不存在或已删除。");
+      authProfiles.profiles = authProfiles.profiles.map((profile) => ({ ...profile, isActive: profile.id === id }));
+      authProfiles.activeProfileId = id;
+      authProfiles.activeRevision = `revision-demo-${Date.now()}`;
+      return { changed: true, message: "演示模式：已切换当前认证档案。" } satisfies AuthProfileOperationResult as T;
+    }
+    case COMMANDS.deleteAuthProfile: {
+      const id = String(args.profileId ?? "");
+      const target = authProfiles.profiles.find((profile) => profile.id === id);
+      if (!target || target.deletedAt !== null) throw new Error("认证档案不存在或已删除。");
+      if (target.isActive || authProfiles.activeProfileId === id) throw new Error("不能删除当前生效的认证档案。");
+      const availableCount = authProfiles.profiles.filter((profile) => profile.deletedAt === null).length;
+      if (availableCount <= 1) throw new Error("至少必须保留一个可用认证档案。");
+      const deletedAt = new Date().toISOString();
+      authProfiles.profiles = authProfiles.profiles.map((profile) => profile.id === id ? { ...profile, isActive: false, deletedAt } : profile);
+      return { changed: true, message: "演示模式：档案已移入回收站。" } satisfies AuthProfileOperationResult as T;
+    }
+    case COMMANDS.restoreAuthProfile: {
+      const id = String(args.profileId ?? "");
+      const target = authProfiles.profiles.find((profile) => profile.id === id);
+      if (!target) throw new Error("认证档案不存在。");
+      if (target.deletedAt === null) throw new Error("认证档案尚未删除。");
+      authProfiles.profiles = authProfiles.profiles.map((profile) => profile.id === id ? { ...profile, deletedAt: null } : profile);
+      return { changed: true, message: "演示模式：档案已恢复。" } satisfies AuthProfileOperationResult as T;
+    }
     default:
       throw new Error(`演示适配器不支持命令：${command}`);
   }

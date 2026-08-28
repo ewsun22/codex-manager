@@ -20,6 +20,13 @@ fn main() {
         "probe_codex",
         "check_for_update",
         "install_pending_update",
+        "get_codex_account",
+        "start_codex_login",
+        "list_auth_profiles",
+        "import_auth_profile",
+        "activate_auth_profile",
+        "delete_auth_profile",
+        "restore_auth_profile",
     ];
 
     tauri_build::try_build(

@@ -1,6 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod account;
 mod agents;
+mod auth_profiles;
+mod auth_switch;
 mod otel;
 mod platform;
 mod pricing;
@@ -19,15 +22,15 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, VecDeque},
     fs::{self, File},
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{Mutex, mpsc},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use uuid::Uuid;
@@ -39,6 +42,7 @@ const MAX_SCAN_BYTES_PER_ROUND: u64 = 256 * 1024 * 1024;
 const MAX_SCAN_EVENTS_PER_ROUND: usize = 200_000;
 const MAX_SCAN_BYTES_PER_FILE_BATCH: u64 = 32 * 1024 * 1024;
 const MAX_SCAN_EVENTS_PER_FILE_BATCH: usize = 20_000;
+const MAX_SCAN_DISCOVERY_DURATION: Duration = Duration::from_secs(5);
 const MAX_SCAN_DURATION: Duration = Duration::from_secs(20);
 const WATCH_RECONCILE_INTERVAL: Duration = Duration::from_secs(60);
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(350);
@@ -61,6 +65,38 @@ struct AppState {
     project_warning: Mutex<Option<String>>,
     update_gate: tokio::sync::Mutex<()>,
     pending_update: Mutex<Option<Update>>,
+    account_gate: tokio::sync::Mutex<()>,
+    credential_mutation_gate: tokio::sync::Mutex<()>,
+    auth_stage_gate: tokio::sync::Mutex<()>,
+    login: Mutex<account::LoginRuntime>,
+    auth_executable: Mutex<Option<platform::TrustedCodexAuthExecutable>>,
+    auth_profiles: std::sync::Arc<auth_profiles::AuthProfileStore>,
+    auth_profile_revisions: Mutex<VecDeque<AuthProfileRevision>>,
+}
+
+#[derive(Clone)]
+struct AuthProfileRevision {
+    token: String,
+    stamp: safe_fs::FileStamp,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthProfilesSnapshot {
+    supported: bool,
+    activation_available: bool,
+    active_profile_id: Option<String>,
+    active_revision: Option<String>,
+    profiles: Vec<auth_profiles::AuthProfile>,
+    deleted_retention_days: u8,
+    message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthProfileOperationResult {
+    changed: bool,
+    message: String,
 }
 
 enum WatchSignal {
@@ -84,6 +120,38 @@ struct ScanBudget {
     bytes: u64,
     events: usize,
     warning: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum RolloutSource {
+    ActiveSessions,
+    ArchivedSessions,
+}
+
+impl RolloutSource {
+    fn directory(self) -> &'static str {
+        match self {
+            Self::ActiveSessions => "sessions",
+            Self::ArchivedSessions => "archived_sessions",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RolloutCandidate {
+    path: PathBuf,
+    source: RolloutSource,
+    modified_at: SystemTime,
+}
+
+fn sort_rollout_candidates(candidates: &mut Vec<RolloutCandidate>) {
+    candidates.sort_by(|left, right| {
+        left.source
+            .cmp(&right.source)
+            .then_with(|| right.modified_at.cmp(&left.modified_at))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    candidates.dedup_by(|left, right| left.path == right.path);
 }
 
 impl ScanBudget {
@@ -573,6 +641,576 @@ async fn install_pending_update(
     app.restart()
 }
 
+#[tauri::command]
+async fn get_codex_account(state: State<'_, AppState>) -> Result<account::AccountSnapshot, String> {
+    let _credential_guard = state
+        .credential_mutation_gate
+        .try_lock()
+        .map_err(|_| "认证档案正在修改，请稍后刷新账户状态。".to_string())?;
+    let _account_guard = state
+        .account_gate
+        .try_lock()
+        .map_err(|_| "Codex 账户状态正在刷新，请稍后重试。".to_string())?;
+    let login_in_progress = state.login.lock().map_err(lock_err)?.in_progress();
+    let executable = trusted_auth_executable(&state).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        account::read_account(executable.as_deref(), login_in_progress)
+    })
+    .await
+    .map_err(|_| "Codex 账户状态读取任务异常结束。".to_string())
+}
+
+#[tauri::command]
+async fn start_codex_login(
+    state: State<'_, AppState>,
+) -> Result<account::LoginStartResult, String> {
+    let _credential_guard = state
+        .credential_mutation_gate
+        .try_lock()
+        .map_err(|_| "认证档案正在修改，暂时不能启动登录。".to_string())?;
+    let _account_guard = state
+        .account_gate
+        .try_lock()
+        .map_err(|_| "Codex 账户状态正在刷新，请稍后重试。".to_string())?;
+    let executable = trusted_auth_executable(&state).await?;
+    let mut runtime = state.login.lock().map_err(lock_err)?;
+    account::start_login(&mut runtime, executable.as_deref(), || {
+        auth_switch::acquire_process_lock(&state.data_dir)
+    })
+}
+
+async fn trusted_auth_executable(state: &State<'_, AppState>) -> Result<Option<PathBuf>, String> {
+    let _stage_guard = state.auth_stage_gate.lock().await;
+    let cached_path = {
+        let candidate = state.auth_executable.lock().map_err(lock_err)?;
+        candidate
+            .as_ref()
+            .map(|candidate| candidate.path().to_path_buf())
+    };
+    if let Some(path) = cached_path {
+        let path_to_verify = path.clone();
+        let trusted = tauri::async_runtime::spawn_blocking(move || {
+            platform::trusted_codex_auth_path(&path_to_verify)
+        })
+        .await
+        .map_err(|_| "Codex OAuth 可执行文件复验任务异常结束。".to_string())?;
+        if trusted {
+            return Ok(Some(path));
+        }
+        *state.auth_executable.lock().map_err(lock_err)? = None;
+    }
+
+    let candidate = tauri::async_runtime::spawn_blocking(platform::trusted_codex_auth_candidate)
+        .await
+        .map_err(|_| "Codex OAuth 可执行文件验证任务异常结束。".to_string())?;
+    let Some(candidate) = candidate else {
+        return Ok(None);
+    };
+    let path = candidate.path().to_path_buf();
+    *state.auth_executable.lock().map_err(lock_err)? = Some(candidate);
+    Ok(Some(path))
+}
+
+struct AuthProfileListWork {
+    list: auth_profiles::AuthProfileList,
+    active_stamp: Option<safe_fs::FileStamp>,
+    activation_available: bool,
+    message: String,
+}
+
+fn auth_profiles_supported() -> bool {
+    cfg!(target_os = "macos")
+}
+
+fn require_auth_profiles_supported() -> Result<(), String> {
+    if auth_profiles_supported() {
+        Ok(())
+    } else {
+        Err("认证档案当前仅支持 macOS Keychain。".into())
+    }
+}
+
+#[tauri::command]
+async fn list_auth_profiles(state: State<'_, AppState>) -> Result<AuthProfilesSnapshot, String> {
+    if !auth_profiles_supported() {
+        return Ok(AuthProfilesSnapshot {
+            supported: false,
+            activation_available: false,
+            active_profile_id: None,
+            active_revision: None,
+            profiles: Vec::new(),
+            deleted_retention_days: auth_profiles::SOFT_DELETE_RETENTION_DAYS,
+            message: "认证档案当前仅支持 macOS Keychain。".into(),
+        });
+    }
+    let _credential_guard = state
+        .credential_mutation_gate
+        .try_lock()
+        .map_err(|_| "认证档案正在修改，请稍后刷新。".to_string())?;
+    let _account_guard = state
+        .account_gate
+        .try_lock()
+        .map_err(|_| "Codex 账户状态正在刷新，请稍后重试。".to_string())?;
+    let executable = trusted_auth_executable(&state).await?;
+    let store = std::sync::Arc::clone(&state.auth_profiles);
+    let data_dir = state.data_dir.clone();
+    let work = tauri::async_runtime::spawn_blocking(move || {
+        let _process_lock = auth_switch::acquire_process_lock(&data_dir)?;
+        let _ = store
+            .purge_expired(Utc::now())
+            .map_err(|error| error.to_string())?;
+        let mut list = store.list(true).map_err(|error| error.to_string())?;
+        let Ok(home) = auth_switch::codex_auth_home() else {
+            return Ok::<_, String>(AuthProfileListWork {
+                list,
+                active_stamp: None,
+                activation_available: false,
+                message: "Codex file 模式认证目录不可用；可管理档案，但不能切换当前账户。".into(),
+            });
+        };
+        let Some(executable) = executable.as_deref() else {
+            return Ok(AuthProfileListWork {
+                list,
+                active_stamp: None,
+                activation_available: false,
+                message: "未找到经签名验证的官方 Codex，认证档案切换已停用。".into(),
+            });
+        };
+        let Ok((active, identity)) = read_verified_active(executable, &home) else {
+            return Ok(AuthProfileListWork {
+                list,
+                active_stamp: None,
+                activation_available: false,
+                message: "官方 Codex 暂时无法复核当前 file 模式账户；切换和删除已安全停用。".into(),
+            });
+        };
+        list = store
+            .reconcile_active_identity(Some(&identity))
+            .map_err(|error| error.to_string())?;
+        Ok(AuthProfileListWork {
+            list,
+            active_stamp: Some(active.stamp),
+            activation_available: true,
+            message:
+                "档案秘密保存在应用专用 macOS Keychain；切换会原子替换共享的 file 模式 auth.json。"
+                    .into(),
+        })
+    })
+    .await
+    .map_err(|_| "认证档案读取任务异常结束。".to_string())??;
+    auth_profiles_snapshot(&state, work)
+}
+
+#[tauri::command]
+async fn import_auth_profile(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    label: String,
+) -> Result<AuthProfileOperationResult, String> {
+    require_auth_profiles_supported()?;
+    let Some(path) = pick_auth_file(&app).await? else {
+        return Ok(AuthProfileOperationResult {
+            changed: false,
+            message: "已取消导入。".into(),
+        });
+    };
+    let _credential_guard = state
+        .credential_mutation_gate
+        .try_lock()
+        .map_err(|_| "认证档案正在修改，请稍后重试。".to_string())?;
+    let _account_guard = state
+        .account_gate
+        .try_lock()
+        .map_err(|_| "Codex 账户状态正在刷新，请稍后重试。".to_string())?;
+    if state.login.lock().map_err(lock_err)?.in_progress() {
+        return Err("官方登录进行中，暂时不能导入认证档案。".into());
+    }
+    let executable = trusted_auth_executable(&state)
+        .await?
+        .ok_or_else(|| "未找到经签名验证的官方 Codex，不能验证认证文件。".to_string())?;
+    let store = std::sync::Arc::clone(&state.auth_profiles);
+    let data_dir = state.data_dir.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let _process_lock = auth_switch::acquire_process_lock(&data_dir)?;
+        let source = auth_switch::read_native_import(&path)?;
+        auth_profiles::validate_structure(&source).map_err(|error| error.to_string())?;
+        let validated = account::validate_auth_material(&executable, &source)?;
+        store
+            .import_validated(
+                &validated.bytes,
+                Some(&label),
+                &validated.identity_fingerprint,
+            )
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| "认证档案导入任务异常结束。".to_string())??;
+    let message = match outcome.action.as_str() {
+        "created" => "认证档案已安全导入 Keychain。",
+        "restored" => "同一账户的认证档案已恢复并更新。",
+        _ => "同一账户的认证档案已更新。",
+    };
+    Ok(AuthProfileOperationResult {
+        changed: true,
+        message: message.into(),
+    })
+}
+
+#[tauri::command]
+async fn activate_auth_profile(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    profile_id: String,
+    active_revision: String,
+) -> Result<AuthProfileOperationResult, String> {
+    require_auth_profiles_supported()?;
+    if !confirm_native(
+        &app,
+        "切换 Codex 当前账户",
+        "此操作会更新 Codex CLI 与 IDE 扩展共享的 file 模式认证缓存。请先结束正在运行的 Codex 任务。",
+        "确认切换",
+    )
+    .await?
+    {
+        return Ok(AuthProfileOperationResult {
+            changed: false,
+            message: "已取消账户切换。".into(),
+        });
+    }
+    let _credential_guard = state
+        .credential_mutation_gate
+        .try_lock()
+        .map_err(|_| "认证档案正在修改，请稍后重试。".to_string())?;
+    let _account_guard = state.account_gate.lock().await;
+    if state.login.lock().map_err(lock_err)?.in_progress() {
+        return Err("官方登录进行中，暂时不能切换认证档案。".into());
+    }
+    let expected = resolve_auth_profile_revision(&state, &active_revision)?;
+    let executable = trusted_auth_executable(&state)
+        .await?
+        .ok_or_else(|| "未找到经签名验证的官方 Codex，不能切换认证档案。".to_string())?;
+    let store = std::sync::Arc::clone(&state.auth_profiles);
+    let data_dir = state.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        activate_auth_profile_inner(&store, &data_dir, &executable, &profile_id, &expected)
+    })
+    .await
+    .map_err(|_| "认证档案切换任务异常结束。".to_string())??;
+    state
+        .auth_profile_revisions
+        .lock()
+        .map_err(lock_err)?
+        .clear();
+    Ok(AuthProfileOperationResult {
+        changed: true,
+        message: "已切换 Codex 当前认证档案；新启动的 CLI/IDE 会话将使用该账户。".into(),
+    })
+}
+
+#[tauri::command]
+async fn delete_auth_profile(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<AuthProfileOperationResult, String> {
+    require_auth_profiles_supported()?;
+    if !confirm_native(
+        &app,
+        "删除认证档案",
+        "档案将移入应用专用 Keychain 回收站并保留 30 天；当前生效或唯一可用档案不能删除。",
+        "移入回收站",
+    )
+    .await?
+    {
+        return Ok(AuthProfileOperationResult {
+            changed: false,
+            message: "已取消删除。".into(),
+        });
+    }
+    let _credential_guard = state
+        .credential_mutation_gate
+        .try_lock()
+        .map_err(|_| "认证档案正在修改，请稍后重试。".to_string())?;
+    let _account_guard = state.account_gate.lock().await;
+    if state.login.lock().map_err(lock_err)?.in_progress() {
+        return Err("官方登录进行中，暂时不能删除认证档案。".into());
+    }
+    let executable = trusted_auth_executable(&state)
+        .await?
+        .ok_or_else(|| "未找到经签名验证的官方 Codex，不能安全删除认证档案。".to_string())?;
+    let store = std::sync::Arc::clone(&state.auth_profiles);
+    let data_dir = state.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _process_lock = auth_switch::acquire_process_lock(&data_dir)?;
+        let home = auth_switch::codex_auth_home()?;
+        let (current, live_identity) = read_verified_active(&executable, &home)?;
+        store
+            .reconcile_active_identity(Some(&live_identity))
+            .map_err(|error| error.to_string())?;
+        let (latest, latest_live_identity) = read_verified_active(&executable, &home)?;
+        if latest.stamp != current.stamp {
+            store
+                .reconcile_active_identity(Some(&latest_live_identity))
+                .map_err(|error| error.to_string())?;
+        }
+        store
+            .soft_delete(&profile_id)
+            .map_err(|error| error.to_string())?;
+        Ok::<_, String>(())
+    })
+    .await
+    .map_err(|_| "认证档案删除任务异常结束。".to_string())??;
+    Ok(AuthProfileOperationResult {
+        changed: true,
+        message: "认证档案已移入回收站，可在 30 天内恢复。".into(),
+    })
+}
+
+#[tauri::command]
+async fn restore_auth_profile(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<AuthProfileOperationResult, String> {
+    require_auth_profiles_supported()?;
+    let _credential_guard = state
+        .credential_mutation_gate
+        .try_lock()
+        .map_err(|_| "认证档案正在修改，请稍后重试。".to_string())?;
+    if state.login.lock().map_err(lock_err)?.in_progress() {
+        return Err("官方登录进行中，暂时不能恢复认证档案。".into());
+    }
+    let store = std::sync::Arc::clone(&state.auth_profiles);
+    let data_dir = state.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _process_lock = auth_switch::acquire_process_lock(&data_dir)?;
+        store
+            .restore(&profile_id)
+            .map_err(|error| error.to_string())?;
+        Ok::<_, String>(())
+    })
+    .await
+    .map_err(|_| "认证档案恢复任务异常结束。".to_string())??;
+    Ok(AuthProfileOperationResult {
+        changed: true,
+        message: "认证档案已从回收站恢复。".into(),
+    })
+}
+
+fn activate_auth_profile_inner(
+    store: &auth_profiles::AuthProfileStore,
+    data_dir: &Path,
+    executable: &Path,
+    profile_id: &str,
+    expected: &safe_fs::FileStamp,
+) -> Result<(), String> {
+    let _process_lock = auth_switch::acquire_process_lock(data_dir)?;
+    let home = auth_switch::codex_auth_home()?;
+    let (current, live_identity) = read_verified_active(executable, &home)?;
+    if current.stamp.sha256 != expected.sha256
+        || current.stamp.mtime_ms != expected.mtime_ms
+        || current.stamp.identity != expected.identity
+    {
+        return Err("活动认证文件已被 Codex 或其他进程修改；请刷新后重试。".into());
+    }
+    let old_stamp = current.stamp.clone();
+    let old_bytes = current.bytes;
+    let current_profiles = store
+        .reconcile_active_identity(Some(&live_identity))
+        .map_err(|error| error.to_string())?;
+    if current_profiles.active_profile_id.as_deref() == Some(profile_id) {
+        return Ok(());
+    }
+    if let Some(current_id) = current_profiles.active_profile_id.as_deref() {
+        store
+            .update_secret(current_id, &old_bytes, &live_identity)
+            .map_err(|error| error.to_string())?;
+    }
+
+    let target = store
+        .read_target_secret(profile_id)
+        .map_err(|error| error.to_string())?;
+    auth_profiles::validate_structure(&target).map_err(|error| error.to_string())?;
+    let validated_target = account::validate_auth_material(executable, &target)?;
+    if !store
+        .profile_matches_verified_identity(profile_id, &validated_target.identity_fingerprint)
+        .map_err(|error| error.to_string())?
+    {
+        return Err("目标认证档案未通过账户身份复核。".into());
+    }
+    store
+        .update_secret(
+            profile_id,
+            &validated_target.bytes,
+            &validated_target.identity_fingerprint,
+        )
+        .map_err(|error| error.to_string())?;
+    let written = auth_switch::replace_active(&home, &old_stamp, &validated_target.bytes)?;
+    let post = read_verified_active(executable, &home);
+    if post.as_ref().map(|(_, identity)| identity.as_str())
+        != Ok(validated_target.identity_fingerprint.as_str())
+    {
+        rollback_auth_switch(
+            executable,
+            &home,
+            &written,
+            &validated_target.identity_fingerprint,
+            &old_bytes,
+        )?;
+        return Err("切换后的官方 Codex 账户验证失败，已恢复原认证文件。".into());
+    }
+    let (post_auth, post_identity) = post.expect("已在上方验证切换后账户");
+    if let Err(error) = store.update_secret(profile_id, &post_auth.bytes, &post_identity) {
+        rollback_auth_switch(
+            executable,
+            &home,
+            &written,
+            &validated_target.identity_fingerprint,
+            &old_bytes,
+        )?;
+        return Err(error.to_string());
+    }
+    if let Err(error) = store.set_active_after_live_switch(profile_id) {
+        rollback_auth_switch(
+            executable,
+            &home,
+            &written,
+            &validated_target.identity_fingerprint,
+            &old_bytes,
+        )?;
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
+fn rollback_auth_switch(
+    executable: &Path,
+    home: &Path,
+    written: &safe_fs::FileStamp,
+    target_identity: &str,
+    old_bytes: &[u8],
+) -> Result<(), String> {
+    let (current, current_identity) = read_verified_active(executable, home)?;
+    let rollback_stamp = if current.stamp.sha256 == written.sha256
+        && current.stamp.identity == written.identity
+    {
+        current.stamp
+    } else {
+        if current_identity != target_identity {
+            return Err("活动认证文件已被外部进程改为另一账户；为避免覆盖，未自动回滚。".into());
+        }
+        current.stamp
+    };
+    auth_switch::replace_active(home, &rollback_stamp, old_bytes)?;
+    Ok(())
+}
+
+fn read_verified_active(
+    executable: &Path,
+    home: &Path,
+) -> Result<(safe_fs::SecretReadResult, String), String> {
+    for _ in 0..3 {
+        let before = auth_switch::read_active(home)?;
+        let identity = account::read_active_identity(executable, &before.bytes)?;
+        let after = auth_switch::read_active(home)?;
+        if before.stamp == after.stamp {
+            return Ok((after, identity));
+        }
+    }
+    Err("Codex 活动认证文件在复核期间持续变化；请结束其他 Codex 任务后重试。".into())
+}
+
+fn auth_profiles_snapshot(
+    state: &State<'_, AppState>,
+    work: AuthProfileListWork,
+) -> Result<AuthProfilesSnapshot, String> {
+    let active_revision = match work.active_stamp {
+        Some(stamp) => Some(remember_auth_profile_revision(state, stamp)?),
+        None => None,
+    };
+    Ok(AuthProfilesSnapshot {
+        supported: cfg!(target_os = "macos"),
+        activation_available: work.activation_available,
+        active_profile_id: work.list.active_profile_id,
+        active_revision,
+        profiles: work.list.profiles,
+        deleted_retention_days: auth_profiles::SOFT_DELETE_RETENTION_DAYS,
+        message: work.message,
+    })
+}
+
+fn remember_auth_profile_revision(
+    state: &State<'_, AppState>,
+    stamp: safe_fs::FileStamp,
+) -> Result<String, String> {
+    let token = Uuid::new_v4().to_string();
+    let mut revisions = state.auth_profile_revisions.lock().map_err(lock_err)?;
+    revisions.push_back(AuthProfileRevision {
+        token: token.clone(),
+        stamp,
+    });
+    while revisions.len() > 16 {
+        revisions.pop_front();
+    }
+    Ok(token)
+}
+
+fn resolve_auth_profile_revision(
+    state: &State<'_, AppState>,
+    token: &str,
+) -> Result<safe_fs::FileStamp, String> {
+    Uuid::parse_str(token).map_err(|_| "认证文件版本 token 无效。".to_string())?;
+    state
+        .auth_profile_revisions
+        .lock()
+        .map_err(lock_err)?
+        .iter()
+        .find(|revision| revision.token == token)
+        .map(|revision| revision.stamp.clone())
+        .ok_or_else(|| "认证文件版本已过期；请刷新档案列表。".to_string())
+}
+
+async fn pick_auth_file(app: &AppHandle) -> Result<Option<PathBuf>, String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .add_filter("Codex 认证文件", &["json"])
+        .pick_file(move |selected| {
+            let _ = sender.send(selected);
+        });
+    let selected = receiver
+        .await
+        .map_err(|_| "认证文件选择器异常结束。".to_string())?;
+    selected
+        .map(|path| {
+            path.into_path()
+                .map_err(|_| "仅支持导入本机认证文件。".to_string())
+        })
+        .transpose()
+}
+
+async fn confirm_native(
+    app: &AppHandle,
+    title: &str,
+    message: &str,
+    confirm_label: &str,
+) -> Result<bool, String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            confirm_label.into(),
+            "取消".into(),
+        ))
+        .show(move |accepted| {
+            let _ = sender.send(accepted);
+        });
+    receiver
+        .await
+        .map_err(|_| "系统确认对话框异常结束。".to_string())
+}
+
 fn sanitize_update_notes(notes: Option<String>) -> Option<String> {
     let notes = notes?.trim().to_string();
     if notes.is_empty() {
@@ -927,8 +1565,11 @@ fn scan_all(state: &AppState) -> Result<(), String> {
     let mut warning = None;
     let mut budget = ScanBudget::new();
     for home in homes {
-        for directory in ["sessions", "archived_sessions"] {
-            let root = Path::new(&home).join(directory);
+        for source in [
+            RolloutSource::ActiveSessions,
+            RolloutSource::ArchivedSessions,
+        ] {
+            let root = Path::new(&home).join(source.directory());
             if !fs::symlink_metadata(&root)
                 .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
             {
@@ -937,11 +1578,14 @@ fn scan_all(state: &AppState) -> Result<(), String> {
             let walker = walkdir::WalkDir::new(root)
                 .follow_links(false)
                 .max_depth(16)
+                .sort_by(|left, right| right.file_name().cmp(left.file_name()))
                 .into_iter()
                 .filter_entry(is_safe_walk_entry);
             for entry in walker {
                 visited = visited.saturating_add(1);
-                if visited > MAX_SCAN_ENTRIES || budget.started.elapsed() >= MAX_SCAN_DURATION {
+                if visited > MAX_SCAN_ENTRIES
+                    || budget.started.elapsed() >= MAX_SCAN_DISCOVERY_DURATION
+                {
                     warning = Some(format!(
                         "rollout 扫描已达遍历/时间预算（visited={visited}）；本轮结果为 partial，下次 reconciliation 会继续。"
                     ));
@@ -959,7 +1603,15 @@ fn scan_all(state: &AppState) -> Result<(), String> {
                 if entry.file_type().is_file()
                     && entry.path().extension().and_then(|value| value.to_str()) == Some("jsonl")
                 {
-                    files.push(entry.path().to_path_buf());
+                    files.push(RolloutCandidate {
+                        path: entry.path().to_path_buf(),
+                        source,
+                        modified_at: entry
+                            .metadata()
+                            .ok()
+                            .and_then(|metadata| metadata.modified().ok())
+                            .unwrap_or(SystemTime::UNIX_EPOCH),
+                    });
                 }
             }
             if warning.is_some() {
@@ -970,9 +1622,8 @@ fn scan_all(state: &AppState) -> Result<(), String> {
             break;
         }
     }
-    files.sort();
-    files.dedup();
-    for file in files {
+    sort_rollout_candidates(&mut files);
+    for candidate in files {
         if budget.exhausted() {
             warning.get_or_insert_with(|| {
                 format!(
@@ -982,8 +1633,8 @@ fn scan_all(state: &AppState) -> Result<(), String> {
             });
             break;
         }
-        if let Err(error) = scan_file_unlocked(state, &file, &mut budget) {
-            let path = file.to_string_lossy().to_string();
+        if let Err(error) = scan_file_unlocked(state, &candidate.path, &mut budget) {
+            let path = candidate.path.to_string_lossy().to_string();
             let message = safe_error_label(&error);
             state
                 .store
@@ -1307,9 +1958,11 @@ fn watcher_loop(app: AppHandle, receiver: mpsc::Receiver<WatchSignal>) {
             }
         }
         if let Some(state) = app.try_state::<AppState>() {
-            let _ = scan_all(&state);
-            if periodic {
-                let _ = discover_projects_inner(&state);
+            if scan_all(&state).is_ok() {
+                if periodic {
+                    let _ = discover_projects_inner(&state);
+                }
+                let _ = app.emit("local-data-refreshed", ());
             }
         } else {
             return;
@@ -2180,6 +2833,13 @@ fn main() {
                 project_warning: Mutex::new(None),
                 update_gate: tokio::sync::Mutex::new(()),
                 pending_update: Mutex::new(None),
+                account_gate: tokio::sync::Mutex::new(()),
+                credential_mutation_gate: tokio::sync::Mutex::new(()),
+                auth_stage_gate: tokio::sync::Mutex::new(()),
+                login: Mutex::new(account::LoginRuntime::default()),
+                auth_executable: Mutex::new(None),
+                auth_profiles: std::sync::Arc::new(auth_profiles::AuthProfileStore::load()),
+                auth_profile_revisions: Mutex::new(VecDeque::new()),
             };
             app.manage(state);
             let handle = app.handle().clone();
@@ -2199,6 +2859,7 @@ fn main() {
                 if let Some(state) = handle.try_state::<AppState>() {
                     if scan_all(&state).is_ok() {
                         let _ = discover_projects_inner(&state);
+                        let _ = handle.emit("local-data-refreshed", ());
                     }
                 }
             });
@@ -2225,6 +2886,13 @@ fn main() {
             probe_codex,
             check_for_update,
             install_pending_update,
+            get_codex_account,
+            start_codex_login,
+            list_auth_profiles,
+            import_auth_profile,
+            activate_auth_profile,
+            delete_auth_profile,
+            restore_auth_profile,
         ])
         .run(tauri::generate_context!())
         .expect("Codex Manager 运行失败");
@@ -2292,6 +2960,80 @@ mod tests {
         assert_eq!(safe_error_label("secret-token-123"), "采集源暂时不可用");
     }
 
+    fn rollout_candidate(path: &str, source: RolloutSource, seconds: u64) -> RolloutCandidate {
+        RolloutCandidate {
+            path: PathBuf::from(path),
+            source,
+            modified_at: SystemTime::UNIX_EPOCH + Duration::from_secs(seconds),
+        }
+    }
+
+    #[test]
+    fn rollout_candidates_prioritize_active_sessions_over_archives() {
+        let mut candidates = vec![
+            rollout_candidate(
+                "/codex/archived_sessions/rollout-archive.jsonl",
+                RolloutSource::ArchivedSessions,
+                999,
+            ),
+            rollout_candidate(
+                "/codex/sessions/2026/08/29/rollout-active.jsonl",
+                RolloutSource::ActiveSessions,
+                1,
+            ),
+        ];
+
+        sort_rollout_candidates(&mut candidates);
+
+        assert_eq!(candidates[0].source, RolloutSource::ActiveSessions);
+        assert_eq!(
+            candidates[0].path,
+            PathBuf::from("/codex/sessions/2026/08/29/rollout-active.jsonl")
+        );
+    }
+
+    #[test]
+    fn rollout_candidates_sort_newest_first_with_stable_path_tiebreaker() {
+        let mut candidates = vec![
+            rollout_candidate(
+                "/codex/sessions/rollout-z.jsonl",
+                RolloutSource::ActiveSessions,
+                10,
+            ),
+            rollout_candidate(
+                "/codex/sessions/rollout-old.jsonl",
+                RolloutSource::ActiveSessions,
+                1,
+            ),
+            rollout_candidate(
+                "/codex/sessions/rollout-new.jsonl",
+                RolloutSource::ActiveSessions,
+                20,
+            ),
+            rollout_candidate(
+                "/codex/sessions/rollout-a.jsonl",
+                RolloutSource::ActiveSessions,
+                10,
+            ),
+        ];
+
+        sort_rollout_candidates(&mut candidates);
+
+        let paths = candidates
+            .iter()
+            .map(|candidate| candidate.path.as_path())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec![
+                Path::new("/codex/sessions/rollout-new.jsonl"),
+                Path::new("/codex/sessions/rollout-a.jsonl"),
+                Path::new("/codex/sessions/rollout-z.jsonl"),
+                Path::new("/codex/sessions/rollout-old.jsonl"),
+            ]
+        );
+    }
+
     #[test]
     fn scanner_resumes_after_partial_line_without_double_counting() {
         let directory = tempfile::tempdir().unwrap();
@@ -2327,6 +3069,13 @@ mod tests {
             project_warning: Mutex::new(None),
             update_gate: tokio::sync::Mutex::new(()),
             pending_update: Mutex::new(None),
+            account_gate: tokio::sync::Mutex::new(()),
+            credential_mutation_gate: tokio::sync::Mutex::new(()),
+            auth_stage_gate: tokio::sync::Mutex::new(()),
+            login: Mutex::new(account::LoginRuntime::default()),
+            auth_executable: Mutex::new(None),
+            auth_profiles: std::sync::Arc::new(auth_profiles::AuthProfileStore::load()),
+            auth_profile_revisions: Mutex::new(VecDeque::new()),
         };
         let event = |ordinal: i64, kind: &str, payload: serde_json::Value| {
             serde_json::json!({
@@ -2458,6 +3207,13 @@ mod tests {
             project_warning: Mutex::new(None),
             update_gate: tokio::sync::Mutex::new(()),
             pending_update: Mutex::new(None),
+            account_gate: tokio::sync::Mutex::new(()),
+            credential_mutation_gate: tokio::sync::Mutex::new(()),
+            auth_stage_gate: tokio::sync::Mutex::new(()),
+            login: Mutex::new(account::LoginRuntime::default()),
+            auth_executable: Mutex::new(None),
+            auth_profiles: std::sync::Arc::new(auth_profiles::AuthProfileStore::load()),
+            auth_profile_revisions: Mutex::new(VecDeque::new()),
         };
 
         let created = create_agents_inner(

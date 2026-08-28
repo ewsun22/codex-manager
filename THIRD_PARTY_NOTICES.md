@@ -9,3 +9,9 @@ ship with every public beta. Do not hand-edit generated inventories.
 
 The project does not bundle credentials, user transcripts, Codex configuration, or
 local databases in release artifacts.
+
+EasyCLIProxyAPI was inspected only as a product-flow reference. Its GUI repository did
+not contain a machine-readable or root license at the inspected revision, so Codex
+Manager does not copy or adapt its source, styling, icons, or brand assets. The OAuth
+feature and explicit profile switching are clean-room implementations using the official
+Codex CLI and App Server; Codex Manager does not adopt EasyCLIProxyAPI's proxy rotation.

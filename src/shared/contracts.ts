@@ -207,6 +207,66 @@ export interface UpdateInstallResult {
   accepted: boolean;
 }
 
+export type CodexAccountState = "authenticated" | "signed-out" | "unavailable";
+
+export interface CodexRateLimitWindow {
+  usedPercent: number;
+  windowDurationMins: number | null;
+  resetsAt: string | null;
+}
+
+export interface CodexRateLimitBucket {
+  limitId: string;
+  limitName: string | null;
+  planType: string | null;
+  primary: CodexRateLimitWindow | null;
+  secondary: CodexRateLimitWindow | null;
+}
+
+export interface CodexAccountSnapshot {
+  state: CodexAccountState;
+  authenticated: boolean;
+  authMethod: string | null;
+  email: string | null;
+  planType: string | null;
+  requiresOpenaiAuth: boolean | null;
+  loginInProgress: boolean;
+  rateLimitsAvailable: boolean;
+  rateLimits: CodexRateLimitBucket[];
+  availableResetCredits: number | null;
+  checkedAt: string;
+  message: string;
+}
+
+export interface CodexLoginStartResult {
+  started: boolean;
+  loginInProgress: boolean;
+}
+
+export interface AuthProfile {
+  id: string;
+  label: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+export interface AuthProfilesSnapshot {
+  supported: boolean;
+  activationAvailable: boolean;
+  activeProfileId: string | null;
+  activeRevision: string | null;
+  profiles: AuthProfile[];
+  deletedRetentionDays: number;
+  message: string;
+}
+
+export interface AuthProfileOperationResult {
+  changed: boolean;
+  message: string;
+}
+
 export interface BootstrapPayload {
   summary: DashboardSummary;
   activity: ActivityPage;
@@ -238,4 +298,11 @@ export const COMMANDS = {
   probeCodex: "probe_codex",
   checkForUpdate: "check_for_update",
   installPendingUpdate: "install_pending_update",
+  getCodexAccount: "get_codex_account",
+  startCodexLogin: "start_codex_login",
+  listAuthProfiles: "list_auth_profiles",
+  importAuthProfile: "import_auth_profile",
+  activateAuthProfile: "activate_auth_profile",
+  deleteAuthProfile: "delete_auth_profile",
+  restoreAuthProfile: "restore_auth_profile",
 } as const;

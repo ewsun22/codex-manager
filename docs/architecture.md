@@ -18,6 +18,11 @@ Codex Desktop / CLI
                                         React desktop UI
 
 User click ─ GitHub latest.json ─ Rust updater + embedded public key ─ native confirm ─ signed app replacement
+
+OAuth UI ─ explicit IPC ─ bounded one-shot App Server account adapter ─ account/read + account/rateLimits/read
+User click ─ explicit IPC ─ exact `codex login` subprocess ─ system browser ─ official Codex credential store
+Native picker ─ bounded JSON ─ isolated official validation ─ app-specific macOS Keychain profiles
+User confirm ─ config/read=file ─ revision/CAS/process lock ─ atomic `auth.json` replace ─ official post-switch verification
 ```
 
 ## 采集层
@@ -28,8 +33,10 @@ User click ─ GitHub latest.json ─ Rust updater + embedded public key ─ nat
 - canonical path 必须仍位于允许目录；拒绝符号链接和非普通文件。
 - 以设备/文件身份、UTF-8 byte offset 和 parser resume state 增量读取。
 - 单行上限 4 MiB；EOF 未完成行不提交，但仍计入读取预算；超长未结束行不从中间 checkpoint，避免把攻击者选定的后缀当成新事件。
+- 候选枚举按目录名新到旧并最多占用 5 秒，随后按活动 `sessions` 优先、同来源 mtime 新到旧、路径稳定兜底排序；整轮仍受 20 秒、256 MiB、200,000 events 等安全预算约束，但枚举或归档积压不能先耗尽整轮预算而使正在写入的会话长期饥饿。
 - 文件截断或身份变化时，仅重建该来源的可重建投影。
 - watcher 只使用一个合并信号槽，满时丢弃重复唤醒，并每 60 秒 reconciliation。每轮同时限制遍历数、字节、事件和时间，达到预算时显示 `partial/degraded`。
+- 成功扫描后后端只发送不含数据的本地刷新事件；前端以 2 秒窗口合并事件，并重载当前活动筛选。用户点击“刷新本地数据”时会先显式执行同一有预算的 reconciliation。
 
 JSONL 是兼容适配源，不被描述为稳定公开 API。新的事件源必须实现 adapter，UI 不直接理解私有 JSON 结构。
 
@@ -44,6 +51,14 @@ JSONL 是兼容适配源，不被描述为稳定公开 API。新的事件源必�
 ### App Server capability
 
 应用从 Desktop bundle、显式环境变量或 PATH 寻找受信任的 Codex 可执行文件，使用有超时、无 stdin 的子进程在应用私有临时目录生成 JSON Schema，并对有数量、单文件与总大小上限的产物做 SHA-256 指纹。它只证明本机 CLI 支持对应命令，不代表已经连接或订阅 Codex Desktop 内部 app-server。
+
+OAuth 不复用宽松的 capability 候选信任边界。macOS beta 只读取固定 ChatGPT bundle 的 Codex 源，将其复制到随机 `0700` 临时目录后再用系统 `codesign` 同时要求 identifier `codex` 与 OpenAI Developer ID Team ID `2DC432GLL2`；执行的是复制后验签的稳定副本，并在应用生命周期内复用。每次启动前复验路径；App Server 使用 `POSIX_SPAWN_START_SUSPENDED` 在用户代码执行前暂停，再以 `+PID` 动态验证实际进程，验签通过后才 `SIGCONT`。待导入 token 只会在进程恢复后以 zeroizing 内存请求通过 stdio 交给该 PID，因此 PATH shim、脚本、环境覆盖和验签后路径替换不能读取待导入 token。非 macOS 当前返回 `unavailable`。后端为该二进制启动独立、短生命周期的 App Server stdio 进程，依次完成 `initialize`、按需的 `account/login/start` `chatgptAuthTokens`、`account/read`、`config/read` 与 `account/rateLimits/read`；仅导入验证在 `initialize` 中显式选择 `capabilities.experimentalApi=true`，协议不兼容时 fail closed。App Server JSON-RPC 阶段预算为 15 秒，限制 128 条消息、每行 256 KiB 和最多 16 个额度桶，只把有界白名单 DTO 返回 WebView。RAII process guard 覆盖早退路径，stdout reader 的回收等待另有 1 秒上限。原始 JSON、token、授权/回调 URL 与错误响应正文不会返回或持久化。用户点击登录时只启动精确的 `codex login` 子命令；独立于页面轮询的后端 supervisor 会在 10 分钟内等待退出或强制 kill/wait，不自行实现 PKCE、回调监听、授权码交换或凭据存储。
+
+OAuth 与认证 App Server 不继承任意父进程环境，只保留 HOME、用户、临时目录、语言环境、固定系统 PATH 与后端受控的 `CODEX_HOME`。官方支持的 refresh/revoke endpoint override、login client override、proxy、CA、API key 和 access token 变量全部被剔除，避免把导入验证流量或凭据导向调用者指定的端点。
+
+认证档案是独立于 SQLite 的平台秘密存储。macOS 后端通过原生选择器读取一个普通 JSON 文件，检查当前 uid、权限不宽于 `0600`、单硬链接、128 KiB、读取前后 fstat、重复键、最大深度/字段数和 ChatGPT OAuth 结构；动态验签并恢复官方 App Server 后，只以 `chatgptAuthTokens` 外部认证提交 access token 与工作区 ID，执行账户/额度探测并确认身份。refresh token 不参与在线探测，也不会生成临时 `auth.json`。验证后的 bytes 使用 zeroizing buffer 写入应用专用 Keychain；Keychain 内部索引持有 email 与工作区 account id 组合的不可逆指纹，用于去重与切换复核，但 WebView DTO 只有随机 id、本地 label、状态和时间。软删除档案在 Keychain 保留 30 天，活动档案和最后一个可用档案不可删除。
+
+账户切换不实现代理或请求调度。Rust 从后端解析 Codex home，只接受当前用户、单硬链接且权限不宽于 `0600` 的 file 模式 `auth.json`；官方 App Server 的 `config/read` 还必须证明最终生效的 `cli_auth_credentials_store` 明确为 `file`，缺失、keyring 或 auto 都 fail closed。写操作经同进程互斥、Manager 实例间 `flock`、用户原生确认和短期 opaque revision；后端复核 SHA-256、mtime、大小、权限与文件身份后，在同目录以强制 `0600` 的临时文件原子替换，并用官方 App Server 验证活动账户。账户复核如触发官方凭据刷新，后端最多重试三次，只有前后文件戳稳定时才使用刷新后的 bytes 更新 Keychain 或回滚。任何外部改写或身份不符均拒绝；后验证或 Keychain 状态提交失败时只在仍能证明文件属于本次切换的条件下回滚。官方 CLI/IDE 不参与该 `flock` 协议，因此删除在提交前额外复核，切换/删除确认也要求先结束正在运行的 Codex 任务。
 
 ## 规范化与指标口径
 
@@ -86,7 +101,7 @@ SQLite 位于平台应用数据目录，启用 WAL、foreign keys、busy timeout
 
 ## 前端与 IPC
 
-React 只使用 20 个显式 Tauri commands；其中 OTel 凭据只在用户点击显示配置时返回前端。Tauri capability 清单不授予通用 shell、任意文件系统、HTTP、process、dialog 或 updater 插件 API，WebView 使用严格 CSP。浏览器开发模式使用人工构造的 demo adapter，不读取本机 Codex 数据。
+React 只使用 27 个显式 Tauri commands；其中 OTel 凭据只在用户点击显示配置时返回前端。OAuth/认证档案只获得账户摘要、登录状态、档案白名单 DTO 与变更结果；原生导入和确认由 Rust dialog 完成，WebView 没有路径、JSON 或 token。Tauri capability 清单不授予通用 shell、任意文件系统、HTTP、process、dialog 或 updater 插件 API，WebView 使用严格 CSP。浏览器开发模式使用人工构造的 demo adapter，不读取本机 Codex 数据。
 
 ## 在线更新信任边界
 
@@ -98,12 +113,13 @@ React 只使用 20 个显式 Tauri commands；其中 OTel 凭据只在用户点�
 
 跨平台：event normalization、SQLite schema、价格、项目模型、AGENTS precedence、DTO 与 React UI。
 
-平台适配：可执行文件发现、稳定文件身份、文件 no-follow/原子替换、应用数据目录、打包签名。macOS 使用 `openat`/`O_NOFOLLOW` 路径；Windows 当前只有可编译的 portable fallback，必须在 Windows beta 前补齐等价的 reparse-point/原子替换安全验证和安装包测试。
+平台适配：可执行文件发现、稳定文件身份、文件 no-follow/原子替换、应用数据目录、密钥库、原生文件选择/确认和打包签名。macOS 使用 `openat`/`O_NOFOLLOW`、Keychain 与 `flock`；Windows 当前只有部分可编译的 portable fallback，认证档案直接显示不可用。Windows beta 前必须补齐等价 credential vault、reparse-point/原子替换安全验证和安装包测试。
 
 ## 官方依据
 
 - [Codex Advanced Configuration](https://learn.chatgpt.com/docs/config-file/config-advanced)
 - [Codex Configuration Reference](https://learn.chatgpt.com/docs/config-file/config-reference)
-- [Codex App Server](https://learn.chatgpt.com/docs/app-server)
+- [Codex Authentication](https://developers.openai.com/codex/auth)
+- [Codex App Server](https://developers.openai.com/codex/app-server)
 - [Custom instructions with AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
 - [OpenAI API Pricing](https://learn.chatgpt.com/docs/pricing)

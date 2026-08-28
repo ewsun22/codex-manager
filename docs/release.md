@@ -12,6 +12,13 @@
 
 `ci.yml` 默认只做 unsigned artifact，可用于人工创建上述 community prerelease。`release.yml` 只服务签名稳定通道：只能手动运行，并且只允许 `main` 当前远端 SHA；它使用受保护的 GitHub `release` Environment，凭据不齐时必须失败。没有证书、Team ID 和 notarization 凭据时，禁止模拟签名成功、绕过门禁或向 community prerelease 添加 updater manifest。
 
+## 2026-08-29 v0.2.0 发布候选状态
+
+- 源码版本已同步到 `0.2.0`。这个 minor 版本同时包含用户主动触发的 OAuth 账户/认证档案管理，以及活动 rollout 扫描被归档积压阻塞、界面不随后台采集重载的修复。
+- 本机仍没有 Developer ID Application identity。GitHub `release` Environment 当前只有 Tauri updater 私钥及密码，缺少工作流要求的 7 项 Apple 证书、identity、Team ID 和 notarization 凭据；因此 signed stable 通道必须保持 No-Go，不触发注定失败的签名 workflow。
+- 本版本只能从最终 `main` exact SHA 对应的成功 CI artifact 创建 `Unsigned Community Build` prerelease。发布前后必须执行本手册的 DMG、SBOM、许可证、SHA、source provenance 和回下载验收，并确认 Release 不含 updater 资产。
+- `v0.1.0` 是独立的历史 community tag，不能覆盖。以后补齐 Developer ID 后必须使用高于 `0.2.0` 的新 SemVer 进入签名通道。
+
 ## Unsigned Community Build 发布
 
 1. 只使用 `main` 当前 commit 的成功 `CI` run 所上传的 `codex-manager-macos-unsigned` artifact，不使用本机历史产物。
@@ -22,7 +29,7 @@
 
 该通道不是“正式 macOS beta artifact”，不能写成 signed、notarized、stapled、stable update 或普通用户无警告安装。后续签名版本必须提高 SemVer，不得用签名资产覆盖同一个 community tag。
 
-## 2026-08-27 当前实际状态
+## 2026-08-27 v0.1.0 历史状态
 
 - 已完成 `unsigned local build`：`artifacts/release/Codex Manager.app` 和 `artifacts/release/Codex Manager_0.1.0_aarch64.dmg`。该目录与 Vite 的 `dist/` 分离，普通前端构建不得删除发布物。
 - DMG 为 arm64、9.4 MiB，`hdiutil verify` 通过，SHA-256 为 `a66968a63b3d246f8a1a3ee6e61800e01c2adf94f8dd0e7bdd4be145117fff74`；以 `artifacts/release/SHA256SUMS-unsigned` 为准。

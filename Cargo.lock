@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "codex-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "serde",
@@ -476,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "codex-manager-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -495,6 +495,7 @@ dependencies = [
  "rcgen",
  "rustls",
  "rustls-pemfile",
+ "security-framework",
  "serde",
  "serde_json",
  "sha2",
@@ -512,11 +513,12 @@ dependencies = [
  "uuid",
  "wait-timeout",
  "walkdir",
+ "zeroize",
 ]
 
 [[package]]
 name = "codex-storage"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
