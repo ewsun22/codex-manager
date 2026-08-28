@@ -457,8 +457,8 @@ jobs:
           verify_app "$updater_app"
           mount_point="$signing_root/dmg-mount"
           mkdir -p "$mount_point"
-          device="$(hdiutil attach "$dmg" -readonly -nobrowse -noautoopen -mountpoint "$mount_point" | awk 'NR == 1 {print $1}')"
-          trap 'hdiutil detach "$device" >/dev/null 2>&1 || true' EXIT
+          hdiutil attach "$dmg" -readonly -nobrowse -noautoopen -mountpoint "$mount_point" >/dev/null
+          trap 'hdiutil detach "$mount_point" >/dev/null 2>&1 || true' EXIT
           dmg_app="$(find "$mount_point" -maxdepth 1 -type d -name '*.app' -print -quit)"
           verify_app "$dmg_app"
           local_cdhash="$(codesign --display --verbose=4 "$app_bundle" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
@@ -466,7 +466,7 @@ jobs:
           dmg_cdhash="$(codesign --display --verbose=4 "$dmg_app" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
           test "$local_cdhash" = "$updater_cdhash"
           test "$local_cdhash" = "$dmg_cdhash"
-          hdiutil detach "$device"
+          hdiutil detach "$mount_point"
           trap - EXIT
 
       - name: Seal SBOM, licenses, signing evidence, and transfer payload
@@ -738,14 +738,14 @@ jobs:
           spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
           mount_point="$remote/dmg-mount"
           mkdir -p "$mount_point"
-          device="$(hdiutil attach "$dmg" -readonly -nobrowse -noautoopen -mountpoint "$mount_point" | awk 'NR == 1 {print $1}')"
-          trap 'hdiutil detach "$device" >/dev/null 2>&1 || true' EXIT
+          hdiutil attach "$dmg" -readonly -nobrowse -noautoopen -mountpoint "$mount_point" >/dev/null
+          trap 'hdiutil detach "$mount_point" >/dev/null 2>&1 || true' EXIT
           dmg_app="$(find "$mount_point" -maxdepth 1 -type d -name '*.app' -print -quit)"
           verify_app "$dmg_app"
           updater_cdhash="$(codesign --display --verbose=4 "$updater_app" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
           dmg_cdhash="$(codesign --display --verbose=4 "$dmg_app" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
           test "$updater_cdhash" = "$dmg_cdhash"
-          hdiutil detach "$device"
+          hdiutil detach "$mount_point"
           trap - EXIT
           for remote_asset in "$remote"/*; do
             [ -f "$remote_asset" ] || continue

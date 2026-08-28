@@ -60,6 +60,10 @@ test("发布工作流隔离构建、签名与草稿权限，并远端复验完�
   assert.match(workflow, /sha512-R8xGtMpwyetawSqm9kYOuMmEqkhUbvcUy8n0aNXIxollKBLESUu5f4Fx\+64hgASYm1H\+jSWq6jCW6zqTnH6hqQ==/);
   assert.match(workflow, /--example verify_updater_signature/);
   assert.match(workflow, /codesign --deep --force --options runtime --timestamp/);
+  assert.equal(workflow.match(/\^CodeDirectory \.\* flags=\.\*runtime/g)?.length, 3);
+  assert.equal(workflow.match(/hdiutil attach "\$dmg"[^\n]+-mountpoint "\$mount_point" >\/dev\/null/g)?.length, 2);
+  assert.equal(workflow.match(/hdiutil detach "\$mount_point"/g)?.length, 4);
+  assert.doesNotMatch(workflow, /device="\$\(hdiutil attach/);
   assert.match(
     workflow,
     /xcrun notarytool submit "\$app_archive"[\s\S]+select\(\.status == "Accepted"\)[\s\S]+xcrun stapler validate "\$app_bundle"/,
