@@ -1,12 +1,12 @@
-name: Release macOS arm64 updater
+name: Release signed macOS arm64
 
-# Releases are deliberately operator-initiated. This workflow never runs on push,
-# tags, pull requests, or schedules.
+# The signed channel is deliberately operator-initiated. It never runs on a
+# push, tag, pull request, or schedule and it never publishes the draft it creates.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Exact source version to release, for example 0.1.0
+        description: Exact source version to release, for example 0.2.1
         required: true
         type: string
 
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   preflight:
-    name: Validate release source
+    name: Validate immutable release source
     runs-on: macos-15
     timeout-minutes: 20
     permissions:
@@ -42,18 +42,27 @@ jobs:
         with:
           toolchain: 1.98.0
 
-      - name: Reject non-main source revisions
+      - name: Reject stale, non-main, or previously used release sources
         env:
           DISPATCH_SHA: ${{ github.sha }}
           DISPATCH_REF: ${{ github.ref }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           test "$DISPATCH_REF" = "refs/heads/main"
           remote_main_sha="$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)"
           test "$(git rev-parse HEAD)" = "$DISPATCH_SHA"
           test "$remote_main_sha" = "$DISPATCH_SHA"
+          if gh api "repos/$REPOSITORY/git/ref/tags/v$REQUESTED_VERSION" >/dev/null 2>&1; then
+            echo "Release tag v$REQUESTED_VERSION already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+          if gh api "repos/$REPOSITORY/releases/tags/v$REQUESTED_VERSION" >/dev/null 2>&1; then
+            echo "Release v$REQUESTED_VERSION already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
 
       - name: Verify source versions and updater configuration
         id: version
@@ -62,42 +71,34 @@ jobs:
           EXPECTED_UPDATER_ENDPOINT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
         run: |
           set -euo pipefail
-          if ! [[ "$REQUESTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
-            echo "The manually supplied version is not a supported release version." >&2
+          if ! [[ "$REQUESTED_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "The manually supplied version is not a supported SemVer release version." >&2
             exit 1
           fi
-
+          test -f "docs/release-notes/v$REQUESTED_VERSION.md"
           ./scripts/check-version-sync.sh "$REQUESTED_VERSION"
           EXPECTED_UPDATER_ENDPOINT="$EXPECTED_UPDATER_ENDPOINT" node --input-type=module -e '
             import { readFileSync } from "node:fs";
             const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
             const releaseConfig = JSON.parse(readFileSync("src-tauri/tauri.updater.conf.json", "utf8"));
             const updater = config.plugins?.updater;
-            if (releaseConfig.bundle?.createUpdaterArtifacts !== true) {
-              throw new Error("the release config must enable bundle.createUpdaterArtifacts");
-            }
-            if (typeof updater?.pubkey !== "string" || updater.pubkey.length === 0) {
-              throw new Error("plugins.updater.pubkey is required");
-            }
+            if (releaseConfig.bundle?.createUpdaterArtifacts !== true) throw new Error("release config must enable updater artifacts");
+            if (typeof updater?.pubkey !== "string" || updater.pubkey.length === 0) throw new Error("updater public key is required");
             if (!Array.isArray(updater.endpoints) || !updater.endpoints.includes(process.env.EXPECTED_UPDATER_ENDPOINT)) {
-              throw new Error("plugins.updater.endpoints must contain the fixed GitHub latest.json endpoint");
+              throw new Error("updater endpoint must contain the fixed GitHub latest.json URL");
             }
           '
           rg -q '^tauri-plugin-updater[[:space:]]*=' src-tauri/Cargo.toml
           rg -q 'tauri_plugin_updater::' src-tauri/src
-          echo "value=$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
+          printf 'value=%s\n' "$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
 
-  release:
-    name: Build and draft release
+  build:
+    name: Build secret-free release input
     needs: preflight
     runs-on: macos-15
     timeout-minutes: 90
-    # Administrators must configure this GitHub Environment with required
-    # reviewers and main-only deployment rules. All listed credentials are
-    # environment secrets; do not duplicate them as repository secrets.
-    environment: release
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Check out the validated source revision
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -111,37 +112,6 @@ jobs:
           set -euo pipefail
           test "$(uname -s)" = "Darwin"
           test "$(uname -m)" = "arm64"
-
-      - name: Fail closed when release environment credentials are unavailable
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          required_secrets=(
-            TAURI_SIGNING_PRIVATE_KEY
-            TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-            APPLE_CERTIFICATE
-            APPLE_CERTIFICATE_PASSWORD
-            KEYCHAIN_PASSWORD
-            APPLE_SIGNING_IDENTITY
-            APPLE_ID
-            APPLE_PASSWORD
-            APPLE_TEAM_ID
-          )
-          for secret_name in "${required_secrets[@]}"; do
-            if [ -z "${!secret_name}" ]; then
-              echo "Required release environment credential $secret_name is unavailable." >&2
-              exit 1
-            fi
-          done
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -157,35 +127,6 @@ jobs:
 
       - name: Install locked frontend dependencies
         run: npm ci
-
-      - name: Verify the updater private key matches the configured public key
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          probe_dir="$RUNNER_TEMP/codex-manager-updater-key-probe"
-          mkdir -p "$probe_dir"
-          printf 'codex-manager updater key pairing probe\n' > "$probe_dir/probe.bin"
-          npm run tauri signer sign -- "$probe_dir/probe.bin" >/dev/null
-          unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-          PUBLIC_KEY_PATH="$probe_dir/updater.pub" node --input-type=module -e '
-            import { readFileSync, writeFileSync } from "node:fs";
-            const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
-            const encoded = config.plugins?.updater?.pubkey;
-            if (typeof encoded !== "string" || encoded.length === 0) {
-              throw new Error("plugins.updater.pubkey is required");
-            }
-            const decoded = Buffer.from(encoded, "base64");
-            if (decoded.length === 0) {
-              throw new Error("plugins.updater.pubkey is not valid base64 key material");
-            }
-            writeFileSync(process.env.PUBLIC_KEY_PATH, decoded, { mode: 0o600 });
-          '
-          cargo run --quiet --manifest-path src-tauri/Cargo.toml --example verify_updater_signature -- \
-            "$probe_dir/probe.bin" \
-            "$probe_dir/probe.bin.sig" \
-            "$probe_dir/updater.pub"
 
       - name: JavaScript checks and production build
         run: npm run check && npm run build
@@ -205,238 +146,617 @@ jobs:
       - name: Generate SBOM and license inventories
         run: ./scripts/sbom.sh && ./scripts/licenses.sh && shasum -a 256 -c artifacts/release/sbom/SHA256SUMS
 
-      - name: Import the Developer ID certificate into an ephemeral keychain
+      - name: Build the unsigned app input and standalone updater verifier
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          npm run tauri -- build --target aarch64-apple-darwin --bundles app --no-sign
+          cargo build --release --manifest-path src-tauri/Cargo.toml --example verify_updater_signature
+          app_bundle="$(find target/aarch64-apple-darwin/release/bundle/macos -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -d "$app_bundle"
+          executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_bundle/Contents/Info.plist")"
+          [[ "$(file "$app_bundle/Contents/MacOS/$executable")" == *"Mach-O 64-bit executable arm64"* ]]
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_bundle/Contents/Info.plist")" = "$VERSION"
+
+      - name: Package the immutable signing input
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          app_bundle="$(find target/aarch64-apple-darwin/release/bundle/macos -maxdepth 1 -type d -name '*.app' -print -quit)"
+          input_root="$RUNNER_TEMP/codex-manager-release-input"
+          upload_root="artifacts/signing-input"
+          rm -rf -- "$input_root" "$upload_root"
+          mkdir -p "$input_root/artifacts/release" "$input_root/tools" "$upload_root"
+          ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$input_root/unsigned-app.zip"
+          ditto artifacts/release/sbom "$input_root/artifacts/release/sbom"
+          ditto artifacts/release/licenses "$input_root/artifacts/release/licenses"
+          cp target/release/examples/verify_updater_signature "$input_root/tools/verify_updater_signature"
+          chmod 700 "$input_root/tools/verify_updater_signature"
+          cp "docs/release-notes/v$VERSION.md" "$input_root/RELEASE-NOTES.md"
+          PUBLIC_KEY_PATH="$input_root/tools/updater.pub" node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
+            const encoded = config.plugins?.updater?.pubkey;
+            if (typeof encoded !== "string" || encoded.length === 0) throw new Error("updater public key is missing");
+            const decoded = Buffer.from(encoded, "base64");
+            if (decoded.length === 0) throw new Error("updater public key is invalid");
+            writeFileSync(process.env.PUBLIC_KEY_PATH, decoded, { mode: 0o600 });
+          '
+          jq -n \
+            --arg version "$VERSION" --arg sourceSha "$SOURCE_SHA" --arg target aarch64-apple-darwin \
+            --arg node "$(node --version)" --arg npm "$(npm --version)" \
+            --arg rustc "$(rustc --version)" --arg cargo "$(cargo --version)" \
+            --arg tauri "$(node node_modules/@tauri-apps/cli/tauri.js --version)" \
+            '{version:$version,sourceSha:$sourceSha,target:$target,toolchain:{node:$node,npm:$npm,rustc:$rustc,cargo:$cargo,tauri:$tauri}}' \
+            > "$input_root/BUILD-INPUT.json"
+          archive="$upload_root/codex-manager-v$VERSION-signing-input.tar.gz"
+          COPYFILE_DISABLE=1 tar -czf "$archive" -C "$input_root" .
+          (cd "$upload_root" && shasum -a 256 "$(basename "$archive")" > "$(basename "$archive").sha256")
+
+      - name: Upload the secret-free signing input
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-manager-macos-${{ needs.preflight.outputs.version }}-signing-input
+          path: artifacts/signing-input/
+          if-no-files-found: error
+          retention-days: 7
+
+  sign:
+    name: Sign, notarize, staple, and seal artifacts
+    needs: [preflight, build]
+    runs-on: macos-15
+    timeout-minutes: 120
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - name: Verify the runner is macOS arm64
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = "Darwin"
+          test "$(uname -m)" = "arm64"
+
+      - name: Download the immutable signing input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codex-manager-macos-${{ needs.preflight.outputs.version }}-signing-input
+          path: signing-input
+
+      - name: Verify signing input and recheck remote main after approval
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          archive="signing-input/codex-manager-v$VERSION-signing-input.tar.gz"
+          (cd signing-input && shasum -a 256 -c "$(basename "$archive").sha256")
+          input_root="$RUNNER_TEMP/codex-manager-release-input"
+          rm -rf -- "$input_root"
+          mkdir -p "$input_root"
+          tar -xzf "$archive" -C "$input_root"
+          jq -e --arg version "$VERSION" --arg sourceSha "$SOURCE_SHA" \
+            '.version == $version and .sourceSha == $sourceSha and .target == "aarch64-apple-darwin"' \
+            "$input_root/BUILD-INPUT.json" >/dev/null
+          test "$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_SHA"
+          if gh api "repos/$REPOSITORY/git/ref/tags/v$VERSION" >/dev/null 2>&1 || \
+             gh api "repos/$REPOSITORY/releases/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "Tag or Release v$VERSION appeared while approval was pending; refusing to continue." >&2
+            exit 1
+          fi
+
+      - name: Install the updater signer from integrity-pinned packages
+        run: |
+          set -euo pipefail
+          signer_root="$RUNNER_TEMP/codex-manager-tauri-signer"
+          cli_archive="$RUNNER_TEMP/tauri-cli-2.11.4.tgz"
+          native_archive="$RUNNER_TEMP/tauri-cli-darwin-arm64-2.11.4.tgz"
+          rm -rf -- "$signer_root"
+          rm -f -- "$cli_archive" "$native_archive"
+          mkdir -p "$signer_root/cli" "$signer_root/native"
+          curl --proto '=https' --tlsv1.2 --fail --show-error --silent --location \
+            'https://registry.npmjs.org/@tauri-apps/cli/-/cli-2.11.4.tgz' --output "$cli_archive"
+          curl --proto '=https' --tlsv1.2 --fail --show-error --silent --location \
+            'https://registry.npmjs.org/@tauri-apps/cli-darwin-arm64/-/cli-darwin-arm64-2.11.4.tgz' --output "$native_archive"
+          cli_integrity="sha512-$(openssl dgst -sha512 -binary "$cli_archive" | openssl base64 -A)"
+          native_integrity="sha512-$(openssl dgst -sha512 -binary "$native_archive" | openssl base64 -A)"
+          test "$cli_integrity" = 'sha512-R8xGtMpwyetawSqm9kYOuMmEqkhUbvcUy8n0aNXIxollKBLESUu5f4Fx+64hgASYm1H+jSWq6jCW6zqTnH6hqQ=='
+          test "$native_integrity" = 'sha512-1ryOF3ZhpZ/nemHV5zVwBQBz9jDGKmKPvWPADOhc83ig0P4bMc2iER4NbC6r9sjeIZ6RVQ4g3RZIYvezhcl4TQ=='
+          tar -xzf "$cli_archive" -C "$signer_root/cli" --strip-components=1
+          tar -xzf "$native_archive" -C "$signer_root/native" --strip-components=1
+          cp "$signer_root/native/cli.darwin-arm64.node" "$signer_root/cli/cli.darwin-arm64.node"
+          chmod 700 "$signer_root/cli/tauri.js"
+          test "$(node "$signer_root/cli/tauri.js" --version)" = 'tauri-cli 2.11.4'
+          rm -f -- "$cli_archive" "$native_archive"
+
+      - name: Fail closed when Apple release credentials are unavailable
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          required_secrets=(APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID)
+          for secret_name in "${required_secrets[@]}"; do
+            if [ -z "${!secret_name}" ]; then
+              echo "Required release environment credential $secret_name is unavailable." >&2
+              exit 1
+            fi
+          done
+          [[ "$APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]
+          [[ "$APPLE_SIGNING_IDENTITY" == "Developer ID Application: "*" ($APPLE_TEAM_ID)" ]]
+
+      - name: Import the Developer ID certificate into an ephemeral keychain
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           certificate_path="$RUNNER_TEMP/codex-manager-certificate.p12"
           keychain_path="$RUNNER_TEMP/codex-manager-signing.keychain-db"
+          original_keychains="$RUNNER_TEMP/codex-manager-original-keychains.txt"
+          notary_profile="codex-manager-notary-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          keychain_password="$(openssl rand -base64 32)"
+          security list-keychains -d user > "$original_keychains"
           printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate_path"
           chmod 600 "$certificate_path"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
-          security default-keychain -s "$keychain_path"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
-          security set-keychain-settings -lut 3600 "$keychain_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 7200 "$keychain_path"
+          existing_keychains=()
+          while IFS= read -r existing_keychain; do
+            existing_keychain="$(sed -E 's/^[[:space:]]*\"?//; s/\"?[[:space:]]*$//' <<< "$existing_keychain")"
+            [ -n "$existing_keychain" ] && existing_keychains+=("$existing_keychain")
+          done < "$original_keychains"
+          security list-keychains -d user -s "$keychain_path" "${existing_keychains[@]}"
           security import "$certificate_path" -k "$keychain_path" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain_path"
+          rm -f -- "$certificate_path"
           identity_info="$(security find-identity -v -p codesigning "$keychain_path")"
-          grep -F "\"$APPLE_SIGNING_IDENTITY\"" <<< "$identity_info" >/dev/null
+          test "$(grep -F -c "\"$APPLE_SIGNING_IDENTITY\"" <<< "$identity_info" || true)" -eq 1
+          xcrun notarytool store-credentials "$notary_profile" \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --keychain "$keychain_path" --validate >/dev/null
 
-      - name: Create the ephemeral signed release configuration
-        id: release_config
+      - name: Sign, notarize, and staple the app bundle
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
-          config_path="$RUNNER_TEMP/codex-manager-release-config.json"
-          RELEASE_CONFIG_PATH="$config_path" node --input-type=module -e '
-            import { readFileSync, writeFileSync } from "node:fs";
-            const config = JSON.parse(readFileSync("src-tauri/tauri.updater.conf.json", "utf8"));
-            config.bundle ??= {};
-            config.bundle.macOS ??= {};
-            config.bundle.macOS.signingIdentity = process.env.APPLE_SIGNING_IDENTITY;
-            writeFileSync(process.env.RELEASE_CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-          '
-          printf 'path=%s\n' "$config_path" >> "$GITHUB_OUTPUT"
+          input_root="$RUNNER_TEMP/codex-manager-release-input"
+          signing_root="$RUNNER_TEMP/codex-manager-signing-output"
+          keychain_path="$RUNNER_TEMP/codex-manager-signing.keychain-db"
+          notary_profile="codex-manager-notary-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          rm -rf -- "$signing_root"
+          mkdir -p "$signing_root/evidence" "$signing_root/release-assets"
+          ditto -x -k "$input_root/unsigned-app.zip" "$signing_root/app"
+          app_bundle="$(find "$signing_root/app" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -d "$app_bundle"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_bundle/Contents/Info.plist")" = "$VERSION"
+          executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_bundle/Contents/Info.plist")"
+          [[ "$(file "$app_bundle/Contents/MacOS/$executable")" == *"Mach-O 64-bit executable arm64"* ]]
+          codesign --deep --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app_bundle"
+          codesign --verify --deep --strict --verbose=2 "$app_bundle"
+          app_info="$(codesign --display --verbose=4 "$app_bundle" 2>&1)"
+          grep -Fqx "Authority=$APPLE_SIGNING_IDENTITY" <<< "$app_info"
+          grep -Fqx "TeamIdentifier=$APPLE_TEAM_ID" <<< "$app_info"
+          grep -Eq '^flags=.*runtime' <<< "$app_info"
+          grep -Eq '^Timestamp=' <<< "$app_info"
+          entitlements="$(codesign --display --entitlements :- "$app_bundle" 2>&1 || true)"
+          if grep -Eq 'com\.apple\.security\.(get-task-allow|cs\.disable-library-validation|cs\.allow-unsigned-executable-memory|cs\.allow-dyld-environment-variables)' <<< "$entitlements"; then
+            echo "The signed app contains a forbidden release entitlement." >&2
+            exit 1
+          fi
+          app_archive="$signing_root/app-notary.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$app_archive"
+          xcrun notarytool submit "$app_archive" --keychain-profile "$notary_profile" --keychain "$keychain_path" \
+            --wait --timeout 60m --output-format json \
+            | jq -e '{id,status,message} | select(.status == "Accepted")' > "$signing_root/evidence/APP-NOTARIZATION.json"
+          rm -f -- "$app_archive"
+          xcrun stapler staple "$app_bundle"
+          xcrun stapler validate "$app_bundle"
+          spctl --assess --type execute --verbose=4 "$app_bundle"
 
-      # Residual P1: official tauri-action v1 couples building/updater signing
-      # and GitHub Release asset upload. It therefore receives both the updater
-      # signing secret and contents:write. The protected `release` environment,
-      # required reviewers, main-only source check, and draft-only release are
-      # the containment boundary; never add these secrets at repository scope.
-      # Tauri must notarize and staple the .app during this build. Its macOS
-      # updater archive is generated from that completed app bundle afterwards;
-      # never post-process the app without regenerating and re-signing the
-      # updater tarball and latest.json.
-      - name: Build, sign, notarize, staple, and create the draft release
-        id: tauri
-        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+      - name: Create and sign the updater archive
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        with:
-          projectPath: .
-          tauriScript: npm run tauri
-          args: --target aarch64-apple-darwin --config ${{ steps.release_config.outputs.path }}
-          tagName: v__VERSION__
-          releaseName: Codex Manager v__VERSION__
-          releaseBody: Signed macOS arm64 build. This release remains a draft until explicitly reviewed and published.
-          releaseDraft: true
-          prerelease: false
-          releaseCommitish: ${{ github.sha }}
-          uploadUpdaterJson: true
-          uploadUpdaterSignatures: true
-          uploadWorkflowArtifacts: false
-
-      - name: Notarize and staple the DMG, then replace its draft asset
-        id: notarized_dmg
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.preflight.outputs.version }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          search_roots=()
-          [ -d target ] && search_roots+=(target)
-          [ -d src-tauri/target ] && search_roots+=(src-tauri/target)
-          test "${#search_roots[@]}" -gt 0
-          dmg="$(find "${search_roots[@]}" -type f -name '*.dmg' -print -quit)"
-          test -f "$dmg"
-          notary_result="$(xcrun notarytool submit "$dmg" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait \
-            --output-format json)"
-          printf '%s' "$notary_result" | jq -e '.status == "Accepted"' >/dev/null
+          input_root="$RUNNER_TEMP/codex-manager-release-input"
+          signing_root="$RUNNER_TEMP/codex-manager-signing-output"
+          signer_root="$RUNNER_TEMP/codex-manager-tauri-signer"
+          app_bundle="$(find "$signing_root/app" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          tarball="$signing_root/release-assets/codex-manager-v$VERSION-aarch64.app.tar.gz"
+          COPYFILE_DISABLE=1 tar -czf "$tarball" -C "$(dirname "$app_bundle")" "$(basename "$app_bundle")"
+          test -n "$TAURI_SIGNING_PRIVATE_KEY"
+          test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          node "$signer_root/cli/tauri.js" signer sign "$tarball" >/dev/null
+          unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          test -s "$tarball.sig"
+          "$input_root/tools/verify_updater_signature" "$tarball" "$tarball.sig" "$input_root/tools/updater.pub"
+
+      - name: Create, sign, notarize, and staple the DMG
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          signing_root="$RUNNER_TEMP/codex-manager-signing-output"
+          keychain_path="$RUNNER_TEMP/codex-manager-signing.keychain-db"
+          notary_profile="codex-manager-notary-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          app_bundle="$(find "$signing_root/app" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          dmg_staging="$signing_root/dmg-staging"
+          dmg="$signing_root/release-assets/codex-manager-v$VERSION-aarch64.dmg"
+          mkdir -p "$dmg_staging"
+          ditto "$app_bundle" "$dmg_staging/$(basename "$app_bundle")"
+          ln -s /Applications "$dmg_staging/Applications"
+          hdiutil create -volname "Codex Manager" -srcfolder "$dmg_staging" -ov -format UDZO "$dmg"
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
+          codesign --verify --strict --verbose=2 "$dmg"
+          dmg_info="$(codesign --display --verbose=4 "$dmg" 2>&1)"
+          grep -Fqx "Authority=$APPLE_SIGNING_IDENTITY" <<< "$dmg_info"
+          grep -Fqx "TeamIdentifier=$APPLE_TEAM_ID" <<< "$dmg_info"
+          grep -Eq '^Timestamp=' <<< "$dmg_info"
+          xcrun notarytool submit "$dmg" --keychain-profile "$notary_profile" --keychain "$keychain_path" \
+            --wait --timeout 60m --output-format json \
+            | jq -e '{id,status,message} | select(.status == "Accepted")' > "$signing_root/evidence/DMG-NOTARIZATION.json"
           xcrun stapler staple "$dmg"
           xcrun stapler validate "$dmg"
-          gh release upload "v$VERSION" "$dmg" --clobber
-          remote_check_dir="$(mktemp -d)"
-          trap 'rm -rf -- "$remote_check_dir"' EXIT
-          gh release download "v$VERSION" --pattern "$(basename "$dmg")" --dir "$remote_check_dir"
-          cmp -s "$dmg" "$remote_check_dir/$(basename "$dmg")"
-          printf 'dmg=%s\n' "$dmg" >> "$GITHUB_OUTPUT"
+          hdiutil verify "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
 
-      - name: Verify signed, notarized, and stapled local artifacts
-        id: signed_artifacts
+      - name: Verify local signed payload and the apps inside updater and DMG
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          DMG_PATH: ${{ steps.notarized_dmg.outputs.dmg }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
-          search_roots=()
-          [ -d target ] && search_roots+=(target)
-          [ -d src-tauri/target ] && search_roots+=(src-tauri/target)
-          test "${#search_roots[@]}" -gt 0
-          tarball="$(find "${search_roots[@]}" -type f -name '*.app.tar.gz' -print -quit)"
-          app_bundle="$(find "${search_roots[@]}" -type d -name '*.app' -print -quit)"
-          dmg="$DMG_PATH"
-          test -f "$tarball"
-          test -s "$tarball"
-          test -f "$tarball.sig"
-          test -s "$tarball.sig"
-          test -d "$app_bundle"
-          test -f "$dmg"
-          codesign --verify --deep --strict --verbose=2 "$app_bundle"
-          codesign_info="$(codesign --display --verbose=4 "$app_bundle" 2>&1)"
-          [[ "$codesign_info" == *"Authority=$APPLE_SIGNING_IDENTITY"* ]]
-          grep -E 'flags=.*runtime' <<< "$codesign_info" >/dev/null
-          xcrun stapler validate "$app_bundle"
+          signing_root="$RUNNER_TEMP/codex-manager-signing-output"
+          input_root="$RUNNER_TEMP/codex-manager-release-input"
+          app_bundle="$(find "$signing_root/app" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          tarball="$signing_root/release-assets/codex-manager-v$VERSION-aarch64.app.tar.gz"
+          dmg="$signing_root/release-assets/codex-manager-v$VERSION-aarch64.dmg"
+          verify_app() {
+            local candidate="$1"
+            codesign --verify --deep --strict --verbose=2 "$candidate"
+            local info
+            info="$(codesign --display --verbose=4 "$candidate" 2>&1)"
+            grep -Fqx "Authority=$APPLE_SIGNING_IDENTITY" <<< "$info"
+            grep -Fqx "TeamIdentifier=$APPLE_TEAM_ID" <<< "$info"
+            grep -Eq '^flags=.*runtime' <<< "$info"
+            grep -Eq '^Timestamp=' <<< "$info"
+            xcrun stapler validate "$candidate"
+            spctl --assess --type execute --verbose=4 "$candidate"
+          }
+          verify_app "$app_bundle"
+          codesign --verify --strict --verbose=2 "$dmg"
           xcrun stapler validate "$dmg"
-          spctl --assess --type execute --verbose=4 "$app_bundle"
-          spctl --assess --type open --verbose=4 "$dmg"
-          printf 'tarball=%s\nsignature=%s\ndmg=%s\napp_bundle=%s\n' "$tarball" "$tarball.sig" "$dmg" "$app_bundle" >> "$GITHUB_OUTPUT"
+          hdiutil verify "$dmg"
+          "$input_root/tools/verify_updater_signature" "$tarball" "$tarball.sig" "$input_root/tools/updater.pub"
+          updater_extract="$signing_root/updater-extract"
+          mkdir -p "$updater_extract"
+          tar -xzf "$tarball" -C "$updater_extract"
+          updater_app="$(find "$updater_extract" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          verify_app "$updater_app"
+          mount_point="$signing_root/dmg-mount"
+          mkdir -p "$mount_point"
+          device="$(hdiutil attach "$dmg" -readonly -nobrowse -noautoopen -mountpoint "$mount_point" | awk 'NR == 1 {print $1}')"
+          trap 'hdiutil detach "$device" >/dev/null 2>&1 || true' EXIT
+          dmg_app="$(find "$mount_point" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          verify_app "$dmg_app"
+          local_cdhash="$(codesign --display --verbose=4 "$app_bundle" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
+          updater_cdhash="$(codesign --display --verbose=4 "$updater_app" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
+          dmg_cdhash="$(codesign --display --verbose=4 "$dmg_app" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
+          test "$local_cdhash" = "$updater_cdhash"
+          test "$local_cdhash" = "$dmg_cdhash"
+          hdiutil detach "$device"
+          trap - EXIT
 
-      - name: Verify the draft updater manifest and signature pairs
+      - name: Seal SBOM, licenses, signing evidence, and transfer payload
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ needs.preflight.outputs.version }}
-          TAR_PATH: ${{ steps.signed_artifacts.outputs.tarball }}
-          SIG_PATH: ${{ steps.signed_artifacts.outputs.signature }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           REPOSITORY: ${{ github.repository }}
-          GITHUB_API_URL: ${{ github.api_url }}
-        run: |
-          set -euo pipefail
-          evidence_dir="$(mktemp -d)"
-          trap 'rm -rf -- "$evidence_dir"' EXIT
-          release_json="$(gh api "repos/$REPOSITORY/releases/tags/v$VERSION")"
-          printf '%s' "$release_json" | jq -e '.draft == true' >/dev/null
-          printf '%s' "$release_json" | jq -e '[.assets[].name] | any(endswith(".app.tar.gz"))' >/dev/null
-          printf '%s' "$release_json" | jq -e '[.assets[].name] | any(endswith(".app.tar.gz.sig"))' >/dev/null
-          printf '%s' "$release_json" | jq -e '[.assets[].name] | any(. == "latest.json")' >/dev/null
-          tar_asset_name="$(basename "$TAR_PATH")"
-          expected_asset_api_url="$(printf '%s' "$release_json" | jq -er --arg name "$tar_asset_name" '.assets[] | select(.name == $name) | .url')"
-          [[ "$expected_asset_api_url" == "$GITHUB_API_URL/repos/$REPOSITORY/releases/assets/"* ]]
-          gh release download "v$VERSION" --pattern latest.json --dir "$evidence_dir"
-          EXPECTED_ASSET_API_URL="$expected_asset_api_url" VERSION="$VERSION" SIG_PATH="$SIG_PATH" node --input-type=module -e '
-            import { readFileSync } from "node:fs";
-            const manifest = JSON.parse(readFileSync(process.argv[1], "utf8"));
-            const expected = readFileSync(process.env.SIG_PATH, "utf8");
-            const expectedUrl = process.env.EXPECTED_ASSET_API_URL;
-            const allowed = ["darwin-aarch64", "darwin-aarch64-app"];
-            const keys = Object.keys(manifest.platforms ?? {}).sort();
-            if (manifest.version !== process.env.VERSION || JSON.stringify(keys) !== JSON.stringify(allowed)) {
-              throw new Error("latest.json version or platform keys are unexpected");
-            }
-            for (const key of allowed) {
-              const platform = manifest.platforms[key];
-              if (typeof platform?.signature !== "string" || platform.signature !== expected) {
-                throw new Error(`latest.json signature does not match ${key}`);
-              }
-              if (platform?.url !== expectedUrl) {
-                throw new Error(`latest.json URL is not the exact draft tarball asset for ${key}`);
-              }
-            }
-          ' "$evidence_dir/latest.json"
-
-      - name: Record signed artifact checksums and provenance
-        env:
-          VERSION: ${{ needs.preflight.outputs.version }}
           SOURCE_SHA: ${{ github.sha }}
-          TAR_PATH: ${{ steps.signed_artifacts.outputs.tarball }}
-          SIG_PATH: ${{ steps.signed_artifacts.outputs.signature }}
-          DMG_PATH: ${{ steps.signed_artifacts.outputs.dmg }}
-        run: |
-          set -euo pipefail
-          provenance_dir="artifacts/release/provenance"
-          mkdir -p "$provenance_dir"
-          shasum -a 256 "$TAR_PATH" "$SIG_PATH" "$DMG_PATH" > "$provenance_dir/SHA256SUMS-signed"
-          VERSION="$VERSION" SOURCE_SHA="$SOURCE_SHA" TAR_PATH="$TAR_PATH" SIG_PATH="$SIG_PATH" DMG_PATH="$DMG_PATH" node --input-type=module -e '
-            import { createHash } from "node:crypto";
-            import { readFileSync, writeFileSync } from "node:fs";
-            const digest = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
-            const result = {
-              version: process.env.VERSION,
-              sourceSha: process.env.SOURCE_SHA,
-              target: "aarch64-apple-darwin",
-              artifacts: [process.env.TAR_PATH, process.env.SIG_PATH, process.env.DMG_PATH].map((file) => ({ file, sha256: digest(file) })),
-            };
-            writeFileSync("artifacts/release/provenance/BUILD-PROVENANCE.json", `${JSON.stringify(result, null, 2)}\n`);
-          '
-
-      - name: Attach SBOM, licenses, checksums, and provenance to the draft
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
-          gh release upload "v$VERSION" \
-            artifacts/release/sbom/* \
-            artifacts/release/licenses/* \
-            artifacts/release/provenance/* \
-            --clobber
+          signing_root="$RUNNER_TEMP/codex-manager-signing-output"
+          input_root="$RUNNER_TEMP/codex-manager-release-input"
+          assets="$signing_root/release-assets"
+          app_bundle="$(find "$signing_root/app" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          dmg="$assets/codex-manager-v$VERSION-aarch64.dmg"
+          (cd "$input_root" && zip -qry "$assets/codex-manager-v$VERSION-sbom.zip" artifacts/release/sbom)
+          (cd "$input_root" && zip -qry "$assets/codex-manager-v$VERSION-licenses.zip" artifacts/release/licenses)
+          identity_sha256="$(printf '%s' "$APPLE_SIGNING_IDENTITY" | shasum -a 256 | awk '{print $1}')"
+          app_cdhash="$(codesign --display --verbose=4 "$app_bundle" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
+          dmg_cdhash="$(codesign --display --verbose=4 "$dmg" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
+          updater_public_key_sha256="$(shasum -a 256 "$input_root/tools/updater.pub" | awk '{print $1}')"
+          jq -n \
+            --arg version "$VERSION" --arg sourceSha "$SOURCE_SHA" --arg repository "$REPOSITORY" \
+            --arg workflowRunId "$GITHUB_RUN_ID" --arg workflowRunAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg target aarch64-apple-darwin --arg teamId "$APPLE_TEAM_ID" --arg identitySha256 "$identity_sha256" \
+            --arg appCdhash "$app_cdhash" --arg dmgCdhash "$dmg_cdhash" --arg updaterPublicKeySha256 "$updater_public_key_sha256" \
+            --slurpfile appNotarization "$signing_root/evidence/APP-NOTARIZATION.json" \
+            --slurpfile dmgNotarization "$signing_root/evidence/DMG-NOTARIZATION.json" \
+            '{schemaVersion:1,version:$version,sourceSha:$sourceSha,repository:$repository,workflowRunId:$workflowRunId,workflowRunAttempt:$workflowRunAttempt,target:$target,apple:{teamId:$teamId,identitySha256:$identitySha256,appCdhash:$appCdhash,dmgCdhash:$dmgCdhash,appNotarization:$appNotarization[0],dmgNotarization:$dmgNotarization[0]},updater:{publicKeySha256:$updaterPublicKeySha256}}' \
+            > "$assets/SIGNING-EVIDENCE.json"
+          cp "$input_root/RELEASE-NOTES.md" "$signing_root/RELEASE-NOTES.md"
+          mkdir -p "$signing_root/tools"
+          cp "$input_root/tools/verify_updater_signature" "$signing_root/tools/verify_updater_signature"
+          cp "$input_root/tools/updater.pub" "$signing_root/tools/updater.pub"
+          chmod 700 "$signing_root/tools/verify_updater_signature"
+          transfer_root="artifacts/signed-transfer"
+          rm -rf -- "$transfer_root"
+          mkdir -p "$transfer_root"
+          transfer_archive="$transfer_root/codex-manager-v$VERSION-signed-transfer.tar.gz"
+          COPYFILE_DISABLE=1 tar -czf "$transfer_archive" -C "$signing_root" release-assets RELEASE-NOTES.md tools
+          (cd "$transfer_root" && shasum -a 256 "$(basename "$transfer_archive")" > "$(basename "$transfer_archive").sha256")
 
-      - name: Upload release evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: codex-manager-macos-${{ needs.preflight.outputs.version }}-release-evidence
-          path: artifacts/release/
-          if-no-files-found: error
-
-      - name: Remove the ephemeral signing keychain
+      - name: Remove ephemeral Apple credentials before any upload
         if: ${{ always() }}
         run: |
           set -euo pipefail
           keychain_path="$RUNNER_TEMP/codex-manager-signing.keychain-db"
           certificate_path="$RUNNER_TEMP/codex-manager-certificate.p12"
-          release_config_path="$RUNNER_TEMP/codex-manager-release-config.json"
-          updater_probe_dir="$RUNNER_TEMP/codex-manager-updater-key-probe"
+          original_keychains="$RUNNER_TEMP/codex-manager-original-keychains.txt"
+          if [ -f "$original_keychains" ]; then
+            restored_keychains=()
+            while IFS= read -r restored_keychain; do
+              restored_keychain="$(sed -E 's/^[[:space:]]*\"?//; s/\"?[[:space:]]*$//' <<< "$restored_keychain")"
+              [ -n "$restored_keychain" ] && restored_keychains+=("$restored_keychain")
+            done < "$original_keychains"
+            if [ "${#restored_keychains[@]}" -gt 0 ]; then security list-keychains -d user -s "${restored_keychains[@]}"; fi
+          fi
           if [ -f "$keychain_path" ]; then
+            security lock-keychain "$keychain_path" || true
             security delete-keychain "$keychain_path"
           fi
-          rm -f -- "$certificate_path" "$release_config_path"
-          if [ -d "$updater_probe_dir" ]; then
-            rm -rf -- "$updater_probe_dir"
+          rm -rf -- "$RUNNER_TEMP/codex-manager-tauri-signer"
+          rm -f -- "$certificate_path" "$original_keychains"
+          test ! -e "$keychain_path"
+          test ! -e "$certificate_path"
+          test ! -e "$original_keychains"
+
+      - name: Upload sealed signed payload without signing credentials
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-manager-macos-${{ needs.preflight.outputs.version }}-signed-transfer
+          path: artifacts/signed-transfer/
+          if-no-files-found: error
+          retention-days: 14
+
+  draft:
+    name: Create and remotely verify draft Release
+    needs: [preflight, sign]
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Verify the runner is macOS arm64
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = "Darwin"
+          test "$(uname -m)" = "arm64"
+
+      - name: Download the sealed signed payload
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codex-manager-macos-${{ needs.preflight.outputs.version }}-signed-transfer
+          path: signed-transfer
+
+      - name: Verify transfer integrity and prepare local release assets
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          archive="signed-transfer/codex-manager-v$VERSION-signed-transfer.tar.gz"
+          (cd signed-transfer && shasum -a 256 -c "$(basename "$archive").sha256")
+          mkdir -p release-work
+          tar -xzf "$archive" -C release-work
+          test -f release-work/RELEASE-NOTES.md
+          jq -e --arg version "$VERSION" '.version == $version and .apple.appNotarization.status == "Accepted" and .apple.dmgNotarization.status == "Accepted"' \
+            release-work/release-assets/SIGNING-EVIDENCE.json >/dev/null
+
+      - name: Recheck immutable source and create a new draft Release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_SHA"
+          if gh api "repos/$REPOSITORY/git/ref/tags/v$VERSION" >/dev/null 2>&1 || \
+             gh api "repos/$REPOSITORY/releases/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "Tag or Release v$VERSION already exists; refusing to overwrite it." >&2
+            exit 1
           fi
+          gh release create "v$VERSION" --repo "$REPOSITORY" --target "$SOURCE_SHA" \
+            --title "Codex Manager v$VERSION" --notes-file release-work/RELEASE-NOTES.md --draft
+          release_json="$(gh api "repos/$REPOSITORY/releases/tags/v$VERSION")"
+          printf '%s' "$release_json" | jq -e --arg sourceSha "$SOURCE_SHA" '.draft == true and .target_commitish == $sourceSha' >/dev/null
+          printf 'id=%s\n' "$(printf '%s' "$release_json" | jq -er .id)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload signed core assets to the unique draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          release_json="$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID")"
+          printf '%s' "$release_json" | jq -e '.draft == true and (.assets | length) == 0' >/dev/null
+          for asset in release-work/release-assets/*; do
+            gh release upload "$(printf '%s' "$release_json" | jq -er .tag_name)" "$asset" --repo "$REPOSITORY"
+          done
+
+      - name: Create updater manifest, complete provenance, and release checksum manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          assets="release-work/release-assets"
+          tar_name="codex-manager-v$VERSION-aarch64.app.tar.gz"
+          tar_url="$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID/assets" --jq ".[] | select(.name == \"$tar_name\") | .browser_download_url")"
+          test -n "$tar_url"
+          signature="$(tr -d '\r\n' < "$assets/$tar_name.sig")"
+          published_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          jq -n --arg version "$VERSION" --arg notes "Codex Manager v$VERSION signed macOS arm64 release" \
+            --arg pub_date "$published_at" --arg signature "$signature" --arg url "$tar_url" \
+            '{version:$version,notes:$notes,pub_date:$pub_date,platforms:{"darwin-aarch64":{signature:$signature,url:$url},"darwin-aarch64-app":{signature:$signature,url:$url}}}' \
+            > "$assets/latest.json"
+          release_json="$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID")"
+          jq -n --arg version "$VERSION" --arg sourceSha "$SOURCE_SHA" --arg repository "$REPOSITORY" \
+            --arg releaseId "$RELEASE_ID" --arg workflowRunId "$GITHUB_RUN_ID" --arg workflowRunAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg workflowRef "$GITHUB_WORKFLOW_REF" --arg runnerImage "${ImageOS:-macos15}" \
+            --slurpfile signing "$assets/SIGNING-EVIDENCE.json" \
+            --argjson assets "$(printf '%s' "$release_json" | jq '[.assets[] | {id,name,browserDownloadUrl:.browser_download_url,size}]')" \
+            '{schemaVersion:1,version:$version,sourceSha:$sourceSha,repository:$repository,releaseId:$releaseId,workflowRunId:$workflowRunId,workflowRunAttempt:$workflowRunAttempt,workflowRef:$workflowRef,runnerImage:$runnerImage,signing:$signing[0],uploadedCoreAssets:$assets}' \
+            > "$assets/BUILD-PROVENANCE.json"
+          manifest="$assets/SHA256SUMS-v$VERSION-signed"
+          (cd "$assets" && find . -maxdepth 1 -type f ! -name "$(basename "$manifest")" -print0 \
+            | sort -z | xargs -0 shasum -a 256 | sed 's#  \./#  #') > "$manifest"
+
+      - name: Upload final metadata without overwriting any asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          for name in latest.json BUILD-PROVENANCE.json "SHA256SUMS-v$VERSION-signed"; do
+            asset="release-work/release-assets/$name"
+            test "$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID/assets" --jq "[.[] | select(.name == \"$name\")] | length")" -eq 0
+            tag_name="$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID" --jq .tag_name)"
+            gh release upload "$tag_name" "$asset" --repo "$REPOSITORY"
+          done
+
+      - name: Attest every final draft asset
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-work/release-assets/*
+
+      - name: Redownload and verify every draft asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          assets="release-work/release-assets"
+          remote="$RUNNER_TEMP/codex-manager-remote-release"
+          tools="release-work/tools"
+          rm -rf -- "$remote"
+          mkdir -p "$remote"
+          release_json="$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID")"
+          printf '%s' "$release_json" | jq -e --arg sourceSha "$SOURCE_SHA" '.draft == true and .target_commitish == $sourceSha' >/dev/null
+          local_names="$(find "$assets" -maxdepth 1 -type f -exec basename {} \; | sort | jq -Rsc 'split("\n")[:-1]')"
+          remote_names="$(printf '%s' "$release_json" | jq -c '[.assets[].name] | sort')"
+          test "$local_names" = "$remote_names"
+          while IFS=$'\t' read -r asset_id asset_name; do
+            gh api -H 'Accept: application/octet-stream' "repos/$REPOSITORY/releases/assets/$asset_id" > "$remote/$asset_name"
+          done < <(printf '%s' "$release_json" | jq -r '.assets[] | [.id,.name] | @tsv')
+          (cd "$remote" && shasum -a 256 -c "SHA256SUMS-v$VERSION-signed")
+          for local_asset in "$assets"/*; do cmp -s "$local_asset" "$remote/$(basename "$local_asset")"; done
+          tarball="$remote/codex-manager-v$VERSION-aarch64.app.tar.gz"
+          signature="$tarball.sig"
+          dmg="$remote/codex-manager-v$VERSION-aarch64.dmg"
+          "$tools/verify_updater_signature" "$tarball" "$signature" "$tools/updater.pub"
+          jq -e --arg version "$VERSION" --arg signature "$(tr -d '\r\n' < "$signature")" \
+            '.version == $version and ([.platforms | keys[]] | sort) == ["darwin-aarch64","darwin-aarch64-app"] and ([.platforms[].signature] | all(. == $signature))' \
+            "$remote/latest.json" >/dev/null
+          expected_tar_url="$(printf '%s' "$release_json" | jq -er --arg name "$(basename "$tarball")" '.assets[] | select(.name == $name) | .browser_download_url')"
+          jq -e --arg url "$expected_tar_url" '([.platforms[].url] | all(. == $url))' "$remote/latest.json" >/dev/null
+          jq -e --arg version "$VERSION" --arg sourceSha "$SOURCE_SHA" --arg releaseId "$RELEASE_ID" \
+            '.version == $version and .sourceSha == $sourceSha and .releaseId == $releaseId and .signing.apple.appNotarization.status == "Accepted" and .signing.apple.dmgNotarization.status == "Accepted"' \
+            "$remote/BUILD-PROVENANCE.json" >/dev/null
+          unzip -t "$remote/codex-manager-v$VERSION-sbom.zip"
+          unzip -t "$remote/codex-manager-v$VERSION-licenses.zip"
+          sbom_extract="$remote/sbom-extract"
+          mkdir -p "$sbom_extract"
+          unzip -q "$remote/codex-manager-v$VERSION-sbom.zip" -d "$sbom_extract"
+          (cd "$sbom_extract" && shasum -a 256 -c artifacts/release/sbom/SHA256SUMS)
+          signing_evidence="$remote/SIGNING-EVIDENCE.json"
+          expected_team="$(jq -er .apple.teamId "$signing_evidence")"
+          expected_identity_sha="$(jq -er .apple.identitySha256 "$signing_evidence")"
+          verify_app() {
+            local candidate="$1"
+            codesign --verify --deep --strict --verbose=2 "$candidate"
+            local info authority authority_sha
+            info="$(codesign --display --verbose=4 "$candidate" 2>&1)"
+            authority="$(awk -F= '/^Authority=Developer ID Application:/{print substr($0, index($0,"=") + 1); exit}' <<< "$info")"
+            authority_sha="$(printf '%s' "$authority" | shasum -a 256 | awk '{print $1}')"
+            test "$authority_sha" = "$expected_identity_sha"
+            grep -Fqx "TeamIdentifier=$expected_team" <<< "$info"
+            grep -Eq '^flags=.*runtime' <<< "$info"
+            grep -Eq '^Timestamp=' <<< "$info"
+            xcrun stapler validate "$candidate"
+            spctl --assess --type execute --verbose=4 "$candidate"
+          }
+          updater_extract="$remote/updater-extract"
+          mkdir -p "$updater_extract"
+          tar -xzf "$tarball" -C "$updater_extract"
+          updater_app="$(find "$updater_extract" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          verify_app "$updater_app"
+          codesign --verify --strict --verbose=2 "$dmg"
+          dmg_info="$(codesign --display --verbose=4 "$dmg" 2>&1)"
+          dmg_authority="$(awk -F= '/^Authority=Developer ID Application:/{print substr($0, index($0,"=") + 1); exit}' <<< "$dmg_info")"
+          test "$(printf '%s' "$dmg_authority" | shasum -a 256 | awk '{print $1}')" = "$expected_identity_sha"
+          grep -Fqx "TeamIdentifier=$expected_team" <<< "$dmg_info"
+          grep -Eq '^Timestamp=' <<< "$dmg_info"
+          xcrun stapler validate "$dmg"
+          hdiutil verify "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
+          mount_point="$remote/dmg-mount"
+          mkdir -p "$mount_point"
+          device="$(hdiutil attach "$dmg" -readonly -nobrowse -noautoopen -mountpoint "$mount_point" | awk 'NR == 1 {print $1}')"
+          trap 'hdiutil detach "$device" >/dev/null 2>&1 || true' EXIT
+          dmg_app="$(find "$mount_point" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          verify_app "$dmg_app"
+          updater_cdhash="$(codesign --display --verbose=4 "$updater_app" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
+          dmg_cdhash="$(codesign --display --verbose=4 "$dmg_app" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
+          test "$updater_cdhash" = "$dmg_cdhash"
+          hdiutil detach "$device"
+          trap - EXIT
+          for remote_asset in "$remote"/*; do
+            [ -f "$remote_asset" ] || continue
+            gh attestation verify "$remote_asset" --repo "$REPOSITORY" --source-digest "$SOURCE_SHA" \
+              --source-ref refs/heads/main --signer-workflow "$REPOSITORY/.github/workflows/release.yml" >/dev/null
+          done
+
+      - name: Upload remotely verified release evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-manager-macos-${{ needs.preflight.outputs.version }}-release-evidence
+          path: release-work/release-assets/
+          if-no-files-found: error
+          retention-days: 30

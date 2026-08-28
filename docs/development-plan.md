@@ -51,9 +51,11 @@
 - [x] Playwright 验证总览、活动筛选/详情、项目/AGENTS 编辑 revision、OTel 凭据显式揭示与 390×844 布局
 - [x] 完整安全扫描的 12 项发现已修复，并经独立只读验证
 - [x] 应用内手动检查/确认安装更新，GitHub Releases 草稿工作流、Tauri 更新签名公钥与 `release` Environment 边界
+- [x] 签名 release workflow 拆分为 secret-free build、受保护 sign、无签名 secret 的 draft，并加入 tag 不可覆盖、双 notary Accepted、实际 updater 验签、全资产回下载、attestation 与清理后置验证
 - [ ] Developer ID Application 签名（当前机器无可用 identity）
 - [ ] Apple notarization、stapling 与 Gatekeeper 验证（需要 Apple 凭证）
-- [ ] 公开 beta 上传、下载验证与发布公告（未授权、未执行）
+- [x] `v0.2.0` unsigned community prerelease 已发布，且保持无 updater manifest 的独立通道
+- [ ] `v0.2.1` 签名 beta 草稿、远端下载验证与人工发布（Apple/Environment 门禁未满足）
 
 ## 后续阶段
 

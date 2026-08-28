@@ -547,12 +547,12 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
       return {
         currentVersion: "0.1.0",
         available: true,
-        version: "0.2.0",
+        version: "0.2.1",
         date: "2026-08-27T10:00:00.000Z",
         notes: "演示更新：新增 GitHub Releases 在线更新与签名校验。",
       } satisfies AppUpdateStatus as T;
     case COMMANDS.installPendingUpdate:
-      if (args.expectedVersion !== "0.2.0") throw new Error("更新版本已变化，请重新检查后再安装。");
+      if (args.expectedVersion !== "0.2.1") throw new Error("更新版本已变化，请重新检查后再安装。");
       return { accepted: true } satisfies UpdateInstallResult as T;
     case COMMANDS.getCodexAccount:
       return { ...account, checkedAt: new Date().toISOString() } as T;

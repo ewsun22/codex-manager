@@ -2,6 +2,13 @@
 .env
 .env.*
 !.env.example
+*.p12
+*.pfx
+*.cer
+*.crt
+*.key
+*.mobileprovision
+AuthKey_*.p8
 node_modules/
 dist/
 artifacts/

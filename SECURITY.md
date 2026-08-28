@@ -39,7 +39,7 @@
 - 官方 Codex 可能按用户自己的 `cli_auth_credentials_store` 设置把活动凭据保存在 OS credential store 或 `~/.codex/auth.json`。多档案切换不会改写该设置，只支持 file 模式；keyring/auto 会拒绝切换。切换活动文件会影响共享该缓存的 CLI 与 IDE 扩展。
 - 当前轮换是用户确认后的整账户显式切换，不是请求级调度；不会检测限额后后台自动换号，也不会迁移正在运行的会话。
 - 当前没有启动时自动更新或远程撤回机制。在线更新会将完整更新包读入内存后验签；严格下载字节上限是后续加固项。
-- `tauri-action` 目前在同一受保护 job 中同时持有 updater 签名私钥和 GitHub `contents: write`；这是已知 P1 剩余风险，由 Environment 人工审批、main-only SHA、完整 action SHA 固定与 draft-only 限制。updater 私钥的独立离线恢复备份也必须在首次发布前完成。
+- 签名发布已拆成 secret-free build、无 Release 写权限的受保护 sign、无 Apple/updater secret 的 draft 三个 job；sign 不执行 build artifact 携带的 signer，而是先下载固定版本 Tauri signer 并核对 lockfile 固化的 SHA-512，updater 私钥只在紧邻签名命令的独立 step 注入并在命令后 unset。临时证书/Keychain 在任何上传前清理，实际 updater 和所有 draft 资产回下载复验。updater 私钥的独立离线恢复备份仍必须在首次发布前完成。
 
 ## 已完成的安全验证
 
@@ -49,4 +49,4 @@
 
 Community prerelease 必须确认测试、clippy、依赖审计、secret scan、SBOM/许可证、DMG 完整性与下载后 SHA-256，并确认没有 `latest.json` 或 updater bundle；发布文案必须披露 unsigned/unnotarized 状态。
 
-签名稳定发布还必须确认 Developer ID 身份准确、Hardened Runtime 签名验证通过、notarytool 返回 accepted、stapler validate 通过、Tauri updater 签名与 `latest.json` 中绑定该版本 tarball asset ID 的 GitHub API URL 匹配、最终 artifact SHA-256 与发布记录一致。任何一步缺失都必须保持相应的 `unsigned community prerelease`、`signed`、`notarized`、`draft` 或 `unreleased` 状态，不能越级表述。
+签名稳定发布还必须确认 Developer ID 身份准确、Hardened Runtime 签名验证通过、notarytool 返回 accepted、stapler validate 通过、Tauri updater 签名与 `latest.json` 中绑定该版本 tarball 的 GitHub `browser_download_url` 匹配、最终 artifact SHA-256 与发布记录一致。任何一步缺失都必须保持相应的 `unsigned community prerelease`、`signed`、`notarized`、`draft` 或 `unreleased` 状态，不能越级表述。
