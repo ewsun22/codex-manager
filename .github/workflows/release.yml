@@ -59,7 +59,11 @@ jobs:
             echo "Release tag v$REQUESTED_VERSION already exists; refusing to overwrite it." >&2
             exit 1
           fi
-          if gh api "repos/$REPOSITORY/releases/tags/v$REQUESTED_VERSION" >/dev/null 2>&1; then
+          release_count="$(
+            gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" |
+              jq -er --arg tag "v$REQUESTED_VERSION" '[.[][] | select(.tag_name == $tag)] | length'
+          )"
+          if [ "$release_count" -ne 0 ]; then
             echo "Release v$REQUESTED_VERSION already exists; refusing to overwrite it." >&2
             exit 1
           fi
@@ -243,8 +247,12 @@ jobs:
             '.version == $version and .sourceSha == $sourceSha and .target == "aarch64-apple-darwin"' \
             "$input_root/BUILD-INPUT.json" >/dev/null
           test "$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_SHA"
+          release_count="$(
+            gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" |
+              jq -er --arg tag "v$VERSION" '[.[][] | select(.tag_name == $tag)] | length'
+          )"
           if gh api "repos/$REPOSITORY/git/ref/tags/v$VERSION" >/dev/null 2>&1 || \
-             gh api "repos/$REPOSITORY/releases/tags/v$VERSION" >/dev/null 2>&1; then
+             [ "$release_count" -ne 0 ]; then
             echo "Tag or Release v$VERSION appeared while approval was pending; refusing to continue." >&2
             exit 1
           fi
@@ -588,16 +596,36 @@ jobs:
         run: |
           set -euo pipefail
           test "$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_SHA"
+          release_count="$(
+            gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" |
+              jq -er --arg tag "v$VERSION" '[.[][] | select(.tag_name == $tag)] | length'
+          )"
           if gh api "repos/$REPOSITORY/git/ref/tags/v$VERSION" >/dev/null 2>&1 || \
-             gh api "repos/$REPOSITORY/releases/tags/v$VERSION" >/dev/null 2>&1; then
+             [ "$release_count" -ne 0 ]; then
             echo "Tag or Release v$VERSION already exists; refusing to overwrite it." >&2
             exit 1
           fi
-          gh release create "v$VERSION" --repo "$REPOSITORY" --target "$SOURCE_SHA" \
-            --title "Codex Manager v$VERSION" --notes-file release-work/RELEASE-NOTES.md --draft
-          release_json="$(gh api "repos/$REPOSITORY/releases/tags/v$VERSION")"
-          printf '%s' "$release_json" | jq -e --arg sourceSha "$SOURCE_SHA" '.draft == true and .target_commitish == $sourceSha' >/dev/null
-          printf 'id=%s\n' "$(printf '%s' "$release_json" | jq -er .id)" >> "$GITHUB_OUTPUT"
+          release_json="$(
+            jq -n \
+              --arg tag "v$VERSION" \
+              --arg sourceSha "$SOURCE_SHA" \
+              --arg name "Codex Manager v$VERSION" \
+              --rawfile body release-work/RELEASE-NOTES.md \
+              '{tag_name: $tag, target_commitish: $sourceSha, name: $name, body: $body, draft: true, prerelease: false, generate_release_notes: false}' |
+              gh api --method POST "repos/$REPOSITORY/releases" --input -
+          )"
+          printf '%s' "$release_json" | jq -e \
+            --arg tag "v$VERSION" --arg sourceSha "$SOURCE_SHA" \
+            '.draft == true and .prerelease == false and .tag_name == $tag and .target_commitish == $sourceSha and (.assets | length) == 0' >/dev/null
+          release_id="$(printf '%s' "$release_json" | jq -er .id)"
+          matching_releases="$(
+            gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" |
+              jq -c --arg tag "v$VERSION" '[.[][] | select(.tag_name == $tag) | {id, draft, prerelease, target_commitish}]'
+          )"
+          printf '%s' "$matching_releases" | jq -e \
+            --argjson releaseId "$release_id" --arg sourceSha "$SOURCE_SHA" \
+            'length == 1 and .[0].id == $releaseId and .[0].draft == true and .[0].prerelease == false and .[0].target_commitish == $sourceSha' >/dev/null
+          printf 'id=%s\n' "$release_id" >> "$GITHUB_OUTPUT"
 
       - name: Upload signed core assets to the unique draft
         env:
@@ -608,8 +636,26 @@ jobs:
           set -euo pipefail
           release_json="$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID")"
           printf '%s' "$release_json" | jq -e '.draft == true and (.assets | length) == 0' >/dev/null
+          upload_base="$(printf '%s' "$release_json" | jq -er '.upload_url | sub("\\{\\?name,label\\}$"; "")')"
+          test "$upload_base" = "https://uploads.github.com/repos/$REPOSITORY/releases/$RELEASE_ID/assets"
+          upload_asset() {
+            asset="$1"
+            asset_name="$(basename "$asset")"
+            encoded_name="$(jq -rn --arg value "$asset_name" '$value | @uri')"
+            asset_size="$(stat -f %z "$asset")"
+            asset_json="$(
+              gh api --method POST -H "Content-Type: application/octet-stream" \
+                --input "$asset" "$upload_base?name=$encoded_name"
+            )"
+            asset_id="$(printf '%s' "$asset_json" | jq -er .id)"
+            printf '%s' "$asset_json" | jq -e --arg name "$asset_name" --argjson size "$asset_size" \
+              '.id > 0 and .name == $name and .state == "uploaded" and .size == $size' >/dev/null
+            gh api "repos/$REPOSITORY/releases/assets/$asset_id" | jq -e \
+              --arg name "$asset_name" --argjson id "$asset_id" --argjson size "$asset_size" \
+              '.id == $id and .name == $name and .state == "uploaded" and .size == $size' >/dev/null
+          }
           for asset in release-work/release-assets/*; do
-            gh release upload "$(printf '%s' "$release_json" | jq -er .tag_name)" "$asset" --repo "$REPOSITORY"
+            upload_asset "$asset"
           done
 
       - name: Create updater manifest, complete provenance, and release checksum manifest
@@ -651,11 +697,30 @@ jobs:
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
+          release_json="$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID")"
+          printf '%s' "$release_json" | jq -e '.draft == true' >/dev/null
+          upload_base="$(printf '%s' "$release_json" | jq -er '.upload_url | sub("\\{\\?name,label\\}$"; "")')"
+          test "$upload_base" = "https://uploads.github.com/repos/$REPOSITORY/releases/$RELEASE_ID/assets"
+          upload_asset() {
+            asset="$1"
+            asset_name="$(basename "$asset")"
+            encoded_name="$(jq -rn --arg value "$asset_name" '$value | @uri')"
+            asset_size="$(stat -f %z "$asset")"
+            asset_json="$(
+              gh api --method POST -H "Content-Type: application/octet-stream" \
+                --input "$asset" "$upload_base?name=$encoded_name"
+            )"
+            asset_id="$(printf '%s' "$asset_json" | jq -er .id)"
+            printf '%s' "$asset_json" | jq -e --arg name "$asset_name" --argjson size "$asset_size" \
+              '.id > 0 and .name == $name and .state == "uploaded" and .size == $size' >/dev/null
+            gh api "repos/$REPOSITORY/releases/assets/$asset_id" | jq -e \
+              --arg name "$asset_name" --argjson id "$asset_id" --argjson size "$asset_size" \
+              '.id == $id and .name == $name and .state == "uploaded" and .size == $size' >/dev/null
+          }
           for name in latest.json BUILD-PROVENANCE.json "SHA256SUMS-v$VERSION-signed"; do
             asset="release-work/release-assets/$name"
             test "$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID/assets" --jq "[.[] | select(.name == \"$name\")] | length")" -eq 0
-            tag_name="$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID" --jq .tag_name)"
-            gh release upload "$tag_name" "$asset" --repo "$REPOSITORY"
+            upload_asset "$asset"
           done
 
       - name: Attest every final draft asset
@@ -679,6 +744,17 @@ jobs:
           mkdir -p "$remote"
           release_json="$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID")"
           printf '%s' "$release_json" | jq -e --arg sourceSha "$SOURCE_SHA" '.draft == true and .target_commitish == $sourceSha' >/dev/null
+          if gh api "repos/$REPOSITORY/git/ref/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "Release tag v$VERSION appeared during draft verification; refusing to continue." >&2
+            exit 1
+          fi
+          matching_releases="$(
+            gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" |
+              jq -c --arg tag "v$VERSION" '[.[][] | select(.tag_name == $tag) | {id, draft, prerelease, target_commitish}]'
+          )"
+          printf '%s' "$matching_releases" | jq -e \
+            --argjson releaseId "$RELEASE_ID" --arg sourceSha "$SOURCE_SHA" \
+            'length == 1 and .[0].id == $releaseId and .[0].draft == true and .[0].prerelease == false and .[0].target_commitish == $sourceSha' >/dev/null
           local_names="$(find "$assets" -maxdepth 1 -type f -exec basename {} \; | sort | jq -Rsc 'split("\n")[:-1]')"
           remote_names="$(printf '%s' "$release_json" | jq -c '[.assets[].name] | sort')"
           test "$local_names" = "$remote_names"

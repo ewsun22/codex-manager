@@ -57,7 +57,7 @@ Playwright 对 `http://127.0.0.1:1420/` 的人工脱敏 demo adapter 做了可�
 - `npm run tauri build -- --debug --no-bundle --config src-tauri/tauri.updater.conf.json` 实际执行成功，证明 release-only config 路径、Tauri 插件初始化和合并后应用构建可用；`--no-bundle` 没有生成/签名 updater artifact，因此不是发布证据。
 - 使用 macOS Keychain 中的密码对仓库外 updater 私钥完成一次临时文件签名探针；签名生成成功，配置公钥与 `.pub` 文件逐字一致。临时探针已移到用户废纸篓，可恢复/清空。
 - 当日 GitHub API 实查 `release` Environment 已有 required reviewer 和 `main` custom branch policy，两个 `TAURI_SIGNING_*` Environment secrets 已存在；当时仓库 Release 数量为 0。此条是 2026-08-27 历史快照，后续已发布 `v0.1.0` unsigned prerelease，不能用它判断当前线上状态。
-- 当日 `.github/workflows/release.yml` 曾通过 YAML/actionlint 与 action SHA 检查，但旧版同一 job 持有签名 secret 和 Release 写权限；该证据已被 2026-08-29 的三 job 方案取代。当前方案把 build、受保护 sign、无 secret draft 分域，使用 SHA-512 固定 signer、双 `Accepted`、远端全资产回下载与 attestation；已重新通过 actionlint、23 个 shell 块语法、真实 signer bootstrap 和独立复审。这仍是无 Apple 凭据的静态/无密钥证据，不等于真实签名、公证或草稿上传。
+- 当日 `.github/workflows/release.yml` 曾通过 YAML/actionlint 与 action SHA 检查，但旧版同一 job 持有签名 secret 和 Release 写权限；该证据已被 2026-08-29 的三 job 方案取代。Actions run `33218731697` 的 build 与受保护 sign job 已在 exact source `7ff26ec2b8d1282f3a5bfd6d23ea80878d271b23` 上真实通过，sealed evidence 记录 app/DMG notarization 均为 `Accepted`，签名、stapling、Gatekeeper、updater 验签与临时凭据清理步骤均成功；但 draft job 在创建空草稿后因错误使用不返回 draft 的 tag REST 接口而失败。该空草稿经零资产/无 tag/目标 SHA 检查后已删除，修复后的新 SHA 仍必须重跑完整链，不能继承旧 SHA 的 `draft uploaded` 或远端验收状态。
 
 ## macOS unsigned 产物
 
@@ -92,7 +92,7 @@ Playwright 对 `http://127.0.0.1:1420/` 的人工脱敏 demo adapter 做了可�
 - 真实 wire response bytes、代理层 TTFB、完整请求 URL 和供应商账单仍不可从当前原生来源可靠得到，UI 必须显示 `unavailable`。
 - rollout JSONL 仍是内部兼容来源，版本升级后需重新验证。
 - Windows 还未实现 reparse-point 等价安全、安装包与签名验收。
-- Developer ID 签名、Apple notarization/stapling、签名 beta 草稿/发布和下载验证尚未执行。
-- Apple 发布凭据和 updater 私钥的独立离线恢复备份尚未配置；首次公开 Release 前都是硬门禁。
+- Developer ID/Hardened Runtime、Apple notarization `Accepted`、stapling、Gatekeeper 和 updater 验签已在 run `33218731697` 的 source `7ff26ec2b8d1282f3a5bfd6d23ea80878d271b23` 上执行成功；当前修复 SHA 的签名 beta 草稿、attestation 和全资产回下载仍未执行。
+- GitHub `release` Environment 的 Apple/Tauri secret 名称与门禁已配置，发布人员报告 updater 私钥独立离线备份完成；secret 值和备份内容不进入仓库或验证记录。首次公开 Release 仍需发布人复核实际恢复介质和 draft 证据。
 - `v0.2.0` 后续已作为 unsigned community prerelease 发布，不能充当可信 updater 起点；必须从一个旧的已签名/已公证版本升级到已人工发布的更高 SemVer，才能把端到端 updater 标记为 accepted。
 - 2026-08-29 对公开 `v0.2.0` 重新下载四项资产：`SHA256SUMS-v0.2.0-community` 全部通过，DMG `hdiutil verify` 通过，资产列表中没有 `latest.json`、`.app.tar.gz` 或 updater `.sig`，稳定 `latest.json` endpoint 返回 404。

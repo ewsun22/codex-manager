@@ -16,8 +16,10 @@
 
 - `v0.2.0` 已从 `87099222b0e9a50c4410a040c9600e23c53afb23` 发布为公开 `Unsigned Community Build` prerelease，只含 unsigned DMG、SBOM、许可证和 community SHA manifest；2026-08-29 回下载四项资产后，外层 SHA manifest、DMG `hdiutil verify` 均通过，稳定 `latest.json` endpoint 返回 404。该 tag/Release 不得覆盖或补入 updater 资产。
 - 签名候选源码已提高到 `0.2.1`，避免复用公开的 `v0.2.0` tag。它包含同一应用功能以及本次签名、notarization、stapling、provenance 和远端复验工作流加固。
-- 本机仍没有 Developer ID Application identity。GitHub `release` Environment 当前只有 Tauri updater 私钥及密码，缺少工作流要求的 6 项 Apple 证书、identity、Team ID 和 notarization 凭据；因此 signed stable 通道必须保持 No-Go，不触发注定失败的签名 workflow。
-- `v0.2.1` 当前尚无 tag 或 Release，保留为首个 Developer ID 签名候选；工作流会拒绝非远端 `main` exact SHA、已存在 tag/Release 或版本不一致。当前正式通道尚未触发、未生成 draft；signed、notarized、stapled、accepted、published 均未发生。
+- 本机仍没有 Developer ID Application identity，但 GitHub `release` Environment 已配置工作流要求的 6 项 Apple secret 和 2 项 Tauri updater secret，并保持 `main` custom branch policy 与人工 reviewer 门禁。发布人员已报告 updater 私钥的独立离线备份完成；仓库和工作流只记录 secret 名称，不记录值。
+- `2026-08-29` 的 Actions run `33218731697` 在 source `7ff26ec2b8d1282f3a5bfd6d23ea80878d271b23` 上完成 secret-free build 和受保护的 sign job：sealed evidence 记录 app/DMG 两次 notarization 均为 `Accepted`，对应步骤的 Developer ID/Hardened Runtime、stapling、Gatekeeper、updater 验签、DMG 挂载复验和临时凭据清理全部成功。该证据只适用于该 exact SHA。
+- 同一 run 在创建 draft 后错误地用 `releases/tags/{tag}` 读取草稿，GitHub 返回 404，因此未上传任何 Release asset、未执行远端回下载/attestation，整体 run 为失败。工作流已改为通过分页 Release 列表识别包括 draft 在内的已用版本，并直接使用创建 Release 的 REST response；失败留下的精确空 draft 已在确认 `draft=true`、目标 SHA 匹配、资产数为 0 且无 Git tag 后删除。
+- `v0.2.1` 当前仍无 tag 或 Release。修复后的新 exact SHA 必须重新跑完整 build/sign/draft 链；在全资产远端复验成功前，只能写成上一 SHA 的签名链已验证，不能把当前候选写成 `draft uploaded`、`remote verified`、`published` 或 updater 端到端 `accepted`。
 
 ## Unsigned Community Build 发布
 
@@ -38,8 +40,8 @@
 - 现有本机 unsigned 产物生成时仓库尚无 commit，`BUILD-SOURCE-unsigned.txt` 记录 `unversioned-working-tree`。首次提交之后，正式 beta 必须从可追溯 commit 重新构建。
 - 应用代码已配置 GitHub `latest.json` endpoint 和 Tauri updater 公钥；生产构建只通过 `src-tauri/tauri.updater.conf.json` 开启 updater artifact，日常 unsigned 构建不会要求私钥。
 - GitHub `release` Environment 已配置为只允许 `main`，并要求仓库所有者人工批准。`TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 已作为 Environment secrets 写入；私钥还有一份密码保护的仓库外本机副本，密码保存在 macOS Keychain 服务 `cc.codex.manager.updater`。
-- Apple 的 `APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD` 和 `APPLE_TEAM_ID` 尚未配置，本机也没有 Developer ID identity。临时 Keychain 密码由 runner 随机生成，不再是长期 secret。因此工作流当前会 fail closed；未触发 workflow，未创建签名草稿，线上 `latest.json` 尚不存在。
-- updater 私钥的独立离线恢复备份尚未完成；首次公开发布前必须由发布人员保存到与当前主机/GitHub 分离的加密介质并验证可恢复性。
+- 以上是 2026-08-27 的历史准备状态；到 2026-08-29，GitHub `release` Environment 已补齐 6 项 Apple secret，真实 sign job 已通过。临时 Keychain 密码仍由 runner 随机生成，本机仍没有 Developer ID identity，二者都不影响受保护 runner 的已验证签名链。
+- 以上是 2026-08-27 的历史备份状态；发布人员随后报告 updater 私钥的独立离线备份已完成。首次人工发布前仍需按实际恢复介质执行发布人复核，不把口头确认替代远端资产验签。
 
 ## 本地检查与构建
 
@@ -80,7 +82,7 @@ xcrun stapler validate path/to/CodexManager.dmg
 2. 在 GitHub Actions 手动运行 `Release signed macOS arm64`，输入完全相同的版本。`preflight` 先拒绝非当前远端 `main`、已存在 tag/Release 或版本不一致，再由完全不接触 secret 的 `build` job 运行 npm/Rust、secret scan、audit、SBOM/许可证和 unsigned `.app` 构建，产出带 SHA-256 的不可变 signing input。
 3. 指定发布人在 `release` Environment 审批页核对 exact SHA 和版本后才批准 `sign` job。它在审批后再次读取远端 `main` 与 tag/Release，随后从 npm registry 下载固定版本 Tauri signer 并核对 `package-lock.json` 固化的两个 SHA-512；不执行 build artifact 中的 signer。之后才把 `.p12` 导入临时 Keychain 并立即删除证书文件；runner 随机生成临时 Keychain 密码。这个 job 不拥有 `contents: write`，不重新运行项目 build script；它只对已经哈希的 `.app` 做 Developer ID/Hardened Runtime/secure timestamp 签名，分别以 `notarytool --output-format json` 证明 app 和 DMG 为 `Accepted`，staple 后生成并验签 updater tarball。
 4. Apple/app-specific password 先写入临时 Keychain profile，提交时只引用 profile；完成所有签名后先恢复原 Keychain 列表、锁定并删除临时 Keychain，确认 `.p12`/Keychain/列表快照都不存在，才允许上传只含公开产物的 sealed workflow artifact。
-5. 无 Apple/updater secret 的 `draft` job 才取得 `contents: write`。它只创建全新的 draft，不使用 `--clobber`；随后生成绑定精确 tarball `browser_download_url` 的 `latest.json`、完整 provenance 和扁平 SHA manifest，并对每项资产创建 GitHub artifact attestation。
+5. 无 Apple/updater secret 的 `draft` job 才取得 `contents: write`。它先通过分页 Release 列表检查包括 draft 在内的同名版本，再用 REST 创建调用返回的唯一 Release ID 创建全新 draft，并在创建后复查同 tag 仍只有该 ID；所有资产都通过该 ID 的 `upload_url` 上传并逐项复查返回的 asset ID/name/state/size，不使用会忽略 draft 的 tag REST 读取、按 tag 上传或 `--clobber`。随后生成绑定精确 tarball `browser_download_url` 的 `latest.json`、完整 provenance 和扁平 SHA manifest，并对每项资产创建 GitHub artifact attestation。
 6. 工作流按 Release asset ID 回下载全部资产，重新执行完整 SHA、updater 密码学验签、`latest.json` URL/签名、SBOM 内层 manifest、app/DMG `codesign`、Hardened Runtime、Team/identity hash、secure timestamp、`stapler validate`、`spctl`、`hdiutil verify`，并对 updater/DMG 中的 app 比较 CDHash。全部通过后状态仍只是 `draft uploaded / remote verified`。
 7. 发布人在草稿页面和隔离机复核 source SHA、notary submission、Gatekeeper、哈希、SBOM、许可证、provenance 与 attestation。未获得发布授权时停在 draft；失败的半成品 draft/tag 不自动覆盖或删除，调查后必须由发布人员明确处置并提高版本或确认安全重试路径。
 8. 人工发布后，使用上一个已签名版本实际点击“检查更新”，验证更高 SemVer 的下载、原生确认、签名校验、安装和重启后，才能报告 updater `accepted`。首个签名版本没有旧的签名客户端，不能完成这项端到端门禁。

@@ -47,6 +47,9 @@ test("发布工作流隔离构建、签名与草稿权限，并远端复验完�
   assert.doesNotMatch(workflow, /git fetch/);
   assert.doesNotMatch(workflow, /tauri-action/);
   assert.doesNotMatch(workflow, /--clobber/);
+  assert.doesNotMatch(workflow, /releases\/tags/);
+  assert.doesNotMatch(workflow, /gh release create/);
+  assert.doesNotMatch(workflow, /gh release upload/);
   assert.doesNotMatch(workflow, /KEYCHAIN_PASSWORD/);
   assert.equal(workflow.match(/TAURI_SIGNING_PRIVATE_KEY: \$\{\{ secrets\.TAURI_SIGNING_PRIVATE_KEY \}\}/g)?.length, 1);
   assert.equal(
@@ -54,6 +57,13 @@ test("发布工作流隔离构建、签名与草稿权限，并远端复验完�
     1,
   );
   assert.match(workflow, /gh api "repos\/\$REPOSITORY\/git\/ref\/heads\/main"/);
+  assert.equal(workflow.match(/gh api --paginate --slurp "repos\/\$REPOSITORY\/releases\?per_page=100"/g)?.length, 5);
+  assert.match(workflow, /gh api --method POST "repos\/\$REPOSITORY\/releases" --input -/);
+  assert.equal(workflow.match(/length == 1 and \.\[0\]\.id == \$releaseId/g)?.length, 2);
+  assert.equal(
+    workflow.match(/gh api --method POST -H "Content-Type: application\/octet-stream"[\s\S]+?--input "\$asset" "\$upload_base\?name=\$encoded_name"/g)?.length,
+    2,
+  );
   assert.match(workflow, /sign:[\s\S]+environment: release[\s\S]+permissions:\n      contents: read/);
   assert.match(workflow, /draft:[\s\S]+permissions:\n      contents: write/);
   assert.match(workflow, /npm run tauri -- build --target aarch64-apple-darwin --bundles app --no-sign/);
