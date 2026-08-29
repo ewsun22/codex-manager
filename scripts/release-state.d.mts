@@ -57,6 +57,7 @@ export function awaitVisibleRelease(
 export function buildReleaseIntent(input: Record<string, unknown>): any;
 export function buildStableUpdaterManifest(input: Record<string, unknown>): any;
 export function canonicalAssetUrl(repository: string, version: string, filename: string): string;
+export function compareAssetRecordNames(left: Pick<AssetRecord, "name">, right: Pick<AssetRecord, "name">): number;
 export function coreAssetNames(version: string): string[];
 export function downloadWithRetry(input: {
   download: () => Promise<Buffer>;

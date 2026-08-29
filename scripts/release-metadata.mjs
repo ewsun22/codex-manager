@@ -7,6 +7,7 @@ import {
   ReleaseProtocolError,
   buildReleaseIntent,
   canonicalTag,
+  compareAssetRecordNames,
   coreAssetNames,
   fileRecord,
   sha256Bytes,
@@ -69,6 +70,10 @@ async function coreRecords(assetDirectory, repository, version) {
   return Promise.all(actual.map((name) => fileRecord(join(assetDirectory, name), repository, version)));
 }
 
+function canonicalAssetRecords(records) {
+  return [...records].sort(compareAssetRecordNames);
+}
+
 async function makeIntent(args, context) {
   const buildInputBytes = await readFile(args.get("build-input"));
   const signingEvidenceBytes = await readFile(args.get("signing-evidence"));
@@ -102,7 +107,9 @@ async function validateIntentFiles(args, context) {
     throw new ReleaseProtocolError("intent-run-mismatch", "release intent does not bind the signing workflow run");
   }
   const local = await coreRecords(args.get("asset-dir"), context.repository, context.version);
-  if (JSON.stringify(intent.coreAssets) !== JSON.stringify(local)) throw new ReleaseProtocolError("intent-asset-mismatch", "release intent does not bind the supplied core assets");
+  if (JSON.stringify(canonicalAssetRecords(intent.coreAssets)) !== JSON.stringify(canonicalAssetRecords(local))) {
+    throw new ReleaseProtocolError("intent-asset-mismatch", "release intent does not bind the supplied core assets");
+  }
 }
 
 async function makeProvenance(args, context) {

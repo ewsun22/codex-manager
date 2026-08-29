@@ -14,9 +14,10 @@
 ## 2026-08-29 v0.2.1 发布总审计追加
 
 - 总审计绑定远端 source `91d5081b1ffbb3b837dfc1776ec8ca8d86d25de9`、Actions run `33227321418` 和唯一 draft Release `378845893`。九项 asset 的 API digest、本地 SHA、sealed transfer、updater 公钥/签名、app/DMG Developer ID/Hardened Runtime/timestamp、notary `Accepted`、stapling、Gatekeeper、SBOM/许可证与 attestation 已通过仓库外逐项复验；这是旧 SHA 的产物本体证据。
-- 该 run 的 secret step 在真实日志中出现 `rg: command not found` 后仍返回 success；draft 的 `latest.json` 又使用发布后仍为 404 的 `untagged-*` URL。因此 draft `378845893` 是明确 **No-Go**，保持未发布、无 `v0.2.1` tag，不能标为 remote verified/accepted。
-- 当前本地修复把 release 控制面抽成可执行状态机：稳定 tag URL、统一 5 分钟 deadline/指数退避、exact release/asset reconcile、原子下载、完整 provenance、恢复路径和只读 post-publish verifier；secret scan 改为无 `rg` 依赖并以 `0/1/2` 表示 clean/finding/scanner error。此段只记录本地实现状态，未表示已 commit、push、dispatch 或发布。
+- 该 run 的 secret step 在真实日志中出现 `rg: command not found` 后仍返回 success；draft 的 `latest.json` 又使用发布后仍为 404 的 `untagged-*` URL。因此 draft `378845893` 是明确 **No-Go**；它后来在 exact ID/source、九项 asset、无 tag 和恢复 artifact 复核后被精确删除，从未发布。
+- release 控制面修复已作为 `606a927c4f536b0f15a22a8ec850b6c99a97a117` 推送到 `main`：稳定 tag URL、统一 5 分钟 deadline/指数退避、exact release/asset reconcile、原子下载、完整 provenance、恢复路径和只读 post-publish verifier；secret scan 改为无 `rg` 依赖并以 `0/1/2` 表示 clean/finding/scanner error。run `33239136597` 已实测通过这些无密钥门禁。
 - 最终独立安全审查发现 build 产出的 updater verifier 曾跨入 sign/draft 权限域执行；本地候选已移除该可执行传递，改为 exact checkout 中仅依赖 Node `crypto` 的 Minisign/Ed25519 verifier，并用人工签名、篡改 fixture 及旧 draft 的真实签名字节同 Rust verifier 交叉验证。审查同时复现的 encrypted PKCS8、YAML block、Bearer `+`/`/`/`=` 与尾随空白证书后缀绕过已加入 CLI 回归测试。新 SHA 仍须重新跑远端门禁，不能从本地结果获得 signed/accepted 状态。
+- run `33239136597` 的 sign job 已实测 app/DMG 签名、Hardened Runtime、Apple `Accepted`、stapling、Gatekeeper、updater 验签和本地全链通过，并在上传 sealed signed-transfer 前清理临时 Apple 凭据。draft job 随后在任何 Release 创建前因 core asset 数组排序规则不一致失败：六项记录逐名称、size、digest、stable URL 规范化后完全相同。当前本地回归修复使记录身份与数组顺序无关，同时继续拒绝任意 size/digest 篡改；未获得新的远端授权前不提交、不推送、不二次 dispatch。
 
 ## 代码与数据层门禁
 
@@ -64,8 +65,8 @@ Playwright 对 `http://127.0.0.1:1420/` 的人工脱敏 demo adapter 做了可�
 - `npm run tauri build -- --debug --no-bundle --config src-tauri/tauri.updater.conf.json` 实际执行成功，证明 release-only config 路径、Tauri 插件初始化和合并后应用构建可用；`--no-bundle` 没有生成/签名 updater artifact，因此不是发布证据。
 - 使用 macOS Keychain 中的密码对仓库外 updater 私钥完成一次临时文件签名探针；签名生成成功，配置公钥与 `.pub` 文件逐字一致。临时探针已移到用户废纸篓，可恢复/清空。
 - 当日 GitHub API 实查 `release` Environment 已有 required reviewer 和 `main` custom branch policy，两个 `TAURI_SIGNING_*` Environment secrets 已存在；当时仓库 Release 数量为 0。此条是 2026-08-27 历史快照，后续已发布 `v0.1.0` unsigned prerelease，不能用它判断当前线上状态。
-- 七次失败链已完整归因：缺少 `rg`、codesign runtime 输出解析、DMG detach、draft tag REST 404、Release 创建后 list 延迟、stale 内嵌 assets，以及最终资产超过固定 20 秒窗口。旧的局部补丁和固定次数轮询不再作为完成证据。
-- 新控制逻辑拒绝 `browser_download_url`/`untagged-*` manifest，使用正式 `v<VERSION>` URL；所有 Release/asset/attestation 传播使用统一 deadline，冲突立即失败。恢复只接受 exact prior run/release/intent/digest，当前旧 draft 不可由新 SHA 复用。
+- 八次失败链已完整归因：前七项为缺少 `rg`、codesign runtime 输出解析、DMG detach、draft tag REST 404、Release 创建后 list 延迟、stale 内嵌 assets，以及最终资产超过固定 20 秒窗口；第八项是 intent 生成与文件复验使用不同字符串排序规则，却把资产数组顺序误当成身份。旧的局部补丁、固定次数轮询和只测 Schema 不执行真实文件路径都不再作为完成证据。
+- 新控制逻辑拒绝 `browser_download_url`/`untagged-*` manifest，使用正式 `v<VERSION>` URL；所有 Release/asset/attestation 传播使用统一 deadline，冲突立即失败。恢复只接受 exact prior run/release/intent/digest；已删除 draft `378845893` 与未曾创建 draft 的 run `33239136597` 都不能通过现有双 ID 入口复用。
 
 ## macOS unsigned 产物
 
@@ -100,7 +101,7 @@ Playwright 对 `http://127.0.0.1:1420/` 的人工脱敏 demo adapter 做了可�
 - 真实 wire response bytes、代理层 TTFB、完整请求 URL 和供应商账单仍不可从当前原生来源可靠得到，UI 必须显示 `unavailable`。
 - rollout JSONL 仍是内部兼容来源，版本升级后需重新验证。
 - Windows 还未实现 reparse-point 等价安全、安装包与签名验收。
-- Developer ID/Hardened Runtime、Apple notarization `Accepted`、stapling、Gatekeeper 和 updater 验签最近在旧 source 的产物本体上成立；现有 draft 因错误 updater URL、失败 run 和被跳过的 secret gate 仍为 No-Go。新 exact SHA 必须重新通过完整 workflow，不能继承旧 SHA 的状态。
+- Developer ID/Hardened Runtime、Apple notarization `Accepted`、stapling、Gatekeeper 和 updater 验签最近在 `606a927c4f536b0f15a22a8ec850b6c99a97a117` 的 sealed signed-transfer 上成立；但 run 在创建 draft 前失败，当前没有 v0.2.1 Release/tag，因此仍为 No-Go。新的控制修复和 exact SHA 必须重新通过远端 draft 全链，不能把 signed-transfer 写成 `draft remotely verified` 或 `accepted`。
 - GitHub `release` Environment 的 Apple/Tauri secret 名称与门禁已配置，发布人员报告 updater 私钥独立离线备份完成；secret 值和备份内容不进入仓库或验证记录。首次公开 Release 仍需发布人复核实际恢复介质和 draft 证据。
 - `v0.2.0` 后续已作为 unsigned community prerelease 发布，不能充当可信 updater 起点；必须从一个旧的已签名/已公证版本升级到已人工发布的更高 SemVer，才能把端到端 updater 标记为 accepted。
 - 2026-08-29 对公开 `v0.2.0` 重新下载四项资产：`SHA256SUMS-v0.2.0-community` 全部通过，DMG `hdiutil verify` 通过，资产列表中没有 `latest.json`、`.app.tar.gz` 或 updater `.sig`，稳定 `latest.json` endpoint 返回 404。

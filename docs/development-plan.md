@@ -52,11 +52,12 @@
 - [x] 完整安全扫描的 12 项发现已修复，并经独立只读验证
 - [x] 应用内手动检查/确认安装更新，GitHub Releases 草稿工作流、Tauri 更新签名公钥与 `release` Environment 边界
 - [x] 签名 release workflow 拆分为 secret-free build、受保护 sign、无签名 secret 的 draft，并加入 tag 不可覆盖、双 notary Accepted、实际 updater 验签、全资产回下载、attestation 与清理后置验证
-- [x] 本地实现 release eventual-consistency 状态机、稳定 tag updater URL、fail-closed Node secret scanner、provenance v2、exact draft resume 和只读 post-publish verifier；尚未提交或触发 Actions
+- [x] release eventual-consistency 状态机、稳定 tag updater URL、fail-closed Node secret scanner、provenance v2、exact draft resume 和只读 post-publish verifier 已随 `606a927c4f536b0f15a22a8ec850b6c99a97a117` 推送并由 Actions run `33239136597` 实测 preflight/build/sign 门禁
 - [x] 2026-08-29 Actions run `33225969842` 在 exact source `74bcb1d07449a817c850be3fd37a87582cd636f7` 完成 Developer ID Application/Hardened Runtime 签名；本机仍无可用 identity
 - [x] 同一 run 的 app/DMG notarization 均为 `Accepted`，stapling 与 Gatekeeper 验证通过；该状态不得外推到后续 source SHA
 - [x] `v0.2.0` unsigned community prerelease 已发布，且保持无 updater manifest 的独立通道
-- [ ] 完成本地总验证与独立审查后，按授权提交最终 SHA；精确处置旧 No-Go draft `378845893`，只 dispatch 一次并人工审批 sign
+- [x] 精确复核并删除旧 No-Go draft `378845893`；只对 `606a927c4f536b0f15a22a8ec850b6c99a97a117` dispatch 一次并完成人工 sign 审批，app/DMG sign/notary/staple/Gatekeeper、本地全链和 credential cleanup 通过
+- [ ] 提交 core asset 顺序无关身份比较修复和真实文件级回归测试；获得新的明确授权后推送新 exact SHA，并 fresh dispatch 一次且不填写 resume 输入
 - [ ] 新 SHA 的 `v0.2.1` draft 全链、人工 Publish、匿名 post-publish 回下载和干净机 DMG 安装/启动验收
 - [ ] 在 `v0.2.1` 之后的更高 SemVer 上完成首个可信 updater 下载、验签、安装与重启 E2E
 

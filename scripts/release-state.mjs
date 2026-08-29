@@ -78,6 +78,10 @@ function sha256Bytes(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function compareAssetRecordNames(left, right) {
+  return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+}
+
 async function fileRecord(path, repository, version) {
   const metadata = await stat(path);
   assert(metadata.isFile(), "invalid-local-asset", `asset is not a regular file: ${basename(path)}`);
@@ -233,7 +237,7 @@ function classifyAssetSet(remoteAssets, expectedRecords, allowedNames) {
   if (missing.length > 0 || pending.length > 0) {
     return { kind: "retry", reason: `assets pending; missing=${missing.join(",") || "none"}; pending=${pending.join(",") || "none"}` };
   }
-  return { kind: "ready", value: records.sort((left, right) => left.name.localeCompare(right.name, "en")) };
+  return { kind: "ready", value: records.sort(compareAssetRecordNames) };
 }
 
 async function awaitExpectedAssets(listAssets, expectedRecords, allowedNames, options = {}) {
@@ -416,7 +420,7 @@ function buildReleaseIntent({ repository, version, sourceSha, signingRunId, sign
     signingRun: { id: String(signingRunId), attempt: String(signingRunAttempt) },
     buildInputSha256,
     signingEvidenceSha256,
-    coreAssets: [...coreAssets].sort((left, right) => left.name.localeCompare(right.name, "en")),
+    coreAssets: [...coreAssets].sort(compareAssetRecordNames),
   };
   return validateReleaseIntent(intent, { repository, version, sourceSha });
 }
@@ -624,6 +628,7 @@ export {
   classifyAssetSet,
   classifyPublishedReleaseState,
   classifyReleaseVisibility,
+  compareAssetRecordNames,
   coreAssetNames,
   downloadWithRetry,
   dryRun,

@@ -16,6 +16,7 @@ import {
   buildStableUpdaterManifest,
   canonicalAssetUrl,
   canonicalTag,
+  compareAssetRecordNames,
   downloadWithRetry,
   expectedAssetNames,
   fileRecord,
@@ -331,7 +332,7 @@ function completeRemoteRecords(remoteAssets, repository, version) {
       digest: asset.digest,
       stableUrl: canonicalAssetUrl(repository, version, asset.name),
     };
-  }).sort((left, right) => left.name.localeCompare(right.name, "en"));
+  }).sort(compareAssetRecordNames);
 }
 
 async function waitCompleteRemoteRecords(api, version, releaseId) {

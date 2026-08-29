@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -24,6 +24,7 @@ import {
   verifyAttestationWithRetry,
 } from "../scripts/release-state.mjs";
 import { GitHubApi, assertReleaseState, createOrResolveDraft, downloadRelease, validatePreflight } from "../scripts/release-github.mjs";
+import { coreRecords as localCoreRecords, validateIntentFiles } from "../scripts/release-metadata.mjs";
 
 function fakeClock() {
   let milliseconds = 0;
@@ -345,7 +346,7 @@ test("published public downloader 即使环境有 token 也不发送 Authorizati
   }
 });
 
-test("release intent 与 provenance v2 严格绑定 toolchain、签名证据和资产记录", () => {
+test("release intent 与 provenance v2 严格绑定 toolchain、签名证据和资产记录", async () => {
   const repository = "owner/repository";
   const version = "0.2.1";
   const buildInput = {
@@ -437,4 +438,75 @@ test("release intent 与 provenance v2 严格绑定 toolchain、签名证据和�
     () => validateReleaseMetadata({ latest, provenance: invalid, signingEvidence, buildInput: invalid.buildInput, assetRecords: allRecords, signature, expected: { repository, version, sourceSha, releaseId: 73 } }),
     (error: ReleaseProtocolError) => error.code === "invalid-schema",
   );
+
+  const root = mkdtempSync(join(tmpdir(), "codex-manager-release-intent-"));
+  const assetDirectory = join(root, "release-assets");
+  mkdirSync(assetDirectory);
+  try {
+    const buildInputBytes = Buffer.from(`${JSON.stringify(buildInput, null, 2)}\n`);
+    const signingEvidenceBytes = Buffer.from(`${JSON.stringify(signingEvidence, null, 2)}\n`);
+    const buildInputPath = join(root, "BUILD-INPUT.json");
+    const signingEvidencePath = join(assetDirectory, "SIGNING-EVIDENCE.json");
+    writeFileSync(buildInputPath, buildInputBytes);
+    writeFileSync(signingEvidencePath, signingEvidenceBytes);
+    for (const name of coreAssetNames(version)) {
+      if (name !== "SIGNING-EVIDENCE.json") writeFileSync(join(assetDirectory, name), `synthetic:${name}`);
+    }
+    const localRecords = await localCoreRecords(assetDirectory, repository, version);
+    const fileIntent = buildReleaseIntent({
+      repository,
+      version,
+      sourceSha,
+      signingRunId: "123",
+      signingRunAttempt: "1",
+      buildInputSha256: sha256Bytes(buildInputBytes),
+      signingEvidenceSha256: sha256Bytes(signingEvidenceBytes),
+      coreAssets: localRecords,
+    });
+    assert.equal(fileIntent.coreAssets[0].name, "SIGNING-EVIDENCE.json");
+    const intentPath = join(root, "RELEASE-INTENT.json");
+    writeFileSync(intentPath, `${JSON.stringify(fileIntent, null, 2)}\n`);
+    const paths = new Map([
+      ["intent", intentPath],
+      ["asset-dir", assetDirectory],
+      ["build-input", buildInputPath],
+      ["signing-evidence", signingEvidencePath],
+    ]);
+    await validateIntentFiles({ get: (name: string) => paths.get(name) }, { repository, version, sourceSha });
+
+    const reorderedIntent = { ...fileIntent, coreAssets: [...fileIntent.coreAssets].reverse() };
+    assert.equal(reorderedIntent.coreAssets.at(-1)?.name, "SIGNING-EVIDENCE.json");
+    writeFileSync(intentPath, `${JSON.stringify(reorderedIntent, null, 2)}\n`);
+    await validateIntentFiles({ get: (name: string) => paths.get(name) }, { repository, version, sourceSha });
+
+    const tamperedIntents = [
+      {
+        expectedCode: "intent-asset-mismatch",
+        mutate: (candidate: typeof reorderedIntent) => { candidate.coreAssets[0].size += 1; },
+      },
+      {
+        expectedCode: "intent-asset-mismatch",
+        mutate: (candidate: typeof reorderedIntent) => { candidate.coreAssets[0].digest = `sha256:${"0".repeat(64)}`; },
+      },
+      {
+        expectedCode: "invalid-schema",
+        mutate: (candidate: typeof reorderedIntent) => { candidate.coreAssets[0].stableUrl = "https://example.invalid/tampered"; },
+      },
+      {
+        expectedCode: "invalid-schema",
+        mutate: (candidate: typeof reorderedIntent) => { candidate.coreAssets[0].name = "unknown.bin"; },
+      },
+    ];
+    for (const { expectedCode, mutate } of tamperedIntents) {
+      const tamperedIntent = structuredClone(reorderedIntent);
+      mutate(tamperedIntent);
+      writeFileSync(intentPath, `${JSON.stringify(tamperedIntent, null, 2)}\n`);
+      await assert.rejects(
+        validateIntentFiles({ get: (name: string) => paths.get(name) }, { repository, version, sourceSha }),
+        (error: ReleaseProtocolError) => error.code === expectedCode,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
