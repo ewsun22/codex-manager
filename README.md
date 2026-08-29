@@ -15,7 +15,7 @@ Codex Manager 是一个独立运行、本地优先的开源 Codex 桌面管理�
 - 增量读取配置的 Codex home 下 `sessions` 与 `archived_sessions` rollout JSONL；活动 `sessions` 会先于归档积压处理，同一来源按最近修改时间优先。从同一个 no-follow 文件句柄取得身份、大小和内容，使用 UTF-8 byte checkpoint、完整行提交和定期 reconciliation。
 - 将 session、turn、模型、provider、推理等级、token、缓存读、缓存写、reasoning output、首个可见输出和总耗时规范化到本机 SQLite。
 - 以 session、ordinal、事件类型和累计 token 向量去重；重复快照不累加，非单调快照隔离为诊断。不同采集文件使用独立所有权 namespace，完全等价的 rollout 副本另通过 logical fingerprint 在查询时折叠，不会转移或删除原来投影。
-- 总览、活动筛选、游标分页、详情抽屉、来源健康与缺失值 provenance；得不到的字段显示 `unavailable`，不会填 0。后台扫描成功后会合并通知界面重载当前筛选，“刷新本地数据”会显式执行一次有预算的 reconciliation。
+- 总览、活动筛选、游标分页、详情抽屉、来源健康与缺失值 provenance；得不到的字段显示 `unavailable`，不会填 0。启动时先返回界面、最新活动和静态配置，需要逐次 model call 计价的总览汇总在后台补齐。活动页每 5 秒只检查小型采集水位，水位变化后才轻量重载当前页，不重算总数、不重跑全局 bootstrap，也不遮挡已有表格；“刷新本地数据”仍会显式执行一次有预算的 reconciliation。
 - 版本化 API 等价价格目录，按一次 model call 分桶计算普通输入、缓存读、缓存写和输出；reasoning output 不重复计费。
 - 用户主动开启的 TLS loopback OTLP/HTTP receiver：首次启用时随机分配空闲端口，后续复用应用私有配置。客户端必须通过本机 CA 校验服务端身份，receiver 再用专用 header 认证调用方；认证发生在 body 解码前，请求体上限 128 KiB，空闲连接 10 秒超时，日志 body 从不读取或持久化。
 - 从已观测 cwd 与用户授权根目录发现项目、Git root 和 worktree，解析 Codex 当前的全局到 cwd `AGENTS` 有效链。

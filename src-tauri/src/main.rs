@@ -235,6 +235,8 @@ struct ActivityQuery {
     effort: Option<String>,
     result: Option<String>,
     search: Option<String>,
+    refresh_only: Option<bool>,
+    revision_only: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -242,12 +244,14 @@ struct ActivityQuery {
 struct ActivityPage {
     items: Vec<Activity>,
     next_cursor: Option<String>,
-    total: i64,
+    total: Option<i64>,
+    revision: String,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Summary {
+    activity_revision: String,
     range_label: String,
     records: i64,
     successful: i64,
@@ -397,7 +401,7 @@ struct UpdateInstallResult {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Bootstrap {
-    summary: Summary,
+    summary: Option<Summary>,
     activity: ActivityPage,
     projects: Vec<Project>,
     sources: Vec<SourceHealth>,
@@ -409,11 +413,15 @@ struct Bootstrap {
 #[tauri::command]
 fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
     Ok(Bootstrap {
-        summary: dashboard_inner(&state)?,
+        // The dashboard prices every logical model call individually. Defer
+        // that expensive aggregation until after the shell and latest rows
+        // are visible so a large local history cannot block first paint.
+        summary: None,
         activity: list_activity_inner(
             &state,
             ActivityQuery {
                 limit: Some(50),
+                refresh_only: Some(true),
                 ..Default::default()
             },
         )?,
@@ -1228,28 +1236,15 @@ fn sanitize_update_notes(notes: Option<String>) -> Option<String> {
 }
 
 fn dashboard_inner(state: &AppState) -> Result<Summary, String> {
-    let all = state
-        .store
-        .lock()
-        .map_err(lock_err)?
-        .page_activity(&ActivityFilter {
-            limit: Some(1),
-            ..Default::default()
-        })
-        .map_err(display_error)?;
-    let successful = activity_total_for_result(state, "success")?;
-    let failed = activity_total_for_result(state, "failure")?;
-    let cost_inputs = state
-        .store
-        .lock()
-        .map_err(lock_err)?
-        .cost_inputs()
-        .map_err(display_error)?;
-    let has_cost_inputs = !cost_inputs.is_empty();
+    let snapshot = {
+        let store = state.store.lock().map_err(lock_err)?;
+        store.dashboard_snapshot().map_err(display_error)?
+    };
+    let has_cost_inputs = !snapshot.cost_inputs.is_empty();
     let mut usage = Some(TokenUsage::default());
     let mut total_cost = 0.0;
     let mut all_priced = true;
-    for input in cost_inputs {
+    for input in snapshot.cost_inputs {
         let Some(call_total) = input.input_tokens.checked_add(input.output_tokens) else {
             usage = None;
             all_priced = false;
@@ -1276,10 +1271,11 @@ fn dashboard_inner(state: &AppState) -> Result<Summary, String> {
         }
     }
     Ok(Summary {
+        activity_revision: snapshot.revision,
         range_label: "全部已采集模型交互".into(),
-        records: all.total,
-        successful,
-        failed,
+        records: snapshot.records,
+        successful: snapshot.successful,
+        failed: snapshot.failed,
         input_tokens: usage.as_ref().map(|value| value.input_tokens),
         cached_input_tokens: usage.as_ref().map(|value| value.cached_input_tokens),
         cache_write_input_tokens: usage.as_ref().map(|value| value.cache_write_input_tokens),
@@ -1290,21 +1286,21 @@ fn dashboard_inner(state: &AppState) -> Result<Summary, String> {
     })
 }
 
-fn activity_total_for_result(state: &AppState, result: &str) -> Result<i64, String> {
-    state
-        .store
-        .lock()
-        .map_err(lock_err)?
-        .page_activity(&ActivityFilter {
-            limit: Some(1),
-            result: Some(result.into()),
-            ..Default::default()
-        })
-        .map(|page| page.total)
-        .map_err(display_error)
-}
-
 fn list_activity_inner(state: &AppState, query: ActivityQuery) -> Result<ActivityPage, String> {
+    if query.revision_only.unwrap_or(false) {
+        let revision = state
+            .store
+            .lock()
+            .map_err(lock_err)?
+            .activity_revision()
+            .map_err(display_error)?;
+        return Ok(ActivityPage {
+            items: Vec::new(),
+            next_cursor: None,
+            total: None,
+            revision,
+        });
+    }
     let result = match query.result.as_deref() {
         Some("success") => Some("success".to_string()),
         Some("failure") => Some("failure".to_string()),
@@ -1312,11 +1308,10 @@ fn list_activity_inner(state: &AppState, query: ActivityQuery) -> Result<Activit
         Some("unknown") => Some("unknown".to_string()),
         _ => None,
     };
-    let page = state
-        .store
-        .lock()
-        .map_err(lock_err)?
-        .page_activity(&ActivityFilter {
+    let refresh_only = query.refresh_only.unwrap_or(false);
+    let snapshot = {
+        let store = state.store.lock().map_err(lock_err)?;
+        let filter = ActivityFilter {
             cursor: query.cursor,
             limit: query.limit,
             project_path: non_empty(query.project_path),
@@ -1324,12 +1319,21 @@ fn list_activity_inner(state: &AppState, query: ActivityQuery) -> Result<Activit
             effort: non_empty(query.effort),
             result,
             search: non_empty(query.search),
-        })
-        .map_err(display_error)?;
+        };
+        store
+            .activity_snapshot(&filter, !refresh_only)
+            .map_err(display_error)?
+    };
     Ok(ActivityPage {
-        items: page.items.into_iter().map(activity_public).collect(),
-        next_cursor: page.next_cursor,
-        total: page.total,
+        items: snapshot
+            .page
+            .items
+            .into_iter()
+            .map(activity_public)
+            .collect(),
+        next_cursor: snapshot.page.next_cursor,
+        total: (!refresh_only).then_some(snapshot.page.total),
+        revision: snapshot.revision,
     })
 }
 

@@ -15,6 +15,7 @@ export interface MetricValue<T> {
 }
 
 export interface DashboardSummary {
+  activityRevision: string;
   rangeLabel: string;
   records: number;
   successful: number;
@@ -63,12 +64,15 @@ export interface ActivityQuery {
   effort?: string | null;
   result?: ActivityResult | null;
   search?: string | null;
+  refreshOnly?: boolean;
+  revisionOnly?: boolean;
 }
 
 export interface ActivityPage {
   items: ActivityRecord[];
   nextCursor: string | null;
-  total: number;
+  total: number | null;
+  revision: string;
 }
 
 export interface SourceHealth {
@@ -268,7 +272,7 @@ export interface AuthProfileOperationResult {
 }
 
 export interface BootstrapPayload {
-  summary: DashboardSummary;
+  summary: DashboardSummary | null;
   activity: ActivityPage;
   projects: ProjectSummary[];
   sources: SourceHealth[];

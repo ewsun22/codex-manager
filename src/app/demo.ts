@@ -29,8 +29,10 @@ const projectPath = "/Users/example/Projects/signal-catalog";
 const infraProjectPath = "/Users/example/Projects/infra-scripts";
 const globalAgentsPath = "/Users/example/.codex/AGENTS.md";
 const projectAgentsPath = `${projectPath}/AGENTS.md`;
+const activityRevision = "demo-activity-60";
 
 const summary: DashboardSummary = {
+  activityRevision,
   rangeLabel: "最近 24 小时",
   records: 60,
   successful: 45,
@@ -444,7 +446,8 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
     return {
       items: items.slice(safeOffset, nextOffset),
       nextCursor: nextOffset < items.length ? String(nextOffset) : null,
-      total: items.length,
+      total: query?.refreshOnly ? null : items.length,
+      revision: activityRevision,
     };
   };
 
@@ -462,6 +465,14 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
     case COMMANDS.getDashboard:
       return summary as T;
     case COMMANDS.listActivity:
+      if (query?.revisionOnly) {
+        return {
+          items: [],
+          nextCursor: null,
+          total: null,
+          revision: activityRevision,
+        } satisfies ActivityPage as T;
+      }
       return page(filterActivity(query)) as T;
     case COMMANDS.listProjects:
     case COMMANDS.discoverProjects:

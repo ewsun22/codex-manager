@@ -74,6 +74,10 @@ function uniqueStrings(values: Array<string | null>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))].sort();
 }
 
+function activityQueryKey(query: ActivityQuery): string {
+  return JSON.stringify(query);
+}
+
 function appError(error: unknown): string {
   return error instanceof Error ? error.message : "操作未完成，请查看本地采集状态后重试。";
 }
@@ -191,19 +195,21 @@ function SourceHealthCards({ sources }: { sources: SourceHealth[] }) {
 }
 
 function Overview({ payload, onNavigate }: { payload: BootstrapPayload; onNavigate: (view: View) => void }) {
-  const successRate = payload.summary.records > 0 ? payload.summary.successful / payload.summary.records : null;
+  const summary = payload.summary;
+  const successRate = summary && summary.records > 0 ? summary.successful / summary.records : null;
   const cacheRatio =
-    payload.summary.inputTokens !== null
-    && payload.summary.inputTokens > 0
-    && payload.summary.cachedInputTokens !== null
-      ? payload.summary.cachedInputTokens / payload.summary.inputTokens
+    summary?.inputTokens !== null
+    && summary?.inputTokens !== undefined
+    && summary.inputTokens > 0
+    && summary.cachedInputTokens !== null
+      ? summary.cachedInputTokens / summary.inputTokens
       : null;
 
   return (
     <div className="view-content">
       <SectionHeader
         title="本地 Codex 运行概览"
-        subtitle={`${payload.summary.rangeLabel} · 仅保留元数据，不读取或保存消息正文。`}
+        subtitle={`${summary?.rangeLabel ?? "正在后台汇总已采集模型交互"} · 仅保留元数据，不读取或保存消息正文。`}
         action={
           <button type="button" className="button button-primary" onClick={() => onNavigate("activity")}>
             查看活动记录
@@ -212,10 +218,10 @@ function Overview({ payload, onNavigate }: { payload: BootstrapPayload; onNaviga
       />
 
       <section className="metric-grid" aria-label="核心指标">
-        <MetricCard label="交互记录" value={formatCount(payload.summary.records)} detail={`${formatCount(payload.summary.successful)} 成功 · ${formatCount(payload.summary.failed)} 失败`} />
-        <MetricCard label="缓存命中" value={formatRatio(cacheRatio)} detail={`${formatCount(payload.summary.cachedInputTokens, true)} read · ${formatCount(payload.summary.cacheWriteInputTokens, true)} write`} tone="accent" />
-        <MetricCard label="API 等价估算" value={formatUsd(payload.summary.equivalentCostUsd)} detail="目录估算；套餐与中转账单不可得" tone="accent" />
-        <MetricCard label="成功率" value={formatRatio(successRate)} detail="缺少状态码的记录不会猜测" tone={payload.summary.failed ? "warn" : "default"} />
+        <MetricCard label="交互记录" value={formatCount(summary?.records)} detail={summary ? `${formatCount(summary.successful)} 成功 · ${formatCount(summary.failed)} 失败` : "启动后在后台汇总"} />
+        <MetricCard label="缓存命中" value={formatRatio(cacheRatio)} detail={summary ? `${formatCount(summary.cachedInputTokens, true)} read · ${formatCount(summary.cacheWriteInputTokens, true)} write` : "启动后在后台汇总"} tone="accent" />
+        <MetricCard label="API 等价估算" value={formatUsd(summary?.equivalentCostUsd)} detail={summary ? "目录估算；套餐与中转账单不可得" : "按单次 model call 后台计价"} tone="accent" />
+        <MetricCard label="成功率" value={formatRatio(successRate)} detail={summary ? "缺少状态码的记录不会猜测" : "启动后在后台汇总"} tone={summary?.failed ? "warn" : "default"} />
       </section>
 
       <section className="overview-grid">
@@ -427,17 +433,119 @@ function ActivityView({
   initial,
   projects,
   onLoad,
+  refreshRevision,
+  fullRefreshRevision,
 }: {
   initial: ActivityPage;
   projects: ProjectSummary[];
   onLoad: (query: ActivityQuery) => Promise<ActivityPage>;
+  refreshRevision: number;
+  fullRefreshRevision: number;
 }) {
   const [query, setQuery] = useState<ActivityQuery>({ limit: 50 });
   const [page, setPage] = useState<ActivityPage>(initial);
   const [selected, setSelected] = useState<ActivityRecord | null>(null);
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cursorHistory, setCursorHistory] = useState<Array<string | null>>([]);
+  const queryRef = useRef(query);
+  const mountedRef = useRef(true);
+  const loadInFlight = useRef(false);
+  const activeLoad = useRef<{ id: number; query: ActivityQuery; blocking: boolean; countTotal: boolean } | null>(null);
+  const revisionProbeInFlight = useRef(false);
+  const revisionRef = useRef(initial.revision);
+  const latestLoadId = useRef(0);
+  const pendingLoad = useRef<{ id: number; query: ActivityQuery; blocking: boolean; countTotal: boolean } | null>(null);
+  const observedQueryKey = useRef(activityQueryKey(query));
+
+  queryRef.current = query;
+
+  const requestLoad = useCallback((nextQuery: ActivityQuery, blocking: boolean, countTotal = blocking) => {
+    const request = { id: ++latestLoadId.current, query: nextQuery, blocking, countTotal };
+    const run = (current: typeof request) => {
+      loadInFlight.current = true;
+      activeLoad.current = current;
+      if (current.blocking) setLoading(true);
+      setSyncing(true);
+      setError(null);
+      void onLoad({ ...current.query, refreshOnly: !current.countTotal })
+        .then((next) => {
+          if (mountedRef.current && current.id === latestLoadId.current && activityQueryKey(queryRef.current) === activityQueryKey(current.query)) {
+            revisionRef.current = next.revision;
+            setPage((previous) => ({
+              ...next,
+              total: next.total ?? previous.total,
+            }));
+            setUpdatedAt(new Date().toISOString());
+          }
+        })
+        .catch((nextError: unknown) => {
+          if (mountedRef.current && current.id === latestLoadId.current) setError(appError(nextError));
+        })
+        .finally(() => {
+          if (!mountedRef.current) {
+            pendingLoad.current = null;
+            loadInFlight.current = false;
+            return;
+          }
+          const pending = pendingLoad.current;
+          pendingLoad.current = null;
+          loadInFlight.current = false;
+          activeLoad.current = null;
+          if (current.blocking) setLoading(false);
+          if (pending) {
+            run(pending);
+          } else {
+            setSyncing(false);
+          }
+        });
+    };
+
+    if (loadInFlight.current) {
+      const pending = pendingLoad.current;
+      const active = activeLoad.current;
+      const matchesActiveQuery = active !== null
+        && activityQueryKey(active.query) === activityQueryKey(request.query);
+      pendingLoad.current = {
+        ...request,
+        // A user-initiated query or page change must retain its full loading state
+        // when it overtakes a background refresh.
+        blocking: request.blocking || pending?.blocking === true
+          || (matchesActiveQuery && active.blocking),
+        countTotal: request.countTotal || pending?.countTotal === true
+          || (matchesActiveQuery && active.countTotal),
+      };
+      return;
+    }
+    run(request);
+  }, [onLoad]);
+
+  const pollRevision = useCallback(() => {
+    if (revisionProbeInFlight.current) return;
+    revisionProbeInFlight.current = true;
+    void onLoad({ revisionOnly: true })
+      .then((probe) => {
+        if (mountedRef.current && probe.revision !== revisionRef.current) {
+          requestLoad(queryRef.current, false, false);
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        revisionProbeInFlight.current = false;
+      });
+  }, [onLoad, requestLoad]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      latestLoadId.current += 1;
+      pendingLoad.current = null;
+      activeLoad.current = null;
+    };
+  }, []);
 
   const updateQuery = (next: ActivityQuery) => {
     setCursorHistory([]);
@@ -455,28 +563,39 @@ function ActivityView({
   };
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    void onLoad(query)
-      .then((next) => {
-        if (!cancelled) setPage(next);
-      })
-      .catch((nextError: unknown) => {
-        if (!cancelled) setError(appError(nextError));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [initial, query, onLoad]);
+    // Bootstrap already contains the first activity page. Do not immediately
+    // repeat the same expensive query when the user opens this view.
+    const nextQueryKey = activityQueryKey(query);
+    if (nextQueryKey === observedQueryKey.current) return;
+    observedQueryKey.current = nextQueryKey;
+    requestLoad(query, true, true);
+  }, [query, requestLoad]);
+
+  useEffect(() => {
+    if (page.total === null && initial.total !== null) {
+      setPage((current) => ({ ...current, total: initial.total }));
+    }
+  }, [initial.total, page.total]);
+
+  useEffect(() => {
+    if (refreshRevision > 0) requestLoad(queryRef.current, false, false);
+  }, [refreshRevision, requestLoad]);
+
+  useEffect(() => {
+    if (fullRefreshRevision > 0) requestLoad(queryRef.current, false, true);
+  }, [fullRefreshRevision, requestLoad]);
+
+  useEffect(() => {
+    const timer = window.setInterval(pollRevision, 5_000);
+    return () => window.clearInterval(timer);
+  }, [pollRevision]);
 
   return (
     <div className="view-content">
       <SectionHeader title="活动记录" subtitle="每行代表一次归一化模型交互或 OTel API 请求；没有模型调用的失败 turn 仍会保留。不能可靠取得的字段会明确显示 unavailable。" />
       <ActivityFilters
         query={query}
-        records={initial.items}
+        records={page.items}
         projects={projects}
         onChange={updateQuery}
         onReset={() => { setCursorHistory([]); setQuery({ limit: 50 }); }}
@@ -485,7 +604,7 @@ function ActivityView({
         <div className="panel-title-row">
           <div>
             <h2 id="activity-table-heading">{formatCount(page.total)} 条记录</h2>
-            <p>可信度标签描述采集路径，不能替代账单或服务端日志。</p>
+            <p>可信度标签描述采集路径，不能替代账单或服务端日志。<span role="status" aria-live="polite"> 每 5 秒自动更新{syncing ? " · 正在同步…" : updatedAt ? ` · 最近更新 ${formatDate(updatedAt)}` : ""}</span></p>
           </div>
           <label className="page-size">
             <span>每页</span>
@@ -1349,8 +1468,44 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [saving, setSaving] = useState(false);
+  const [activityRefreshRevision, setActivityRefreshRevision] = useState(0);
+  const [activityFullRefreshRevision, setActivityFullRefreshRevision] = useState(0);
   const bootstrapInFlight = useRef(false);
   const bootstrapPending = useRef<boolean | null>(null);
+  const dashboardInFlight = useRef(false);
+  const dashboardPending = useRef(false);
+  const activityRescanInFlight = useRef(false);
+  const activeViewRef = useRef<View>(view);
+  const previousViewRef = useRef<View>(view);
+
+  activeViewRef.current = view;
+
+  const refreshDashboard = useCallback(async () => {
+    if (dashboardInFlight.current) {
+      dashboardPending.current = true;
+      return;
+    }
+    dashboardInFlight.current = true;
+    try {
+      const summary = await invokeBackend<NonNullable<BootstrapPayload["summary"]>>(COMMANDS.getDashboard);
+      setPayload((current) => current ? {
+        ...current,
+        summary,
+        activity: current.activity.total === null
+          && current.activity.revision === summary.activityRevision
+          ? { ...current.activity, total: summary.records }
+          : current.activity,
+      } : current);
+    } catch {
+      // The shell and activity list remain usable if the expensive aggregate
+      // is temporarily unavailable. A later refresh retries it.
+    } finally {
+      const pending = dashboardPending.current;
+      dashboardPending.current = false;
+      dashboardInFlight.current = false;
+      if (pending) void refreshDashboard();
+    }
+  }, []);
 
   const refreshBootstrap = useCallback(async (rescan = false) => {
     if (bootstrapInFlight.current) {
@@ -1364,7 +1519,8 @@ export function App() {
       if (rescan && isDesktopRuntime()) {
         await invokeBackend<SourceHealth[]>(COMMANDS.rescan);
       }
-      setPayload(await invokeBackend<BootstrapPayload>(COMMANDS.bootstrap));
+      const next = await invokeBackend<BootstrapPayload>(COMMANDS.bootstrap);
+      setPayload(next);
     } catch (nextError: unknown) {
       setError(appError(nextError));
     } finally {
@@ -1374,9 +1530,29 @@ export function App() {
       setLoading(false);
       if (pendingRescan !== null) void refreshBootstrap(pendingRescan);
     }
-  }, []);
+  }, [refreshDashboard]);
 
   useEffect(() => { void refreshBootstrap(); }, [refreshBootstrap]);
+
+  const refreshLocalData = useCallback(async () => {
+    if (activeViewRef.current === "activity" && isDesktopRuntime()) {
+      if (activityRescanInFlight.current) return;
+      activityRescanInFlight.current = true;
+      setLoading(true);
+      setError(null);
+      try {
+        await invokeBackend<SourceHealth[]>(COMMANDS.rescan);
+        setActivityFullRefreshRevision((revision) => revision + 1);
+      } catch (nextError: unknown) {
+        setError(appError(nextError));
+      } finally {
+        activityRescanInFlight.current = false;
+        setLoading(false);
+      }
+      return;
+    }
+    await refreshBootstrap(true);
+  }, [refreshBootstrap]);
 
   useEffect(() => {
     if (!isDesktopRuntime()) return;
@@ -1396,7 +1572,11 @@ export function App() {
         if (pendingRefresh !== undefined) return;
         pendingRefresh = window.setTimeout(() => {
           pendingRefresh = undefined;
-          void refreshBootstrap();
+          if (activeViewRef.current === "activity") {
+            setActivityRefreshRevision((revision) => revision + 1);
+          } else {
+            void refreshBootstrap();
+          }
         }, 2_000);
       }))
       .then((listener) => {
@@ -1412,6 +1592,15 @@ export function App() {
   }, [refreshBootstrap]);
 
   const loadActivity = useCallback((query: ActivityQuery) => invokeBackend<ActivityPage>(COMMANDS.listActivity, { query }), []);
+
+  useEffect(() => {
+    const previous = previousViewRef.current;
+    previousViewRef.current = view;
+    if (!payload) return;
+    if (payload.summary === null || (view === "overview" && previous !== "overview")) {
+      void refreshDashboard();
+    }
+  }, [payload, refreshDashboard, view]);
   const updateSettings = async (next: AppSettings) => {
     setSaving(true);
     try {
@@ -1444,13 +1633,13 @@ export function App() {
     if (!payload) return null;
     switch (view) {
       case "overview": return <Overview payload={payload} onNavigate={setView} />;
-      case "activity": return <ActivityView initial={payload.activity} projects={projects} onLoad={loadActivity} />;
+      case "activity": return <ActivityView initial={payload.activity} projects={projects} onLoad={loadActivity} refreshRevision={activityRefreshRevision} fullRefreshRevision={activityFullRefreshRevision} />;
       case "projects": return <ProjectsView projects={projects} authorizedRoots={payload.settings.authorizedRoots} onProjectsChange={(next) => setPayload((old) => old ? { ...old, projects: next } : old)} showNotice={setNotice} />;
       case "oauth": return <OAuthView showNotice={setNotice} />;
       case "pricing": return <PricingView rules={payload.pricingRules} />;
       case "settings": return <SettingsView settings={payload.settings} capability={payload.capability} onSave={(next) => void updateSettings(next)} onProbe={() => void probe()} saving={saving} />;
     }
-  }, [loadActivity, payload, projects, saving, view]);
+  }, [activityFullRefreshRevision, activityRefreshRevision, loadActivity, payload, projects, saving, view]);
 
   return (
     <div className="app-shell">
@@ -1462,7 +1651,7 @@ export function App() {
         <div className="sidebar-foot"><span className="runtime-mark" aria-hidden="true" />{shellLabel}<small>不做反向代理；不修改 Codex 配置。</small></div>
       </aside>
       <main className="main-area">
-        <header className="topbar"><div><span className="topbar-crumb">工作台</span><span className="topbar-separator">/</span><span>{navItems.find((item) => item.id === view)?.label}</span></div><button type="button" className="button button-secondary" onClick={() => void refreshBootstrap(true)} disabled={loading}>{loading ? "刷新中…" : "刷新本地数据"}</button></header>
+        <header className="topbar"><div><span className="topbar-crumb">工作台</span><span className="topbar-separator">/</span><span>{navItems.find((item) => item.id === view)?.label}</span></div><button type="button" className="button button-secondary" onClick={() => void refreshLocalData()} disabled={loading}>{loading ? "刷新中…" : "刷新本地数据"}</button></header>
         {notice ? <InlineNotice notice={notice} onClose={() => setNotice(null)} /> : null}
         {loading && !payload ? <LoadingState /> : null}
         {error && !payload ? <div className="fatal-error"><EmptyState title="无法连接本地管理服务" detail={error} action={<button type="button" className="button button-primary" onClick={() => void refreshBootstrap()}>重试</button>} /></div> : null}

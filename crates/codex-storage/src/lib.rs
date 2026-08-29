@@ -148,6 +148,21 @@ pub struct Page<T> {
     pub total: i64,
 }
 
+#[derive(Clone, Debug)]
+pub struct ActivitySnapshot {
+    pub page: Page<ActivityRow>,
+    pub revision: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct DashboardSnapshot {
+    pub records: i64,
+    pub successful: i64,
+    pub failed: i64,
+    pub cost_inputs: Vec<CostInput>,
+    pub revision: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectRow {
@@ -451,9 +466,9 @@ impl Store {
 fn activity_sql(filter: &ActivityFilter) -> (String, Vec<String>) {
     let mut sql = String::from(
         "WITH activity AS (\
-SELECT c.event_key AS id,coalesce(c.public_event_key,c.event_key) AS event_key,'rollout' AS source_kind,coalesce(s.public_session_id,c.session_id) AS session_id,c.turn_id,c.occurred_at,t.cwd,coalesce(c.model,t.model) AS model,coalesce(c.effort,t.effort) AS effort,coalesce(c.provider,t.provider) AS provider,t.result,t.duration_ms,t.first_visible_output_ms,c.input_tokens,c.cached_input_tokens,c.cache_write_input_tokens,c.output_tokens,c.reasoning_output_tokens,c.total_tokens,1 AS input_available,1 AS cached_available,1 AS cache_write_available,1 AS output_available,1 AS reasoning_available,1 AS total_available,1 AS has_model_call,NULL AS status_code,NULL AS response_bytes,NULL AS endpoint,NULL AS success FROM (SELECT * FROM (SELECT c.*,ROW_NUMBER() OVER(PARTITION BY coalesce(c.logical_fingerprint,'legacy:' || c.event_key) ORDER BY c.event_key) AS logical_rank FROM model_calls c) WHERE logical_rank=1) c JOIN turns t ON t.session_id=c.session_id AND t.turn_id=c.turn_id JOIN sessions s ON s.session_id=c.session_id \
+SELECT c.event_key AS id,coalesce(c.public_event_key,c.event_key) AS event_key,'rollout' AS source_kind,coalesce(s.public_session_id,c.session_id) AS session_id,c.turn_id,c.occurred_at,t.cwd,coalesce(c.model,t.model) AS model,coalesce(c.effort,t.effort) AS effort,coalesce(c.provider,t.provider) AS provider,t.result,t.duration_ms,t.first_visible_output_ms,c.input_tokens,c.cached_input_tokens,c.cache_write_input_tokens,c.output_tokens,c.reasoning_output_tokens,c.total_tokens,1 AS input_available,1 AS cached_available,1 AS cache_write_available,1 AS output_available,1 AS reasoning_available,1 AS total_available,1 AS has_model_call,NULL AS status_code,NULL AS response_bytes,NULL AS endpoint,NULL AS success FROM model_calls c JOIN turns t ON t.session_id=c.session_id AND t.turn_id=c.turn_id JOIN sessions s ON s.session_id=c.session_id WHERE (c.logical_fingerprint IS NULL OR NOT EXISTS(SELECT 1 FROM model_calls earlier WHERE earlier.logical_fingerprint=c.logical_fingerprint AND earlier.event_key<c.event_key)) \
  UNION ALL \
-SELECT 'turn:' || t.session_id || ':' || t.turn_id,NULL,'rollout',coalesce(s.public_session_id,t.session_id),t.turn_id,coalesce(t.completed_at,t.started_at),t.cwd,t.model,t.effort,t.provider,t.result,t.duration_ms,t.first_visible_output_ms,t.input_tokens,t.cached_input_tokens,t.cache_write_input_tokens,t.output_tokens,t.reasoning_output_tokens,t.total_tokens,0,0,0,0,0,0,0,NULL,NULL,NULL,NULL FROM (SELECT * FROM (SELECT t.*,ROW_NUMBER() OVER(PARTITION BY coalesce(t.logical_fingerprint,'legacy:' || t.session_id || ':' || t.turn_id) ORDER BY t.session_id,t.turn_id) AS logical_rank FROM turns t) WHERE logical_rank=1) t JOIN sessions s ON s.session_id=t.session_id WHERE NOT EXISTS(SELECT 1 FROM model_calls c WHERE c.session_id=t.session_id AND c.turn_id=t.turn_id) \
+SELECT 'turn:' || t.session_id || ':' || t.turn_id,NULL,'rollout',coalesce(s.public_session_id,t.session_id),t.turn_id,coalesce(t.completed_at,t.started_at),t.cwd,t.model,t.effort,t.provider,t.result,t.duration_ms,t.first_visible_output_ms,t.input_tokens,t.cached_input_tokens,t.cache_write_input_tokens,t.output_tokens,t.reasoning_output_tokens,t.total_tokens,0,0,0,0,0,0,0,NULL,NULL,NULL,NULL FROM turns t JOIN sessions s ON s.session_id=t.session_id WHERE (t.logical_fingerprint IS NULL OR NOT EXISTS(SELECT 1 FROM turns earlier WHERE earlier.logical_fingerprint=t.logical_fingerprint AND (earlier.session_id<t.session_id OR (earlier.session_id=t.session_id AND earlier.turn_id<t.turn_id)))) AND NOT EXISTS(SELECT 1 FROM model_calls c WHERE c.session_id=t.session_id AND c.turn_id=t.turn_id) \
  UNION ALL \
 SELECT 'otel:' || o.id,o.id,'otel',o.thread_id,o.turn_id,coalesce(o.occurred_at,o.received_at),NULL,o.model,NULL,o.provider,CASE WHEN o.status_code BETWEEN 200 AND 399 THEN 'completed' WHEN o.status_code IS NOT NULL THEN 'failed' WHEN o.success=1 THEN 'completed' WHEN o.success=0 THEN 'failed' ELSE 'unknown' END,o.duration_ms,NULL,coalesce(o.input_tokens,0),coalesce(o.cached_input_tokens,0),coalesce(o.cache_write_input_tokens,0),coalesce(o.output_tokens,0),coalesce(o.reasoning_output_tokens,0),coalesce(o.total_tokens,0),o.input_tokens IS NOT NULL,o.cached_input_tokens IS NOT NULL,o.cache_write_input_tokens IS NOT NULL,o.output_tokens IS NOT NULL,o.reasoning_output_tokens IS NOT NULL,o.total_tokens IS NOT NULL,0,o.status_code,o.response_bytes,o.endpoint,o.success FROM otel_events o WHERE o.signal='logs' AND o.event_name='codex.api_request' \
 ) SELECT id,event_key,source_kind,session_id,turn_id,occurred_at,cwd,model,effort,provider,result,duration_ms,first_visible_output_ms,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,input_available,cached_available,cache_write_available,output_available,reasoning_available,total_available,has_model_call,status_code,response_bytes,endpoint,success FROM activity WHERE 1=1",
@@ -922,25 +937,50 @@ impl Store {
         })
     }
     pub fn page_activity(&self, filter: &ActivityFilter) -> Result<Page<ActivityRow>> {
+        self.query_activity_on(&self.conn, filter, true)
+    }
+    pub fn refresh_activity(&self, filter: &ActivityFilter) -> Result<Page<ActivityRow>> {
+        self.query_activity_on(&self.conn, filter, false)
+    }
+    pub fn activity_snapshot(
+        &self,
+        filter: &ActivityFilter,
+        include_total: bool,
+    ) -> Result<ActivitySnapshot> {
+        self.read_snapshot(|conn| {
+            Ok(ActivitySnapshot {
+                page: self.query_activity_on(conn, filter, include_total)?,
+                revision: self.activity_revision_on(conn)?,
+            })
+        })
+    }
+    fn query_activity_on(
+        &self,
+        conn: &Connection,
+        filter: &ActivityFilter,
+        include_total: bool,
+    ) -> Result<Page<ActivityRow>> {
         let limit = filter.limit.unwrap_or(50).clamp(1, 200);
         let (mut sql, values) = activity_sql(filter);
-        let mut count_filter = filter.clone();
-        count_filter.cursor = None;
-        let (count_select, count_values) = activity_sql(&count_filter);
-        let count_sql = format!("SELECT count(*) FROM ({count_select})");
-        let count_params: Vec<&dyn rusqlite::ToSql> = count_values
-            .iter()
-            .map(|v| v as &dyn rusqlite::ToSql)
-            .collect();
-        let total = self
-            .conn
-            .query_row(&count_sql, count_params.as_slice(), |row| row.get(0))?;
+        let total = if include_total {
+            let mut count_filter = filter.clone();
+            count_filter.cursor = None;
+            let (count_select, count_values) = activity_sql(&count_filter);
+            let count_sql = format!("SELECT count(*) FROM ({count_select})");
+            let count_params: Vec<&dyn rusqlite::ToSql> = count_values
+                .iter()
+                .map(|v| v as &dyn rusqlite::ToSql)
+                .collect();
+            conn.query_row(&count_sql, count_params.as_slice(), |row| row.get(0))?
+        } else {
+            0
+        };
         sql.push_str(" ORDER BY COALESCE(occurred_at,'') DESC, id DESC LIMIT ?");
         let fetch_limit = limit.saturating_add(1);
         let mut params: Vec<&dyn rusqlite::ToSql> =
             values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
         params.push(&fetch_limit);
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = conn.prepare(&sql)?;
         let mut items = stmt
             .query_map(params.as_slice(), row_activity)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -953,10 +993,41 @@ impl Store {
             total,
         })
     }
+    pub fn activity_revision(&self) -> Result<String> {
+        self.activity_revision_on(&self.conn)
+    }
+    fn activity_revision_on(&self, conn: &Connection) -> Result<String> {
+        let rollout = conn.query_row(
+            "SELECT coalesce(max(updated_at),'') || ':' || count(*) || ':' || coalesce(sum(byte_offset),0) FROM ingest_files",
+            [],
+            |row| row.get::<_, String>(0),
+        )?;
+        let otel = conn.query_row(
+            "SELECT coalesce(max(rowid),0) FROM otel_events",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(format!("rollout:{rollout}|otel:{otel}"))
+    }
+    pub fn activity_totals(&self) -> Result<(i64, i64, i64)> {
+        self.activity_totals_on(&self.conn)
+    }
+    fn activity_totals_on(&self, conn: &Connection) -> Result<(i64, i64, i64)> {
+        let (activity, values) = activity_sql(&ActivityFilter::default());
+        debug_assert!(values.is_empty());
+        let sql = format!(
+            "SELECT count(*),coalesce(sum(result='completed'),0),coalesce(sum(result IN ('failed','aborted')),0) FROM ({activity})"
+        );
+        conn.query_row(&sql, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(Into::into)
+    }
     pub fn cost_inputs(&self) -> Result<Vec<CostInput>> {
+        self.cost_inputs_on(&self.conn)
+    }
+    fn cost_inputs_on(&self, conn: &Connection) -> Result<Vec<CostInput>> {
         // Keep one row per model call: long-context pricing is determined per
         // request and cannot be reconstructed from a provider/model aggregate.
-        let mut statement=self.conn.prepare("SELECT c.provider,c.model,c.input_tokens,c.cached_input_tokens,c.cache_write_input_tokens,c.output_tokens,c.reasoning_output_tokens FROM (SELECT * FROM (SELECT c.*,ROW_NUMBER() OVER(PARTITION BY coalesce(c.logical_fingerprint,'legacy:' || c.event_key) ORDER BY c.event_key) AS logical_rank FROM model_calls c) WHERE logical_rank=1) c JOIN turns t ON t.session_id=c.session_id AND t.turn_id=c.turn_id WHERE t.usage_confidence <> 'unavailable' ORDER BY c.occurred_at,c.event_key")?;
+        let mut statement=conn.prepare("SELECT c.provider,c.model,c.input_tokens,c.cached_input_tokens,c.cache_write_input_tokens,c.output_tokens,c.reasoning_output_tokens FROM model_calls c JOIN turns t ON t.session_id=c.session_id AND t.turn_id=c.turn_id WHERE (c.logical_fingerprint IS NULL OR NOT EXISTS(SELECT 1 FROM model_calls earlier WHERE earlier.logical_fingerprint=c.logical_fingerprint AND earlier.event_key<c.event_key)) AND t.usage_confidence <> 'unavailable' ORDER BY c.occurred_at,c.event_key")?;
         Ok(statement
             .query_map([], |row| {
                 let input: i64 = row.get(2)?;
@@ -974,6 +1045,24 @@ impl Store {
                 })
             })?
             .collect::<rusqlite::Result<_>>()?)
+    }
+    pub fn dashboard_snapshot(&self) -> Result<DashboardSnapshot> {
+        self.read_snapshot(|conn| {
+            let (records, successful, failed) = self.activity_totals_on(conn)?;
+            Ok(DashboardSnapshot {
+                records,
+                successful,
+                failed,
+                cost_inputs: self.cost_inputs_on(conn)?,
+                revision: self.activity_revision_on(conn)?,
+            })
+        })
+    }
+    fn read_snapshot<T>(&self, read: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        let transaction = self.conn.unchecked_transaction()?;
+        let value = read(&transaction)?;
+        transaction.commit()?;
+        Ok(value)
     }
     pub fn source_health(&self) -> Result<Vec<SourceHealthRow>> {
         let mut statement=self.conn.prepare("SELECT canonical_path,source_kind,byte_offset,file_identity,updated_at,last_error,unparsed_events FROM ingest_files ORDER BY updated_at DESC")?;
@@ -1513,6 +1602,7 @@ mod tests {
             2
         );
         assert_eq!(store.cost_inputs().unwrap().len(), 2);
+        assert_eq!(store.activity_totals().unwrap(), (2, 2, 0));
         store.rebuild_source("archive-distinct-inode").unwrap();
         assert_eq!(store.summary().unwrap().3.total_tokens, 12);
 
@@ -1525,6 +1615,7 @@ mod tests {
                 .total,
             1
         );
+        assert_eq!(store.activity_totals().unwrap(), (1, 1, 0));
 
         let duplicate = snapshot(
             "same-session",
@@ -1655,6 +1746,16 @@ mod tests {
             .unwrap();
         assert_eq!(following.total, 2);
         assert_eq!(following.items.len(), 1);
+        let lightweight = store
+            .refresh_activity(&ActivityFilter {
+                limit: Some(1),
+                project_path: Some("/project-one".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(lightweight.total, 0);
+        assert_eq!(lightweight.items[0].id, page.items[0].id);
+        assert!(store.activity_revision().unwrap().contains("rollout:"));
         let failures = store
             .page_activity(&ActivityFilter {
                 result: Some("failure".into()),
@@ -1695,6 +1796,7 @@ mod tests {
             })
             .unwrap();
         let all = store.page_activity(&ActivityFilter::default()).unwrap();
+        assert_eq!(store.activity_totals().unwrap(), (4, 2, 2));
         let otel = all
             .items
             .iter()
@@ -1743,5 +1845,52 @@ mod tests {
             store.observed_cwds().unwrap(),
             vec!["/project-one".to_string(), "/project-two".to_string()]
         );
+    }
+
+    #[test]
+    fn read_snapshot_stays_consistent_across_an_independent_otel_write() {
+        use std::sync::{Arc, Barrier};
+
+        let directory = tempdir().unwrap();
+        let database_path = directory.path().join("snapshot.db");
+        let reader = Store::open(&database_path).unwrap();
+        let writer = Store::open(&database_path).unwrap();
+        let write_started = Arc::new(Barrier::new(2));
+        let write_finished = Arc::new(Barrier::new(2));
+        let writer_started = Arc::clone(&write_started);
+        let writer_finished = Arc::clone(&write_finished);
+        let handle = std::thread::spawn(move || {
+            writer_started.wait();
+            writer
+                .insert_otel_metadata(otel_event("concurrent-otel", Some("2026-08-27T00:00:02Z")))
+                .unwrap();
+            writer_finished.wait();
+        });
+
+        let (revision_before, revision_after, total_inside) = reader
+            .read_snapshot(|conn| {
+                let revision_before = reader.activity_revision_on(conn)?;
+                let total_before = reader
+                    .query_activity_on(conn, &ActivityFilter::default(), true)?
+                    .total;
+                write_started.wait();
+                write_finished.wait();
+                let revision_after = reader.activity_revision_on(conn)?;
+                let total_after = reader
+                    .query_activity_on(conn, &ActivityFilter::default(), true)?
+                    .total;
+                assert_eq!(total_before, total_after);
+                Ok((revision_before, revision_after, total_after))
+            })
+            .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(revision_before, revision_after);
+        assert_eq!(total_inside, 0);
+        let current = reader
+            .activity_snapshot(&ActivityFilter::default(), true)
+            .unwrap();
+        assert_ne!(current.revision, revision_before);
+        assert_eq!(current.page.total, 1);
     }
 }
