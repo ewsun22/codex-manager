@@ -17,7 +17,7 @@ Codex Desktop / CLI
                                              │
                                         React desktop UI
 
-User click ─ GitHub latest.json ─ Rust updater + embedded public key ─ native confirm ─ signed app replacement
+Desktop startup / interval ─ GitHub latest.json ─ Rust metadata check ─ sidebar/card reminder ─ User click ─ native confirm ─ signed app replacement
 
 OAuth UI ─ explicit IPC ─ bounded one-shot App Server account adapter ─ account/read + account/rateLimits/read
 User click ─ explicit IPC ─ exact `codex login` subprocess ─ system browser ─ official Codex credential store
@@ -88,7 +88,7 @@ SQLite 位于平台应用数据目录，启用 WAL、foreign keys、busy timeout
 - `otel_events`：allowlist 后的 OTel 元数据。
 - `projects`：canonical 项目路径、来源、Git/worktree 状态。
 - `agents_revisions`：两阶段 pending/applied revision，用于崩溃恢复、冲突保护和回滚。
-- `settings`：Codex homes、授权根目录、保留期、OTel 开关和价格目录版本。
+- `settings`：Codex homes、授权根目录、保留期、OTel 开关、价格目录版本和更新检查间隔（1–168 小时，默认 12 小时）。更新检查状态只保存最近检查尝试时间，以及最近成功检查的受限展示元数据：当前/可用版本、发布日期和截断后的 notes。
 
 保留期会清理旧 turn/session 与 OTel 记录；OTel 硬删除只依据本机 `received_at`，不信任客户端时间。AGENTS revision 不受该保留期影响，而是每个文件最多保留 20 版。
 
@@ -110,7 +110,7 @@ React 只使用 27 个显式 Tauri commands；其中 OTel 凭据只在用户点�
 
 ## 在线更新信任边界
 
-更新源和 minisign 公钥固定在 Tauri 配置中。WebView 只能调用 `check_for_update` 和 `install_pending_update`：前者返回当前/可用版本、日期和最多 4,000 字符的纯文本说明，不返回 URL、签名或原始 JSON；后者只能消费 Rust 内存中上一次成功检查所得的同一 `Update` 对象，期望版本不一致或应用重启后都必须重新检查。清单检查超时为 30 秒，已检查对象的下载/安装超时为 10 分钟；两者共用单飞行锁，下载/验签/安装失败不保留 pending update。
+更新源和 minisign 公钥固定在 Tauri 配置中。桌面应用壳层在启动后根据最近尝试时间判断是否到期，并按设置的间隔（默认 12 小时，范围 1–168 小时）调用受限 Rust 检查命令；浏览器 demo 不联网。WebView 只能调用 `check_for_update` 和 `install_pending_update`：前者返回当前/可用版本、日期和最多 4,000 字符的纯文本说明，不返回 URL、签名或原始 JSON；后端持久化最近检查尝试时间，以及最近成功检查的当前/可用版本、发布日期和截断后的 notes，成功或失败都从最近尝试起遵守配置间隔。发现新版本时由前端在设置侧栏和应用更新卡片显示提醒；失败不打断用户且保留上次成功状态。后者只能消费 Rust 内存中上一次成功检查所得的同一 `Update` 对象，期望版本不一致或应用重启后都必须重新检查。清单检查超时为 30 秒，已检查对象的下载/安装超时为 10 分钟；两者共用单飞行锁，下载/验签/安装失败不保留 pending update。下载、签名校验、安装和重启不由自动检查触发，仍要求用户显式操作、同进程重新检查、版本核对和 macOS 原生确认。
 
 网络请求由 Rust updater 执行，不放宽 WebView `connect-src`。安装前通过 Rust dialog 插件显示原生确认框；前端未被授予 dialog 或 updater 插件权限。Tauri 更新签名用于应用内包验证，Developer ID、Hardened Runtime、Apple notarization 和 stapling 用于 macOS Gatekeeper 信任，两条链都必须通过。
 

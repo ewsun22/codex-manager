@@ -20,7 +20,7 @@
 | 认证文件导入 | 不负责 | 不负责 | 不负责 | 暂停进程动态验签后，以 `chatgptAuthTokens` 外部认证 + `account/read` + `account/rateLimits/read` 验证 access token | 原生选择器；refresh token 不交给在线探测；秘密进入应用专用 Keychain |
 | 多账户切换 | 不负责 | 不负责 | 不负责 | `config/read` 证明 file 模式，切换前后 `account/read` 复核 | 用户确认后 CAS + 原子替换；keyring/auto 拒绝 |
 | 认证档案删除/恢复 | 不负责 | 不负责 | 不负责 | 不负责 | 活动/最后档案不可删；软删除 30 天可恢复 |
-| 应用在线更新 | 不负责 | 不负责 | 不负责 | 不负责 | 用户手动触发；GitHub Releases + Tauri 签名 + macOS 原生确认 |
+| 应用在线更新 | 不负责 | 不负责 | 不负责 | 不负责 | 桌面端启动后按需检查，默认每 12 小时自动检查（可配置 1–168 小时）；固定 GitHub Releases `latest.json` + Tauri 签名 + macOS 原生确认；新版本在侧栏和应用更新卡片提醒 |
 
 ## 活动记录字段口径（当前版本）
 
@@ -41,3 +41,4 @@
 - OAuth 认证边界当前只在 macOS 启用，只执行从固定 ChatGPT bundle 复制到随机私有目录并在复制后通过 OpenAI identifier/Team ID 验证的 Codex；其他平台显示 `unavailable`，等待等价的发布者身份验证。
 - 导入依赖 App Server 当前的 `chatgptAuthTokens` 协议，该协议变更时会 fail closed。导入时必须有可用 access token；为避免触发 refresh token 轮换，不在导入探测中单独验证 refresh token。
 - OTel metrics 是聚合数据；当前 Codex metrics 缺少稳定的逐 conversation 关联时，本应用不会把 histogram/count 展开为虚假的单次请求。
+- 浏览器 demo 不自动联网；自动更新检查仅属于桌面后端。

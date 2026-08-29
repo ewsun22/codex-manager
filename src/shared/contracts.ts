@@ -210,6 +210,7 @@ export interface AppSettings {
   codexHomes: string[];
   authorizedRoots: string[];
   retentionDays: number;
+  updateCheckIntervalHours: number;
   metadataOnly: true;
   telemetryEnabled: boolean;
   priceCatalogVersion: string;
@@ -225,9 +226,11 @@ export interface OtelConfig {
 export interface AppUpdateStatus {
   currentVersion: string;
   available: boolean;
+  installable: boolean;
   version: string | null;
   date: string | null;
   notes: string | null;
+  checkedAt: string;
 }
 
 export interface UpdateInstallResult {
@@ -302,6 +305,8 @@ export interface BootstrapPayload {
   pricingRules: PricingRule[];
   settings: AppSettings;
   capability: CodexCapability | null;
+  updateStatus: AppUpdateStatus | null;
+  updateCheckLastAttemptAt: string | null;
 }
 
 export const COMMANDS = {

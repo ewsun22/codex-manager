@@ -2,6 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import { invokeBackend, isDesktopRuntime } from "./app/client.ts";
 import { preferredAgentsFile } from "./app/agents.ts";
 import {
+  MAX_UPDATE_CHECK_INTERVAL_HOURS,
+  MIN_UPDATE_CHECK_INTERVAL_HOURS,
+  getUpdateCheckSchedule,
+  markUpdateStatusUninstallable,
+  normalizeUpdateCheckIntervalHours,
+} from "./app/update-scheduler.ts";
+import {
   formatCount,
   formatDate,
   formatMetric,
@@ -1451,22 +1458,29 @@ function OAuthView({ showNotice }: { showNotice: (notice: Notice) => void }) {
 function SettingsView({
   settings,
   capability,
+  updateStatus,
+  updateBusy,
+  updateMessage,
   onSave,
   onProbe,
+  onCheckUpdate,
+  onInstallUpdate,
   saving,
 }: {
   settings: AppSettings;
   capability: BootstrapPayload["capability"];
+  updateStatus: AppUpdateStatus | null;
+  updateBusy: "check" | "install" | null;
+  updateMessage: { tone: "success" | "error"; text: string } | null;
   onSave: (next: AppSettings) => void;
   onProbe: () => void;
+  onCheckUpdate: () => void;
+  onInstallUpdate: () => void;
   saving: boolean;
 }) {
   const [draft, setDraft] = useState(settings);
   const [otelConfig, setOtelConfig] = useState<OtelConfig | null>(null);
   const [otelConfigError, setOtelConfigError] = useState<string | null>(null);
-  const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
-  const [updateBusy, setUpdateBusy] = useState<"check" | "install" | null>(null);
-  const [updateMessage, setUpdateMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   useEffect(() => setDraft(settings), [settings]);
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1481,37 +1495,6 @@ function SettingsView({
       setOtelConfigError(appError(error));
     }
   };
-  const checkUpdate = async () => {
-    setUpdateBusy("check");
-    setUpdateMessage(null);
-    try {
-      const status = await invokeBackend<AppUpdateStatus>(COMMANDS.checkForUpdate);
-      setUpdateStatus(status);
-      if (!status.available) setUpdateMessage({ tone: "success", text: "当前已是最新版本。" });
-    } catch (error: unknown) {
-      setUpdateStatus(null);
-      setUpdateMessage({ tone: "error", text: appError(error) });
-    } finally {
-      setUpdateBusy(null);
-    }
-  };
-  const installUpdate = async () => {
-    if (!updateStatus?.version) return;
-    setUpdateBusy("install");
-    setUpdateMessage(null);
-    try {
-      const result = await invokeBackend<UpdateInstallResult>(COMMANDS.installPendingUpdate, { expectedVersion: updateStatus.version });
-      setUpdateMessage(result.accepted
-        ? { tone: "success", text: "更新已安装；桌面版将自动重启。" }
-        : { tone: "success", text: "已取消安装；再次安装前请重新检查更新。" });
-      setUpdateStatus(null);
-    } catch (error: unknown) {
-      setUpdateStatus(null);
-      setUpdateMessage({ tone: "error", text: appError(error) });
-    } finally {
-      setUpdateBusy(null);
-    }
-  };
   return (
     <div className="view-content">
       <SectionHeader title="设置" subtitle="所有路径设置仅在本机使用。授权根目录之外的 AGENTS 文件写入会被后端拒绝。" />
@@ -1520,7 +1503,8 @@ function SettingsView({
           <div className="panel-title-row"><div><h2>本地采集</h2><p>读取本机 Codex 产生的受支持元数据来源。</p></div></div>
           <label><span>Codex home（每行一个）</span><textarea value={draft.codexHomes.join("\n")} onChange={(event) => setDraft({ ...draft, codexHomes: event.target.value.split("\n").map((value) => value.trim()).filter(Boolean) })} /></label>
           <label><span>授权项目根目录（每行一个）</span><textarea value={draft.authorizedRoots.join("\n")} onChange={(event) => setDraft({ ...draft, authorizedRoots: event.target.value.split("\n").map((value) => value.trim()).filter(Boolean) })} /></label>
-          <div className="settings-inline"><label><span>保留天数</span><input type="number" min="1" max="3650" value={draft.retentionDays} onChange={(event) => setDraft({ ...draft, retentionDays: Math.max(1, Number(event.target.value)) })} /></label><label className="checkbox-row"><input type="checkbox" checked={draft.telemetryEnabled} onChange={(event) => setDraft({ ...draft, telemetryEnabled: event.target.checked })} /><span>启用本机 OTel receiver</span></label></div>
+          <div className="settings-inline"><label><span>保留天数</span><input type="number" min="1" max="3650" value={draft.retentionDays} onChange={(event) => setDraft({ ...draft, retentionDays: Math.max(1, Number(event.target.value)) })} /></label><label><span>自动检查间隔（小时）</span><input type="number" min={MIN_UPDATE_CHECK_INTERVAL_HOURS} max={MAX_UPDATE_CHECK_INTERVAL_HOURS} value={draft.updateCheckIntervalHours} onChange={(event) => setDraft({ ...draft, updateCheckIntervalHours: normalizeUpdateCheckIntervalHours(Number(event.target.value)) })} /></label><label className="checkbox-row"><input type="checkbox" checked={draft.telemetryEnabled} onChange={(event) => setDraft({ ...draft, telemetryEnabled: event.target.checked })} /><span>启用本机 OTel receiver</span></label></div>
+          <p className="settings-disclaimer">自动检查只读取固定 GitHub Release 元数据，不会下载或安装更新。</p>
           <p className="settings-disclaimer">此开关只控制本应用的 loopback receiver；它不会修改 Codex 配置。要产生 OTel 数据，需由你自行在 Codex 配置中明确启用并指向本机接收器。</p>
           <div className="otel-config-box">
             <div className="editor-actions">
@@ -1539,12 +1523,13 @@ function SettingsView({
             {capability ? <dl className="capability-list"><div><dt>可用性</dt><dd>{capability.available ? "可用" : "unavailable"}</dd></div><div><dt>版本</dt><dd>{capability.version ?? "unavailable"}</dd></div><div><dt>Schema SHA-256</dt><dd><code>{capability.schemaSha256 ?? "unavailable"}</code></dd></div><div><dt>上次探测</dt><dd>{formatDate(capability.checkedAt)}</dd></div><div><dt>可执行文件</dt><dd><code>{capability.executablePath}</code></dd></div></dl> : <EmptyState title="尚未探测 capability" detail="运行探测前不会将本机 Codex 数据格式描述为稳定 API。" />}
             {capability?.message ? <p className="capability-message">{capability.message}</p> : null}
           </section>
-          <section className="panel update-panel" aria-labelledby="update-heading">
-            <div className="panel-title-row"><div><h2 id="update-heading">应用更新</h2><p>仅在点击后检查 GitHub Releases，不会在启动时自动联网。</p></div><button type="button" className="button button-secondary" onClick={() => void checkUpdate()} disabled={updateBusy !== null}>{updateBusy === "check" ? "检查中…" : "检查更新"}</button></div>
+          <section className={`panel update-panel${updateStatus?.available ? " update-panel-available" : ""}`} aria-labelledby="update-heading">
+            <div className="panel-title-row"><div><h2 id="update-heading">应用更新</h2><p>按你设置的间隔读取固定 GitHub Releases 元数据；不会自动下载或安装。</p></div><button type="button" className="button button-secondary" onClick={onCheckUpdate} disabled={updateBusy !== null}>{updateBusy === "check" ? "检查中…" : "检查更新"}</button></div>
             {updateStatus ? <>
-              <dl className="capability-list"><div><dt>当前版本</dt><dd>{updateStatus.currentVersion}</dd></div><div><dt>可用版本</dt><dd>{updateStatus.version ?? "已是最新"}</dd></div>{updateStatus.date ? <div><dt>发布日期</dt><dd>{formatDate(updateStatus.date)}</dd></div> : null}</dl>
+              {updateStatus.available ? <div className="update-available-banner" role="status"><strong>发现新版本 {updateStatus.version ?? ""}</strong><span>{updateStatus.installable ? "已准备好供你确认安装。" : "这是已保存的检查结果；重新检查后才可安装。"}</span></div> : null}
+              <dl className="capability-list"><div><dt>当前版本</dt><dd>{updateStatus.currentVersion}</dd></div><div><dt>可用版本</dt><dd>{updateStatus.version ?? "已是最新"}</dd></div><div><dt>最近检查</dt><dd>{formatDate(updateStatus.checkedAt)}</dd></div>{updateStatus.date ? <div><dt>发布日期</dt><dd>{formatDate(updateStatus.date)}</dd></div> : null}</dl>
               {updateStatus.notes ? <p className="update-notes">{updateStatus.notes}</p> : null}
-              {updateStatus.available && updateStatus.version ? <div className="update-actions"><span>安装前会显示 macOS 原生确认框，并校验更新签名。</span><button type="button" className="button button-primary" onClick={() => void installUpdate()} disabled={updateBusy !== null}>{updateBusy === "install" ? "安装中…" : `安装 ${updateStatus.version}`}</button></div> : null}
+              {updateStatus.available && updateStatus.version ? <div className="update-actions"><span>{updateStatus.installable ? "安装前会显示 macOS 原生确认框，并校验更新签名。" : "这是上次检查的版本快照；请重新检查后再安装。"}</span><button type="button" className="button button-primary" onClick={updateStatus.installable ? onInstallUpdate : onCheckUpdate} disabled={updateBusy !== null}>{updateBusy === "install" ? "安装中…" : updateBusy === "check" ? "检查中…" : updateStatus.installable ? `安装 ${updateStatus.version}` : "重新检查后安装"}</button></div> : null}
             </> : <p className="capability-message">尚未检查。更新包来源、公钥和目标平台由桌面后端固定，网页层不能修改。</p>}
             {updateMessage ? <p className={`update-message update-message-${updateMessage.tone}`} role={updateMessage.tone === "error" ? "alert" : "status"}>{updateMessage.text}</p> : null}
           </section>
@@ -1557,6 +1542,9 @@ function SettingsView({
 export function App() {
   const [view, setView] = useState<View>("overview");
   const [payload, setPayload] = useState<BootstrapPayload | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
+  const [updateBusy, setUpdateBusy] = useState<"check" | "install" | null>(null);
+  const [updateMessage, setUpdateMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -1568,10 +1556,65 @@ export function App() {
   const dashboardInFlight = useRef(false);
   const dashboardPending = useRef(false);
   const activityRescanInFlight = useRef(false);
+  const updateCheckInFlight = useRef(false);
+  const updateStatusRef = useRef<AppUpdateStatus | null>(null);
+  const lastUpdateCheckAttemptAt = useRef<string | null>(null);
   const activeViewRef = useRef<View>(view);
   const previousViewRef = useRef<View>(view);
 
   activeViewRef.current = view;
+
+  const setCurrentUpdateStatus = useCallback((status: AppUpdateStatus | null) => {
+    updateStatusRef.current = status;
+    setUpdateStatus(status);
+    setPayload((current) => current ? { ...current, updateStatus: status } : current);
+  }, []);
+
+  const setUpdateCheckLastAttemptAt = useCallback((attemptedAt: string | null) => {
+    lastUpdateCheckAttemptAt.current = attemptedAt;
+    setPayload((current) => current ? { ...current, updateCheckLastAttemptAt: attemptedAt } : current);
+  }, []);
+
+  const checkForUpdate = useCallback(async (automatic = false): Promise<boolean> => {
+    if (updateCheckInFlight.current) return false;
+    updateCheckInFlight.current = true;
+    setUpdateBusy("check");
+    setUpdateMessage(null);
+    setUpdateCheckLastAttemptAt(new Date().toISOString());
+    try {
+      const status = await invokeBackend<AppUpdateStatus>(COMMANDS.checkForUpdate);
+      setUpdateCheckLastAttemptAt(status.checkedAt);
+      setCurrentUpdateStatus(status);
+      if (!status.available && !automatic) setUpdateMessage({ tone: "success", text: "当前已是最新版本。" });
+      return true;
+    } catch (nextError: unknown) {
+      setUpdateMessage({ tone: "error", text: `${automatic ? "自动检查失败" : "检查更新失败"}：${appError(nextError)}` });
+      return false;
+    } finally {
+      updateCheckInFlight.current = false;
+      setUpdateBusy(null);
+    }
+  }, [setCurrentUpdateStatus, setUpdateCheckLastAttemptAt]);
+
+  const installUpdate = useCallback(async () => {
+    const status = updateStatusRef.current;
+    if (!status?.available || !status.installable || !status.version) return;
+    setUpdateBusy("install");
+    setUpdateMessage(null);
+    try {
+      const result = await invokeBackend<UpdateInstallResult>(COMMANDS.installPendingUpdate, { expectedVersion: status.version });
+      setUpdateMessage(result.accepted
+        ? { tone: "success", text: "更新已安装；桌面版将自动重启。" }
+        : { tone: "success", text: "已取消安装；再次安装前请重新检查更新。" });
+      if (result.accepted) setCurrentUpdateStatus(null);
+      else setCurrentUpdateStatus(markUpdateStatusUninstallable(status));
+    } catch (nextError: unknown) {
+      setCurrentUpdateStatus(markUpdateStatusUninstallable(status));
+      setUpdateMessage({ tone: "error", text: `安装未完成：${appError(nextError)}` });
+    } finally {
+      setUpdateBusy(null);
+    }
+  }, [setCurrentUpdateStatus]);
 
   const refreshDashboard = useCallback(async () => {
     if (dashboardInFlight.current) {
@@ -1614,6 +1657,9 @@ export function App() {
       }
       const next = await invokeBackend<BootstrapPayload>(COMMANDS.bootstrap);
       setPayload(next);
+      updateStatusRef.current = next.updateStatus;
+      setUpdateStatus(next.updateStatus);
+      lastUpdateCheckAttemptAt.current = next.updateCheckLastAttemptAt;
     } catch (nextError: unknown) {
       setError(appError(nextError));
     } finally {
@@ -1626,6 +1672,18 @@ export function App() {
   }, [refreshDashboard]);
 
   useEffect(() => { void refreshBootstrap(); }, [refreshBootstrap]);
+
+  useEffect(() => {
+    if (!isDesktopRuntime() || !payload) return;
+    const schedule = getUpdateCheckSchedule({
+      now: Date.now(),
+      status: updateStatus,
+      intervalHours: payload.settings.updateCheckIntervalHours,
+      lastAttemptAt: lastUpdateCheckAttemptAt.current,
+    });
+    const timer = window.setTimeout(() => { void checkForUpdate(true); }, schedule.delayMs);
+    return () => window.clearTimeout(timer);
+  }, [checkForUpdate, payload, updateStatus]);
 
   const refreshLocalData = useCallback(async () => {
     if (activeViewRef.current === "activity" && isDesktopRuntime()) {
@@ -1730,16 +1788,16 @@ export function App() {
       case "projects": return <ProjectsView projects={projects} authorizedRoots={payload.settings.authorizedRoots} onProjectsChange={(next) => setPayload((old) => old ? { ...old, projects: next } : old)} showNotice={setNotice} />;
       case "oauth": return <OAuthView showNotice={setNotice} />;
       case "pricing": return <PricingView rules={payload.pricingRules} />;
-      case "settings": return <SettingsView settings={payload.settings} capability={payload.capability} onSave={(next) => void updateSettings(next)} onProbe={() => void probe()} saving={saving} />;
+      case "settings": return <SettingsView settings={payload.settings} capability={payload.capability} updateStatus={updateStatus} updateBusy={updateBusy} updateMessage={updateMessage} onSave={(next) => void updateSettings(next)} onProbe={() => void probe()} onCheckUpdate={() => void checkForUpdate()} onInstallUpdate={() => void installUpdate()} saving={saving} />;
     }
-  }, [activityFullRefreshRevision, activityRefreshRevision, loadActivity, payload, projects, saving, view]);
+  }, [activityFullRefreshRevision, activityRefreshRevision, checkForUpdate, installUpdate, loadActivity, payload, projects, saving, updateBusy, updateMessage, updateStatus, view]);
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">CM</span><div><strong>Codex Manager</strong><small>本地桌面管理器</small></div></div>
         <nav className="side-nav" aria-label="主导航">
-          {navItems.map((item) => <button type="button" key={item.id} className={view === item.id ? "is-active" : ""} onClick={() => setView(item.id)}><span>{item.label}</span><small>{item.helper}</small></button>)}
+          {navItems.map((item) => <button type="button" key={item.id} className={view === item.id ? "is-active" : ""} onClick={() => setView(item.id)}><span>{item.label}{item.id === "settings" && updateStatus?.available ? <><span className="update-nav-dot" aria-hidden="true" /><span className="sr-only">，有新版本可用</span></> : null}</span><small>{item.helper}</small></button>)}
         </nav>
         <div className="sidebar-foot"><span className="runtime-mark" aria-hidden="true" />{shellLabel}<small>不做反向代理；不修改 Codex 配置。</small></div>
       </aside>

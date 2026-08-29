@@ -2,15 +2,87 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { invokeDemo } from "../src/app/demo.ts";
-import { COMMANDS, type AppUpdateStatus, type UpdateInstallResult } from "../src/shared/contracts.ts";
+import { DEFAULT_UPDATE_CHECK_INTERVAL_HOURS, getUpdateCheckSchedule, markUpdateStatusUninstallable } from "../src/app/update-scheduler.ts";
+import { COMMANDS, type AppUpdateStatus, type BootstrapPayload, type UpdateInstallResult } from "../src/shared/contracts.ts";
 
 test("更新检查只返回可展示的版本元数据", async () => {
   const status = await invokeDemo<AppUpdateStatus>(COMMANDS.checkForUpdate);
 
   assert.equal(status.currentVersion, "0.1.0");
   assert.equal(status.available, true);
+  assert.equal(status.installable, true);
   assert.equal(status.version, "0.2.1");
-  assert.deepEqual(Object.keys(status).sort(), ["available", "currentVersion", "date", "notes", "version"]);
+  assert.match(status.checkedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.deepEqual(Object.keys(status).sort(), ["available", "checkedAt", "currentVersion", "date", "installable", "notes", "version"]);
+});
+
+test("启动 DTO 包含更新快照和自动检查间隔", async () => {
+  const bootstrap = await invokeDemo<BootstrapPayload>(COMMANDS.bootstrap);
+
+  assert.equal(bootstrap.settings.updateCheckIntervalHours, 12);
+  assert.equal(bootstrap.updateStatus, null);
+  assert.equal(bootstrap.updateCheckLastAttemptAt, null);
+});
+
+test("首次启动没有成功检查记录时立即检查", () => {
+  assert.deepEqual(getUpdateCheckSchedule({
+    now: 1_000,
+    status: null,
+    intervalHours: DEFAULT_UPDATE_CHECK_INTERVAL_HOURS,
+    lastAttemptAt: null,
+  }), { due: true, delayMs: 0 });
+});
+
+test("未到自动检查时间时按剩余时间延迟", () => {
+  const now = Date.parse("2026-08-30T10:00:00.000Z");
+  const checkedAt = "2026-08-30T04:00:00.000Z";
+  assert.deepEqual(getUpdateCheckSchedule({
+    now,
+    status: { checkedAt },
+    intervalHours: 12,
+    lastAttemptAt: null,
+  }), { due: false, delayMs: 6 * 60 * 60 * 1_000 });
+});
+
+test("成功检查已到期时立即重新检查", () => {
+  const now = Date.parse("2026-08-30T16:00:00.000Z");
+  assert.deepEqual(getUpdateCheckSchedule({
+    now,
+    status: { checkedAt: "2026-08-30T04:00:00.000Z" },
+    intervalHours: 12,
+    lastAttemptAt: null,
+  }), { due: true, delayMs: 0 });
+});
+
+test("没有成功检查结果时，失败尝试仍按用户设置的间隔重试", () => {
+  const failedAt = Date.parse("2026-08-30T10:00:00.000Z");
+  assert.deepEqual(getUpdateCheckSchedule({
+    now: failedAt + 15 * 60 * 1_000,
+    status: null,
+    intervalHours: 12,
+    lastAttemptAt: "2026-08-30T10:00:00.000Z",
+  }), { due: false, delayMs: 11 * 60 * 60 * 1_000 + 45 * 60 * 1_000 });
+});
+
+test("已有到期更新快照时，最近失败尝试仍按用户设置的间隔重试", () => {
+  const failedAt = Date.parse("2026-08-30T16:00:00.000Z");
+  assert.deepEqual(getUpdateCheckSchedule({
+    now: failedAt + 15 * 60 * 1_000,
+    status: { checkedAt: "2026-08-30T04:00:00.000Z" },
+    intervalHours: 12,
+    lastAttemptAt: "2026-08-30T16:00:00.000Z",
+  }), { due: false, delayMs: 11 * 60 * 60 * 1_000 + 45 * 60 * 1_000 });
+});
+
+test("安装被取消或失败后保留提醒但不再允许直接安装", async () => {
+  const status = await invokeDemo<AppUpdateStatus>(COMMANDS.checkForUpdate);
+  const consumed = markUpdateStatusUninstallable(status);
+
+  assert.ok(consumed);
+  assert.equal(consumed.available, true);
+  assert.equal(consumed.version, status.version);
+  assert.equal(consumed.installable, false);
+  assert.equal(markUpdateStatusUninstallable(null), null);
 });
 
 test("安装只接受上一次检查的预期版本", async () => {

@@ -192,6 +192,29 @@ pub struct SettingsRow {
     pub retention_days: i64,
     pub telemetry_enabled: bool,
     pub price_catalog_version: String,
+    pub update_check_interval_hours: i64,
+}
+
+/// Persisted display-only update metadata. Download URLs, signatures, and
+/// updater handles stay in the desktop process and are never stored here.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUpdateStatusRow {
+    pub checked_at: String,
+    pub current_version: String,
+    pub available: bool,
+    pub version: Option<String>,
+    pub release_date: Option<String>,
+    pub notes: Option<String>,
+}
+
+/// Non-sensitive attempt metadata used to pace automatic checks after
+/// transient network failures. It intentionally stores no error details.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUpdateCheckAttemptRow {
+    pub last_attempt_at: String,
+    pub current_version: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -288,6 +311,10 @@ impl Store {
             include_str!("../migrations/0008_logical_fingerprints.sql"),
         )?;
         self.apply_migration(9, include_str!("../migrations/0009_canonical_activity.sql"))?;
+        self.apply_migration(
+            10,
+            include_str!("../migrations/0010_update_check_state.sql"),
+        )?;
         self.backfill_logical_fingerprints()?;
         Ok(())
     }
@@ -1149,10 +1176,58 @@ impl Store {
             .collect::<rusqlite::Result<_>>()?)
     }
     pub fn settings(&self) -> Result<SettingsRow> {
-        Ok(self.conn.query_row("SELECT codex_homes_json,authorized_roots_json,retention_days,telemetry_enabled,price_catalog_version FROM settings WHERE singleton=1",[],|r|Ok(SettingsRow{codex_homes:serde_json::from_str(&r.get::<_,String>(0)?).unwrap_or_default(),authorized_roots:serde_json::from_str(&r.get::<_,String>(1)?).unwrap_or_default(),retention_days:r.get(2)?,telemetry_enabled:r.get(3)?,price_catalog_version:r.get(4)?}))?)
+        Ok(self.conn.query_row("SELECT codex_homes_json,authorized_roots_json,retention_days,telemetry_enabled,price_catalog_version,update_check_interval_hours FROM settings WHERE singleton=1",[],|r|Ok(SettingsRow{codex_homes:serde_json::from_str(&r.get::<_,String>(0)?).unwrap_or_default(),authorized_roots:serde_json::from_str(&r.get::<_,String>(1)?).unwrap_or_default(),retention_days:r.get(2)?,telemetry_enabled:r.get(3)?,price_catalog_version:r.get(4)?,update_check_interval_hours:r.get(5)?}))?)
     }
     pub fn save_settings(&self, s: &SettingsRow) -> Result<()> {
-        self.conn.execute("UPDATE settings SET codex_homes_json=?1,authorized_roots_json=?2,retention_days=?3,telemetry_enabled=?4,price_catalog_version=?5 WHERE singleton=1",params![serde_json::to_string(&s.codex_homes)?,serde_json::to_string(&s.authorized_roots)?,s.retention_days,s.telemetry_enabled,s.price_catalog_version])?;
+        self.conn.execute("UPDATE settings SET codex_homes_json=?1,authorized_roots_json=?2,retention_days=?3,telemetry_enabled=?4,price_catalog_version=?5,update_check_interval_hours=?6 WHERE singleton=1",params![serde_json::to_string(&s.codex_homes)?,serde_json::to_string(&s.authorized_roots)?,s.retention_days,s.telemetry_enabled,s.price_catalog_version,s.update_check_interval_hours])?;
+        Ok(())
+    }
+    pub fn app_update_status(&self) -> Result<Option<AppUpdateStatusRow>> {
+        self.conn
+            .query_row(
+                "SELECT checked_at,current_version,available,version,release_date,notes FROM app_update_status WHERE singleton=1",
+                [],
+                |r| {
+                    Ok(AppUpdateStatusRow {
+                        checked_at: r.get(0)?,
+                        current_version: r.get(1)?,
+                        available: r.get(2)?,
+                        version: r.get(3)?,
+                        release_date: r.get(4)?,
+                        notes: r.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .context("读取应用更新状态失败")
+    }
+    pub fn save_app_update_status(&self, status: &AppUpdateStatusRow) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO app_update_status(singleton,checked_at,current_version,available,version,release_date,notes) VALUES(1,?1,?2,?3,?4,?5,?6) ON CONFLICT(singleton) DO UPDATE SET checked_at=excluded.checked_at,current_version=excluded.current_version,available=excluded.available,version=excluded.version,release_date=excluded.release_date,notes=excluded.notes",
+            params![status.checked_at,status.current_version,status.available,status.version,status.release_date,status.notes],
+        )?;
+        Ok(())
+    }
+    pub fn app_update_check_attempt(&self) -> Result<Option<AppUpdateCheckAttemptRow>> {
+        self.conn
+            .query_row(
+                "SELECT last_attempt_at,current_version FROM app_update_check_attempt WHERE singleton=1",
+                [],
+                |r| {
+                    Ok(AppUpdateCheckAttemptRow {
+                        last_attempt_at: r.get(0)?,
+                        current_version: r.get(1)?,
+                    })
+                },
+            )
+            .optional()
+            .context("读取应用更新检查尝试失败")
+    }
+    pub fn save_app_update_check_attempt(&self, attempt: &AppUpdateCheckAttemptRow) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO app_update_check_attempt(singleton,last_attempt_at,current_version) VALUES(1,?1,?2) ON CONFLICT(singleton) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,current_version=excluded.current_version",
+            params![attempt.last_attempt_at,attempt.current_version],
+        )?;
         Ok(())
     }
     pub fn add_revision(&self, r: &RevisionRow) -> Result<()> {
@@ -1401,7 +1476,41 @@ mod tests {
     fn migrations_and_settings_work() {
         let d = tempdir().unwrap();
         let s = Store::open(&d.path().join("x.db")).unwrap();
-        assert_eq!(s.settings().unwrap().retention_days, 30);
+        let settings = s.settings().unwrap();
+        assert_eq!(settings.retention_days, 30);
+        assert_eq!(settings.update_check_interval_hours, 12);
+        s.save_settings(&SettingsRow {
+            update_check_interval_hours: 24,
+            ..settings
+        })
+        .unwrap();
+        assert_eq!(s.settings().unwrap().update_check_interval_hours, 24);
+        assert!(s.app_update_check_attempt().unwrap().is_none());
+        let attempt = AppUpdateCheckAttemptRow {
+            last_attempt_at: "2026-08-30T00:00:00Z".into(),
+            current_version: "0.2.1".into(),
+        };
+        s.save_app_update_check_attempt(&attempt).unwrap();
+        let stored_attempt = s.app_update_check_attempt().unwrap().unwrap();
+        assert_eq!(stored_attempt.last_attempt_at, attempt.last_attempt_at);
+        assert_eq!(stored_attempt.current_version, attempt.current_version);
+
+        let status = AppUpdateStatusRow {
+            checked_at: "2026-08-30T00:00:00Z".into(),
+            current_version: "0.2.1".into(),
+            available: true,
+            version: Some("0.2.2".into()),
+            release_date: Some("2026-08-30T01:00:00Z".into()),
+            notes: Some("修复更新提醒。".into()),
+        };
+        s.save_app_update_status(&status).unwrap();
+        let stored = s.app_update_status().unwrap().unwrap();
+        assert_eq!(stored.checked_at, status.checked_at);
+        assert_eq!(stored.current_version, status.current_version);
+        assert_eq!(stored.available, status.available);
+        assert_eq!(stored.version, status.version);
+        assert_eq!(stored.release_date, status.release_date);
+        assert_eq!(stored.notes, status.notes);
         s.set_checkpoint("a", "rollout", 9, None, None).unwrap();
         assert_eq!(s.checkpoint("a").unwrap(), 9);
     }

@@ -17,7 +17,7 @@
 - OTel 只监听 IPv4 loopback 的首次随机、后续持久化端口，使用 localhost TLS 身份和 body 解码前专用 header 认证；持久化端口被占用时 fail closed。请求体上限 128 KiB，连接 10 秒无读写进展即超时，并限制连接/请求并发、频率、处理时间、解码基数与属性 allowlist；日志 body 不被读取。
 - OTel event/provider 仅保存固定枚举，未知 model/thread/turn 仅保存带类型的 SHA-256 截断伪名，endpoint 仅保存 provider/origin/route 分类，避免将攻击者控制的高基数字符串持久化。
 - Tauri WebView 使用严格 CSP，IPC 只暴露显式 command，不授予通用 shell、任意文件、HTTP、process、dialog 或 updater 插件 API。
-- 在线更新只由用户手动触发；Rust 固定 GitHub endpoint 和 Tauri 公钥，只返回有界纯文本元数据。安装只消费同一次检查所得的内存中 `Update`，要求版本一致、原生确认、minisign 验证和安装后重启。
+- 桌面版在线更新检查在启动后按需运行，并默认每 12 小时自动运行一次，间隔可配置为 1–168 小时；Rust 只访问固定 GitHub `latest.json` 和固定 Tauri 公钥，自动检查仅持久化最近检查尝试时间，以及最近成功检查的当前/可用版本、发布日期和截断后的 notes，不保存 URL、签名对象、下载句柄、错误详情或凭据。成功或失败都从最近尝试起遵守配置间隔；失败不打断用户并保留上次成功状态。安装只消费同一次检查所得的内存中 `Update`，要求用户显式操作、同进程重新检查、版本一致、原生确认、minisign 验证和安装后重启；浏览器 demo 不自动联网。
 - rollout/config 从文件系统根开始通过授权目录链逐段 no-follow 打开普通文件，身份、大小与内容来自同一句柄；限制遍历、字节、事件、时间和 4 MiB 单行大小。
 - 不同 rollout 文件使用独立 source namespace 防止所有权转移；内容等价副本只在读取查询时通过 logical fingerprint 折叠。token 桶还要通过数值上限和语义一致性检查，矛盾数据标记为 `unavailable`。
 - AGENTS 写入同时要求已知项目与显式授权根目录，并执行 canonical containment、逐段 no-follow、文件名 allowlist、SHA/mtime CAS、同目录临时文件、fsync 与原子替换。
@@ -38,7 +38,7 @@
 - SQLite 和普通应用数据对同一 OS 用户可见；认证档案秘密不进入这些位置，而是使用应用专用 macOS Keychain。Keychain 访问仍服从当前登录用户和系统的访问控制，未提供额外主密码。
 - 官方 Codex 可能按用户自己的 `cli_auth_credentials_store` 设置把活动凭据保存在 OS credential store 或 `~/.codex/auth.json`。多档案切换不会改写该设置，只支持 file 模式；keyring/auto 会拒绝切换。切换活动文件会影响共享该缓存的 CLI 与 IDE 扩展。
 - 当前轮换是用户确认后的整账户显式切换，不是请求级调度；不会检测限额后后台自动换号，也不会迁移正在运行的会话。
-- 当前没有启动时自动更新或远程撤回机制。在线更新会将完整更新包读入内存后验签；严格下载字节上限是后续加固项。
+- 当前没有远程撤回机制。桌面版会在启动后按需检查并按配置间隔自动检查更新；自动检查不下载、不安装、不重启。在线更新会将完整更新包读入内存后验签；严格下载字节上限是后续加固项。
 - 签名发布已拆成 secret-free build、无 Release 写权限的受保护 sign、无 Apple/updater secret 的 draft 三个 job；sign/draft 不执行 build artifact 携带的 signer 或 verifier。sign 先下载固定版本 Tauri signer并核对 SHA-512，updater 私钥只在紧邻签名命令的独立 step 注入并在命令后 unset；验签使用 exact checkout 中仅依赖 Node 标准密码库的 Minisign/Ed25519 verifier，transfer 只携带公开 updater key。临时证书/Keychain 在任何上传前清理。draft 只允许 exact source/Release/asset digest 调和，所有资产按 ID 回下载复验；人工发布后另由只读 workflow 匿名验证正式 tag URL 和 latest alias。发布人员已报告 updater 私钥存在独立离线备份，首次发布前仍须复核实际恢复介质。
 
 ## 已完成的安全验证

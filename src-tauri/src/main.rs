@@ -14,8 +14,8 @@ use anyhow::{Context, anyhow};
 use chrono::{Duration as ChronoDuration, Utc};
 use codex_core::{ResumeState, RolloutNormalizer, TokenUsage};
 use codex_storage::{
-    ActivityFilter, ActivityRow, CommitIngest, ProjectRow, RevisionDraft, RevisionRow, SettingsRow,
-    Store,
+    ActivityFilter, ActivityRow, AppUpdateCheckAttemptRow, AppUpdateStatusRow, CommitIngest,
+    ProjectRow, RevisionDraft, RevisionRow, SettingsRow, Store,
 };
 use directories_next::{BaseDirs, ProjectDirs};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -51,6 +51,9 @@ const MAX_SCHEMA_PROBE_BYTES: u64 = 64 * 1024 * 1024;
 const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 const UPDATE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MAX_UPDATE_NOTES_CHARS: usize = 4_000;
+const DEFAULT_UPDATE_CHECK_INTERVAL_HOURS: i64 = 12;
+const MIN_UPDATE_CHECK_INTERVAL_HOURS: i64 = 1;
+const MAX_UPDATE_CHECK_INTERVAL_HOURS: i64 = 168;
 
 struct AppState {
     store: Mutex<Store>,
@@ -381,6 +384,8 @@ struct Settings {
     metadata_only: bool,
     telemetry_enabled: bool,
     price_catalog_version: String,
+    #[serde(default = "default_update_check_interval_hours")]
+    update_check_interval_hours: i64,
 }
 
 #[derive(Clone, Serialize)]
@@ -397,11 +402,13 @@ struct Capability {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppUpdateStatus {
+    checked_at: String,
     current_version: String,
     available: bool,
     version: Option<String>,
     date: Option<String>,
     notes: Option<String>,
+    installable: bool,
 }
 
 #[derive(Serialize)]
@@ -420,10 +427,12 @@ struct Bootstrap {
     pricing_rules: Vec<pricing::PublicRule>,
     settings: Settings,
     capability: Option<Capability>,
+    update_status: Option<AppUpdateStatus>,
+    update_check_last_attempt_at: Option<String>,
 }
 
 #[tauri::command]
-fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
+fn bootstrap(app: AppHandle, state: State<'_, AppState>) -> Result<Bootstrap, String> {
     Ok(Bootstrap {
         // The dashboard prices every logical model call individually. Defer
         // that expensive aggregation until after the shell and latest rows
@@ -442,6 +451,14 @@ fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
         pricing_rules: pricing::public_rules(),
         settings: get_settings_inner(&state)?,
         capability: state.capability.lock().map_err(lock_err)?.clone(),
+        update_status: get_app_update_status_inner(
+            &state,
+            &app.package_info().version.to_string(),
+        )?,
+        update_check_last_attempt_at: get_update_check_last_attempt_inner(
+            &state,
+            &app.package_info().version.to_string(),
+        )?,
     })
 }
 
@@ -580,42 +597,76 @@ async fn check_for_update(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<AppUpdateStatus, String> {
+    check_for_update_inner(&app, &state).await
+}
+
+async fn check_for_update_inner(
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<AppUpdateStatus, String> {
     let _guard = state.update_gate.lock().await;
-    *state.pending_update.lock().map_err(lock_err)? = None;
 
     let current_version = app.package_info().version.to_string();
-    let update = app
-        .updater_builder()
-        .timeout(UPDATE_CHECK_TIMEOUT)
-        .build()
-        .map_err(|_| "更新服务配置无效，请检查安装包来源。".to_string())?
-        .check()
-        .await
-        .map_err(|_| "暂时无法连接 GitHub 更新服务，请稍后重试。".to_string())?;
+    let attempt = AppUpdateCheckAttemptRow {
+        last_attempt_at: Utc::now().to_rfc3339(),
+        current_version: current_version.clone(),
+    };
+    state
+        .store
+        .lock()
+        .map_err(lock_err)?
+        .save_app_update_check_attempt(&attempt)
+        .map_err(display_error)?;
+    let updater = match app.updater_builder().timeout(UPDATE_CHECK_TIMEOUT).build() {
+        Ok(updater) => updater,
+        Err(_) => return Err("更新服务配置无效，请检查安装包来源。".to_string()),
+    };
+    let update = match updater.check().await {
+        Ok(update) => update,
+        Err(_) => return Err("暂时无法连接 GitHub 更新服务，请稍后重试。".to_string()),
+    };
+    let checked_at = Utc::now().to_rfc3339();
 
     let Some(mut update) = update else {
-        return Ok(AppUpdateStatus {
+        let status = AppUpdateStatusRow {
+            checked_at,
             current_version,
             available: false,
             version: None,
-            date: None,
+            release_date: None,
             notes: None,
-        });
+        };
+        state
+            .store
+            .lock()
+            .map_err(lock_err)?
+            .save_app_update_status(&status)
+            .map_err(display_error)?;
+        *state.pending_update.lock().map_err(lock_err)? = None;
+        return Ok(app_update_status_public(status, None));
     };
     update.timeout = Some(UPDATE_DOWNLOAD_TIMEOUT);
 
-    let status = AppUpdateStatus {
+    let status = AppUpdateStatusRow {
+        checked_at,
         current_version,
         available: true,
         version: Some(update.version.clone()),
-        date: update.date.and_then(|value| {
+        release_date: update.date.and_then(|value| {
             chrono::DateTime::<Utc>::from_timestamp(value.unix_timestamp(), 0)
                 .map(|date| date.to_rfc3339())
         }),
         notes: sanitize_update_notes(update.body.clone()),
     };
+    let pending_version = update.version.clone();
+    state
+        .store
+        .lock()
+        .map_err(lock_err)?
+        .save_app_update_status(&status)
+        .map_err(display_error)?;
     *state.pending_update.lock().map_err(lock_err)? = Some(update);
-    Ok(status)
+    Ok(app_update_status_public(status, Some(&pending_version)))
 }
 
 #[tauri::command]
@@ -1493,6 +1544,77 @@ fn get_settings_inner(state: &AppState) -> Result<Settings, String> {
     Ok(settings_public(row))
 }
 
+fn get_app_update_status_inner(
+    state: &AppState,
+    current_version: &str,
+) -> Result<Option<AppUpdateStatus>, String> {
+    let stored = state
+        .store
+        .lock()
+        .map_err(lock_err)?
+        .app_update_status()
+        .map_err(display_error)?;
+    let pending_version = state
+        .pending_update
+        .lock()
+        .map_err(lock_err)?
+        .as_ref()
+        .map(|update| update.version.clone());
+    Ok(stored.and_then(|status| {
+        app_update_status_for_current_version(status, current_version, pending_version.as_deref())
+    }))
+}
+
+fn get_update_check_last_attempt_inner(
+    state: &AppState,
+    current_version: &str,
+) -> Result<Option<String>, String> {
+    let attempt = state
+        .store
+        .lock()
+        .map_err(lock_err)?
+        .app_update_check_attempt()
+        .map_err(display_error)?;
+    Ok(attempt
+        .and_then(|attempt| update_check_attempt_for_current_version(attempt, current_version)))
+}
+
+fn update_check_attempt_for_current_version(
+    attempt: AppUpdateCheckAttemptRow,
+    current_version: &str,
+) -> Option<String> {
+    (attempt.current_version == current_version).then_some(attempt.last_attempt_at)
+}
+
+fn app_update_status_for_current_version(
+    status: AppUpdateStatusRow,
+    current_version: &str,
+    pending_version: Option<&str>,
+) -> Option<AppUpdateStatus> {
+    (status.current_version == current_version)
+        .then(|| app_update_status_public(status, pending_version))
+}
+
+fn app_update_status_public(
+    status: AppUpdateStatusRow,
+    pending_version: Option<&str>,
+) -> AppUpdateStatus {
+    let installable = status.available
+        && status
+            .version
+            .as_deref()
+            .is_some_and(|version| pending_version == Some(version));
+    AppUpdateStatus {
+        checked_at: status.checked_at,
+        current_version: status.current_version,
+        available: status.available,
+        version: status.version,
+        date: status.release_date,
+        notes: status.notes,
+        installable,
+    }
+}
+
 fn settings_public(row: SettingsRow) -> Settings {
     Settings {
         codex_homes: row.codex_homes,
@@ -1501,6 +1623,7 @@ fn settings_public(row: SettingsRow) -> Settings {
         metadata_only: true,
         telemetry_enabled: row.telemetry_enabled,
         price_catalog_version: pricing::catalog().catalog_version.clone(),
+        update_check_interval_hours: row.update_check_interval_hours,
     }
 }
 
@@ -1512,6 +1635,7 @@ fn update_settings_inner(
     if !requested.metadata_only {
         return Err("metadataOnly 必须保持 true；当前版本不支持持久化消息正文。".into());
     }
+    validate_update_check_interval_hours(requested.update_check_interval_hours)?;
     let previous = state
         .store
         .lock()
@@ -1524,6 +1648,7 @@ fn update_settings_inner(
         retention_days: requested.retention_days.clamp(1, 3650),
         telemetry_enabled: requested.telemetry_enabled,
         price_catalog_version: pricing::catalog().catalog_version.clone(),
+        update_check_interval_hours: requested.update_check_interval_hours,
     };
     if next.telemetry_enabled {
         start_otel(state)?;
@@ -1554,6 +1679,19 @@ fn update_settings_inner(
     }
     prune_retention(state, next.retention_days)?;
     Ok(settings_public(next))
+}
+
+fn default_update_check_interval_hours() -> i64 {
+    DEFAULT_UPDATE_CHECK_INTERVAL_HOURS
+}
+
+fn validate_update_check_interval_hours(hours: i64) -> Result<(), String> {
+    if !(MIN_UPDATE_CHECK_INTERVAL_HOURS..=MAX_UPDATE_CHECK_INTERVAL_HOURS).contains(&hours) {
+        return Err(format!(
+            "应用更新自动检查间隔必须在 {MIN_UPDATE_CHECK_INTERVAL_HOURS} 到 {MAX_UPDATE_CHECK_INTERVAL_HOURS} 小时之间。"
+        ));
+    }
+    Ok(())
 }
 
 fn start_otel(state: &AppState) -> Result<(), String> {
@@ -2778,6 +2916,10 @@ fn initialize_settings(store: &Store) -> Result<(), String> {
     }
     settings.price_catalog_version = pricing::catalog().catalog_version.clone();
     settings.retention_days = settings.retention_days.clamp(1, 3650);
+    settings.update_check_interval_hours = settings.update_check_interval_hours.clamp(
+        MIN_UPDATE_CHECK_INTERVAL_HOURS,
+        MAX_UPDATE_CHECK_INTERVAL_HOURS,
+    );
     store.save_settings(&settings).map_err(display_error)
 }
 
@@ -2999,6 +3141,67 @@ mod tests {
         assert_eq!(safe_error_label("secret-token-123"), "采集源暂时不可用");
     }
 
+    #[test]
+    fn update_check_interval_requires_supported_range() {
+        assert!(validate_update_check_interval_hours(1).is_ok());
+        assert!(validate_update_check_interval_hours(168).is_ok());
+        assert!(
+            validate_update_check_interval_hours(0)
+                .unwrap_err()
+                .contains("1 到 168")
+        );
+        assert!(
+            validate_update_check_interval_hours(169)
+                .unwrap_err()
+                .contains("1 到 168")
+        );
+    }
+
+    #[test]
+    fn persisted_update_is_installable_only_for_matching_pending_version() {
+        let row = AppUpdateStatusRow {
+            checked_at: "2026-08-30T00:00:00Z".into(),
+            current_version: "0.2.1".into(),
+            available: true,
+            version: Some("0.2.2".into()),
+            release_date: Some("2026-08-30T01:00:00Z".into()),
+            notes: Some("修复更新提醒。".into()),
+        };
+        assert!(app_update_status_public(row.clone(), Some("0.2.2")).installable);
+        assert!(!app_update_status_public(row.clone(), Some("0.2.3")).installable);
+        assert!(!app_update_status_public(row, None).installable);
+    }
+
+    #[test]
+    fn persisted_update_is_hidden_after_the_app_version_changes() {
+        let row = AppUpdateStatusRow {
+            checked_at: "2026-08-30T00:00:00Z".into(),
+            current_version: "0.2.1".into(),
+            available: true,
+            version: Some("0.2.2".into()),
+            release_date: None,
+            notes: None,
+        };
+        assert!(app_update_status_for_current_version(row.clone(), "0.2.2", None).is_none());
+        assert!(app_update_status_for_current_version(row, "0.2.1", None).is_some());
+    }
+
+    #[test]
+    fn update_check_attempt_is_hidden_after_the_app_version_changes() {
+        let attempt = AppUpdateCheckAttemptRow {
+            last_attempt_at: "2026-08-30T00:00:00Z".into(),
+            current_version: "0.2.1".into(),
+        };
+        assert_eq!(
+            update_check_attempt_for_current_version(attempt.clone(), "0.2.1"),
+            Some("2026-08-30T00:00:00Z".into())
+        );
+        assert_eq!(
+            update_check_attempt_for_current_version(attempt, "0.2.2"),
+            None
+        );
+    }
+
     fn rollout_candidate(path: &str, source: RolloutSource, seconds: u64) -> RolloutCandidate {
         RolloutCandidate {
             path: PathBuf::from(path),
@@ -3093,6 +3296,7 @@ mod tests {
                 retention_days: 30,
                 telemetry_enabled: false,
                 price_catalog_version: pricing::catalog().catalog_version.clone(),
+                update_check_interval_hours: DEFAULT_UPDATE_CHECK_INTERVAL_HOURS,
             })
             .unwrap();
         let state = AppState {
@@ -3226,6 +3430,7 @@ mod tests {
                 retention_days: 30,
                 telemetry_enabled: false,
                 price_catalog_version: pricing::catalog().catalog_version.clone(),
+                update_check_interval_hours: DEFAULT_UPDATE_CHECK_INTERVAL_HOURS,
             })
             .unwrap();
         store

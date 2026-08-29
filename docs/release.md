@@ -16,14 +16,19 @@ Release note 采用 `docs/release-notes/v<VERSION>.md` 的固定章节。CI 通�
 
 `ci.yml` 默认只做 unsigned artifact，可用于人工创建上述 community prerelease。`release.yml` 只服务签名稳定通道：只能手动运行，并且只允许 `main` 当前远端 SHA；它使用受保护的 GitHub `release` Environment，凭据不齐时必须失败。没有证书、Team ID 和 notarization 凭据时，禁止模拟签名成功、绕过门禁或向 community prerelease 添加 updater manifest。
 
-## 2026-08-29 v0.3.0 签名候选状态
+## 2026-08-29 v0.3.0 已发布事实
 
 - `v0.2.0` 是从 `87099222b0e9a50c4410a040c9600e23c53afb23` 发布的公开 `Unsigned Community Build` prerelease，不含 updater 资产，仍与签名通道隔离。
 - `v0.2.1` 已从 exact source `fbe42de828f4f64549d9a4b36bc506fd15b11aa2` 完成签名发布：run `33240800663` 通过 Developer ID、双 notary `Accepted`、stapling、Gatekeeper、updater 签名、SBOM、provenance、attestation 与草稿全量回下载门禁；公开后只读 run `33241992763` 又对正式 tag URL、`releases/latest` 和 `latest.json` alias 完成匿名复验。
 - `v0.2.2` 已从 exact source `a2359e20eda9423f509a6a76f59d3e4c61a10ddc` 完成签名稳定发布；release run `33245641061` 与 published verify run `33246307716` 均成功，Release ID 为 `378939150`，九项资产已公开且 tag/source 一致。现有 `v0.2.2` tag 和资产不可覆盖。
-- `v0.3.0` 包含活动记录粒度与终态、canonical 指纹 v2、schema v9、部分价格覆盖、项目最后对话时间、分页与开源文档流程。候选功能提交 `5bd36def106929b9bac9e96774723cc24bf5fe91` 的 CI run `33253751634` 已成功，但它不是最终发布 SHA。
-- 本次版本必须从版本与文档定版后的最终 `main` exact SHA fresh dispatch 一次，不填写 resume 输入；工作流仍只创建 draft。人工复核并 Publish 后，必须运行 `Verify existing macOS Release` 的 `published` 模式。
-- 发布公开复验后，还要从已安装、已签名且已公证的 `v0.2.2` 实际执行检查更新、下载验签、确认安装、重启与版本/活动页验证；完成前状态最多是 `published publicly verified`，不能写成 `updater E2E accepted`。
+- `v0.3.0` 包含活动记录粒度与终态、canonical 指纹 v2、schema v9、部分价格覆盖、项目最后对话时间、分页与开源文档流程，已从 exact source `fab415af2d9da6dfa41e79c7073bfb9fbb5fb818` 完成签名发布。
+- `v0.3.0` release run 为 `33254920672`，Release ID 为 `378997476`；公开后 `published verification` run `33255604307` 成功，九项资产已按正式 tag URL、`releases/latest` 和 `latest.json` alias 完成匿名复验。
+
+## 2026-08-30 v0.4.0 签名候选状态
+
+- `v0.4.0` 定版本次增加桌面端自动更新检查、最近尝试与成功状态的受限持久化、默认 12 小时且可配置 1–168 小时的检查间隔，以及设置侧栏/应用更新卡片视觉提醒；SQLite schema 升至 v10。浏览器 demo 不自动联网，下载、验签、安装和重启仍需用户显式操作。
+- 本次版本必须从版本与文档定版后的最终 `main` exact SHA fresh dispatch 一次，不填写 resume 输入；工作流仍只创建 draft。人工复核草稿的版本、source SHA、九项资产和签名证据后 Publish，再运行 `Verify existing macOS Release` 的 `published` 模式。
+- 公开复验成功后，仍需从已安装的可信签名旧版本实际执行检查更新、下载验签、确认安装、重启与版本/活动页验证；完成前状态最多是 `published publicly verified`，不能写成 `updater E2E accepted`。
 
 ## Unsigned Community Build 发布
 

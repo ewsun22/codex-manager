@@ -336,6 +336,7 @@ let settings: AppSettings = {
   codexHomes: ["/Users/example/.codex"],
   authorizedRoots: ["/Users/example/Projects"],
   retentionDays: 30,
+  updateCheckIntervalHours: 12,
   metadataOnly: true,
   telemetryEnabled: false,
   priceCatalogVersion: "openai-2026-08-27",
@@ -503,6 +504,8 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
         pricingRules,
         settings,
         capability,
+        updateStatus: null,
+        updateCheckLastAttemptAt: null,
       } satisfies BootstrapPayload as T;
     case COMMANDS.getDashboard:
       return summary as T;
@@ -600,9 +603,11 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
       return {
         currentVersion: "0.1.0",
         available: true,
+        installable: true,
         version: "0.2.1",
         date: "2026-08-27T10:00:00.000Z",
         notes: "演示更新：新增 GitHub Releases 在线更新与签名校验。",
+        checkedAt: new Date().toISOString(),
       } satisfies AppUpdateStatus as T;
     case COMMANDS.installPendingUpdate:
       if (args.expectedVersion !== "0.2.1") throw new Error("更新版本已变化，请重新检查后再安装。");

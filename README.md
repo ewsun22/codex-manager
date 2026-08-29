@@ -8,7 +8,7 @@ Codex Manager 是一个独立运行、本地优先的开源 Codex 桌面管理�
 
 ## 当前状态
 
-当前源码版本是 **0.3.0 macOS 签名 beta 候选版**：它在 `v0.2.2` 已公开验证的签名更新链上，修正活动终态、耗时与成本口径，并改善分页、项目活跃时间和开源文档流程。`v0.2.0` 是不进入在线更新通道的 `Unsigned Community Build`；`v0.2.1` 和 `v0.2.2` 已完成 Developer ID 签名、公证、stapling、Gatekeeper 与公开资产复验。`v0.3.0` 必须重新通过最终 exact-SHA 发布门禁，并从已安装的 `v0.2.2` 完成真实更新、安装和重启验收后才能标记 updater E2E accepted。
+当前源码版本是 **0.4.0 macOS 签名 beta 候选版**：它在已公开验证的 `v0.3.0` 签名更新链上增加自动更新检查、受限状态持久化和新版本视觉提醒。`v0.2.0` 是不进入在线更新通道的 `Unsigned Community Build`；`v0.2.1`、`v0.2.2` 和 `v0.3.0` 已完成 Developer ID 签名、公证、stapling、Gatekeeper 与公开资产复验。`v0.4.0` 仍必须通过最终 exact-SHA 发布门禁；从已安装的旧签名版本完成真实更新、安装和重启验收后才能标记 updater E2E accepted。
 
 已实现的主要能力：
 
@@ -23,7 +23,7 @@ Codex Manager 是一个独立运行、本地优先的开源 Codex 桌面管理�
 - 在授权根目录内创建项目级 `AGENTS.md`，并以 canonical path、逐段 no-follow、SHA/mtime 冲突检查、同目录原子交换和本地 revision 完成保存与恢复。
 - 探测 Desktop 内置或 PATH 中的 Codex CLI，并生成 App Server JSON Schema 指纹；不附着 Codex Desktop 的私有 stdio。
 - OAuth 页面由用户点击启动官方 `codex login` 浏览器流程，并用短生命周期的官方 App Server 读取账户、套餐与 ChatGPT Codex 额度窗口。macOS beta 还支持通过原生文件选择器导入 ChatGPT OAuth `auth.json`、把多个档案秘密保存在应用专用 Keychain、软删除/恢复，以及由用户明确触发的“设为当前”或“轮换到下一个”。token、文件路径、原始 JSON、授权 URL 与回调 URL不进入 WebView、SQLite 或应用日志。
-- 设置页提供用户主动的 GitHub Releases 更新检查；Rust 后端固定 endpoint 和公钥，复用已检查的更新对象，安装前显示 macOS 原生确认框并验证 Tauri 更新签名。
+- 设置页提供 GitHub Releases 更新检查：桌面版启动后按需检查，并默认每 12 小时自动检查一次；检查间隔可在设置中配置为 1–168 小时。Rust 后端固定 endpoint 和公钥，只持久化最近检查尝试时间，以及最近成功检查的当前/可用版本、发布日期和截断后的 notes；发现新版本时设置侧栏与应用更新卡片都会提醒。安装前显示 macOS 原生确认框并验证 Tauri 更新签名，下载、安装和重启仍需用户显式操作。
 
 ## 观测边界
 
@@ -64,7 +64,7 @@ OAuth 页面读取状态时会启动一次有超时和响应上限的本机 `cod
 
 认证文件导入同样只接受该已验签 Codex 的隔离验证结果：Rust 原生选择器只读取当前用户拥有、权限不宽于 `0600`、单硬链接且不超过 128 KiB 的普通 JSON，并在读取前后复核文件身份与时间；WebView 不接收路径或内容，API Key 文件和非 ChatGPT OAuth 文件会被拒绝。实际 App Server PID 通过动态签名验证并恢复后，后端才使用官方 `chatgptAuthTokens` 登录请求在内存中提交 access token 和工作区 ID，再读取账户与额度；refresh token 不交给在线探测，也不创建临时 `auth.json`。验证后的档案秘密与内部元数据保存在 `cc.codex.manager.auth-profiles.v1` 应用专用 macOS Keychain 服务，不进入 SQLite。切换只支持 Codex 的 file 模式活动 `auth.json`：后端同时通过 App Server `config/read` 证明最终生效的 `cli_auth_credentials_store` 明确为 `file`，并要求文件属于当前用户、权限不宽于 `0600`、只有一个硬链接，再执行 Manager 实例间互斥、opaque revision、SHA/mtime/文件身份 CAS、同目录原子替换和切换后官方账户复核；如果官方流程刷新了活动凭据，管理器会重新读取新 bytes 和文件戳后再持久化或回滚。keyring/auto 模式会安全拒绝。官方 Codex 进程不遵守 Manager 的进程锁，因此删除提交前会再次复核活动文件，但用户仍应先结束正在运行的 Codex 任务。删除不是立即销毁：非活动且非最后一个可用档案会进入 30 天回收站，期间可以恢复，过期后才从应用专用 Keychain 清理。Codex CLI 与 IDE 扩展共享活动账户，因此切换影响之后读取凭据的新会话；本应用不会按请求或在后台自动换号，也不是反向代理。官方认证行为见 [Codex Authentication](https://developers.openai.com/codex/auth)，账户、配置与额度协议见 [Codex App Server](https://developers.openai.com/codex/app-server)。
 
-更新检查也不会在启动时自动运行；只有用户在“设置 → 应用更新”中点击检查时才访问固定的 GitHub `latest.json`。
+桌面版启动后会按需检查更新，并按设置的间隔（默认 12 小时，允许 1–168 小时）再次检查；仅访问后端固定的 GitHub `latest.json`。成功或失败都从最近一次检查尝试起遵守该间隔；自动检查失败不会打断使用，也不会覆盖上一次成功检查状态。浏览器 demo 不自动联网。检查状态只保留最近尝试时间与受限展示元数据，不保存 URL、签名对象、下载句柄、错误详情或凭据；下载、签名校验、安装和重启仍要求用户显式操作，并在同进程重新检查、版本核对和 macOS 原生确认后继续。
 
 浏览器预览使用人工构造的脱敏 demo 数据：
 

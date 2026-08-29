@@ -42,7 +42,7 @@ timeline 中只保存消息正文的 UTF-8 byte 长度。解析器和 OTel recei
 - 应用不会安装 CA、系统代理、root helper 或系统服务，也不会自动修改 Codex 配置。
 - 只有用户点击 OAuth 登录按钮时，应用才启动官方 `codex login`。系统浏览器到 OpenAI 的认证、回调、凭据刷新与存储由官方 Codex 负责；该操作可能改变 CLI 与 IDE 扩展共享的当前账户。Codex Manager 不启动自有回调监听器，也不接收授权码或 token。
 - 认证档案导入、切换、删除和恢复也只在用户点击后运行。切换只支持权限受限的 file 模式 `auth.json`，由后端以冲突检查和原子替换完成；不按请求自动轮换，不提供 token 代理或云同步。
-- 应用不会自动检查更新。只有用户在设置页主动点击时，Rust 后端才访问 `https://github.com/ewsun22/codex-manager/releases/latest/download/latest.json`，并在确认安装后下载该清单指向的固定版本产物。不上传 Codex 消息、项目、AGENTS 或本地设置；GitHub 作为下载服务会常规看到网络请求元数据。
+- 桌面版启动后按需检查更新，并默认每 12 小时自动检查一次（设置可配置 1–168 小时）；Rust 后端只访问固定的 `https://github.com/ewsun22/codex-manager/releases/latest/download/latest.json`。自动检查仅取得并持久化最近检查尝试时间，以及最近成功检查的当前/可用版本、发布日期和截断后的 notes，不保存 URL、签名对象、下载句柄、错误详情或凭据；成功或失败都从最近尝试起遵守配置间隔，失败保留上次成功状态且不打断使用。下载、签名校验、安装和重启仍需用户显式操作；浏览器 demo 不自动联网。不会上传 Codex 消息、项目、AGENTS 或本地设置；GitHub 作为下载服务会常规看到网络请求元数据。
 - 本项目没有内置云同步、远程分析或自动上传。构建和依赖安装阶段访问包仓库不属于运行时数据上传。
 
 ## 保留与删除
