@@ -195,6 +195,20 @@ pub struct SettingsRow {
     pub update_check_interval_hours: i64,
 }
 
+/// Public, non-secret metadata for a Codex Responses provider.  Credentials
+/// deliberately live outside SQLite in the platform Keychain.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexProviderRow {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    pub model: String,
+    pub reasoning_effort: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// Persisted display-only update metadata. Download URLs, signatures, and
 /// updater handles stay in the desktop process and are never stored here.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -315,6 +329,7 @@ impl Store {
             10,
             include_str!("../migrations/0010_update_check_state.sql"),
         )?;
+        self.apply_migration(11, include_str!("../migrations/0011_codex_gateway.sql"))?;
         self.backfill_logical_fingerprints()?;
         Ok(())
     }
@@ -1181,6 +1196,57 @@ impl Store {
     pub fn save_settings(&self, s: &SettingsRow) -> Result<()> {
         self.conn.execute("UPDATE settings SET codex_homes_json=?1,authorized_roots_json=?2,retention_days=?3,telemetry_enabled=?4,price_catalog_version=?5,update_check_interval_hours=?6 WHERE singleton=1",params![serde_json::to_string(&s.codex_homes)?,serde_json::to_string(&s.authorized_roots)?,s.retention_days,s.telemetry_enabled,s.price_catalog_version,s.update_check_interval_hours])?;
         Ok(())
+    }
+    pub fn codex_gateway_port(&self) -> Result<u16> {
+        self.conn
+            .query_row(
+                "SELECT codex_gateway_port FROM settings WHERE singleton=1",
+                [],
+                |r| r.get(0),
+            )
+            .context("读取本地反代端口失败")
+    }
+    pub fn save_codex_gateway_port(&self, port: u16) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE settings SET codex_gateway_port=?1 WHERE singleton=1",
+                params![port],
+            )
+            .context("保存本地反代端口失败")?;
+        Ok(())
+    }
+    pub fn codex_providers(&self) -> Result<Vec<CodexProviderRow>> {
+        let mut statement = self.conn.prepare("SELECT id,name,base_url,model,reasoning_effort,created_at,updated_at FROM codex_providers ORDER BY updated_at DESC,id")?;
+        Ok(statement
+            .query_map([], |row| {
+                Ok(CodexProviderRow {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    base_url: row.get(2)?,
+                    model: row.get(3)?,
+                    reasoning_effort: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+    pub fn codex_provider(&self, id: &str) -> Result<Option<CodexProviderRow>> {
+        self.conn.query_row("SELECT id,name,base_url,model,reasoning_effort,created_at,updated_at FROM codex_providers WHERE id=?1", params![id], |row| Ok(CodexProviderRow {
+            id: row.get(0)?, name: row.get(1)?, base_url: row.get(2)?, model: row.get(3)?,
+            reasoning_effort: row.get(4)?, created_at: row.get(5)?, updated_at: row.get(6)?,
+        })).optional().context("读取 Codex 供应商失败")
+    }
+    pub fn save_codex_provider(&self, provider: &CodexProviderRow) -> Result<()> {
+        self.conn.execute("INSERT INTO codex_providers(id,name,base_url,model,reasoning_effort,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET name=excluded.name,base_url=excluded.base_url,model=excluded.model,reasoning_effort=excluded.reasoning_effort,updated_at=excluded.updated_at", params![provider.id,provider.name,provider.base_url,provider.model,provider.reasoning_effort,provider.created_at,provider.updated_at]).context("保存 Codex 供应商失败")?;
+        Ok(())
+    }
+    pub fn delete_codex_provider(&self, id: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM codex_providers WHERE id=?1", params![id])
+            .context("删除 Codex 供应商失败")?
+            == 1)
     }
     pub fn app_update_status(&self) -> Result<Option<AppUpdateStatusRow>> {
         self.conn

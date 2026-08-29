@@ -297,6 +297,51 @@ export interface AuthProfileOperationResult {
   message: string;
 }
 
+export type CodexReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export interface CodexProviderProfile {
+  id: string;
+  name: string;
+  baseUrl: string;
+  model: string;
+  reasoningEffort: CodexReasoningEffort;
+  hasApiKey: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SaveCodexProviderInput {
+  id?: string;
+  name: string;
+  baseUrl: string;
+  model: string;
+  reasoningEffort: CodexReasoningEffort;
+  /** Write-only. An empty value retains the existing Keychain secret. */
+  apiKey?: string;
+}
+
+export type CodexGatewayState = "stopped" | "running" | "error";
+
+export interface CodexGatewayStatus {
+  state: CodexGatewayState;
+  providerId: string | null;
+  providerName: string | null;
+  endpoint: string | null;
+  startedAt: string | null;
+  requests: number;
+  failed: number;
+  inFlight: number;
+  lastError: string | null;
+  port: number;
+}
+
+/** Explicit reveal result. configSnippet contains a local-only client bearer. */
+export interface CodexGatewaySetup {
+  port: number;
+  endpoint: string;
+  configSnippet: string;
+}
+
 export interface BootstrapPayload {
   summary: DashboardSummary | null;
   activity: ActivityPage;
@@ -337,4 +382,12 @@ export const COMMANDS = {
   activateAuthProfile: "activate_auth_profile",
   deleteAuthProfile: "delete_auth_profile",
   restoreAuthProfile: "restore_auth_profile",
+  listCodexProviders: "list_codex_providers",
+  saveCodexProvider: "save_codex_provider",
+  deleteCodexProvider: "delete_codex_provider",
+  getCodexGatewayStatus: "get_codex_gateway_status",
+  updateCodexGatewayPort: "update_codex_gateway_port",
+  startCodexGateway: "start_codex_gateway",
+  stopCodexGateway: "stop_codex_gateway",
+  revealCodexGatewaySetup: "reveal_codex_gateway_setup",
 } as const;

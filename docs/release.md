@@ -24,11 +24,18 @@ Release note 采用 `docs/release-notes/v<VERSION>.md` 的固定章节。CI 通�
 - `v0.3.0` 包含活动记录粒度与终态、canonical 指纹 v2、schema v9、部分价格覆盖、项目最后对话时间、分页与开源文档流程，已从 exact source `fab415af2d9da6dfa41e79c7073bfb9fbb5fb818` 完成签名发布。
 - `v0.3.0` release run 为 `33254920672`，Release ID 为 `378997476`；公开后 `published verification` run `33255604307` 成功，九项资产已按正式 tag URL、`releases/latest` 和 `latest.json` alias 完成匿名复验。
 
-## 2026-08-30 v0.4.0 签名候选状态
+## 2026-08-30 v0.4.0 已发布事实
 
-- `v0.4.0` 定版本次增加桌面端自动更新检查、最近尝试与成功状态的受限持久化、默认 12 小时且可配置 1–168 小时的检查间隔，以及设置侧栏/应用更新卡片视觉提醒；SQLite schema 升至 v10。浏览器 demo 不自动联网，下载、验签、安装和重启仍需用户显式操作。
-- 本次版本必须从版本与文档定版后的最终 `main` exact SHA fresh dispatch 一次，不填写 resume 输入；工作流仍只创建 draft。人工复核草稿的版本、source SHA、九项资产和签名证据后 Publish，再运行 `Verify existing macOS Release` 的 `published` 模式。
-- 公开复验成功后，仍需从已安装的可信签名旧版本实际执行检查更新、下载验签、确认安装、重启与版本/活动页验证；完成前状态最多是 `published publicly verified`，不能写成 `updater E2E accepted`。
+- `v0.4.0` 从 exact source `e462db05aa1f2608509cbf333d992bbd89be9a1d` 完成签名发布与公开复验；release run `33278181464`、published verification run `33278878143` 均成功，九项正式资产和稳定 `latest.json` alias 已核对。
+- 该版本增加桌面端自动更新检查、最近尝试与成功状态的受限持久化、默认 12 小时且可配置 1–168 小时的检查间隔，以及设置侧栏/应用更新卡片视觉提醒；SQLite schema 升至 v10。
+- 尚未从已安装的可信签名旧版本实际执行到 `v0.4.0` 的检查更新、下载验签、确认安装、重启与版本/活动页验证；`published publicly verified` 不能外推为 `updater E2E accepted`。
+
+## 2026-08-30 v0.5.0-beta.1 community Pre-release 候选
+
+- 本版本定版 Codex-only 自定义 Responses 供应商、本地 loopback 网关和“官方订阅”信息架构；SQLite schema 升至 v11。真实供应商、费用、手动配置往返和原生安装仍未 accepted。
+- 用户明确授权将最终 `main` exact SHA 发布为 GitHub Pre-release。依照本手册的既有隔离通道，本次只使用该 SHA 单次成功 `CI` 的 `codex-manager-macos-unsigned` artifact，不触发只允许 `prerelease=false` 的 signed stable workflow。
+- 允许的公开资产只有版本化 unsigned DMG、SBOM ZIP、许可证 ZIP 和重新生成的扁平 SHA-256 清单；标题与正文必须包含 `Unsigned Community Build`，并明确无 Developer ID、notarization、stapling、稳定 updater 或无警告安装保证。
+- 发布后必须匿名回下载四项资产，复验 tag/source、DMG、ZIP 和 SHA-256，并确认 `releases/latest` 仍指向 `v0.4.0`、固定 `latest.json` alias 没有被 Pre-release 污染。
 
 ## Unsigned Community Build 发布
 

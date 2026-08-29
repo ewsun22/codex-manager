@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { invokeBackend, isDesktopRuntime } from "./app/client.ts";
 import { preferredAgentsFile } from "./app/agents.ts";
+import { CodexGatewayView } from "./app/codex-gateway.tsx";
 import {
   MAX_UPDATE_CHECK_INTERVAL_HOURS,
   MIN_UPDATE_CHECK_INTERVAL_HOURS,
@@ -43,7 +44,7 @@ import {
   type UpdateInstallResult,
 } from "./shared/contracts.ts";
 
-type View = "overview" | "activity" | "projects" | "oauth" | "pricing" | "settings";
+type View = "overview" | "activity" | "projects" | "gateway" | "oauth" | "pricing" | "settings";
 
 interface Notice {
   tone: "success" | "error" | "info";
@@ -54,7 +55,8 @@ const navItems: Array<{ id: View; label: string; helper: string }> = [
   { id: "overview", label: "总览", helper: "采集与使用概览" },
   { id: "activity", label: "活动记录", helper: "每次模型调用的元数据" },
   { id: "projects", label: "项目与 AGENTS", helper: "项目发现与安全编辑" },
-  { id: "oauth", label: "OAuth", helper: "账户登录与额度" },
+  { id: "gateway", label: "供应商与反代", helper: "Codex Responses 网关" },
+  { id: "oauth", label: "官方订阅", helper: "账户登录、档案与额度" },
   { id: "pricing", label: "价格目录", helper: "估算来源与覆盖规则" },
   { id: "settings", label: "设置", helper: "本地路径与保留策略" },
 ];
@@ -1113,9 +1115,9 @@ function PricingView({ rules }: { rules: PricingRule[] }) {
 type OAuthTab = "login" | "credentials" | "quota";
 
 const oauthTabs: Array<{ id: OAuthTab; label: string }> = [
-  { id: "login", label: "OAuth 登录" },
-  { id: "credentials", label: "认证文件" },
-  { id: "quota", label: "额度查询" },
+  { id: "login", label: "官方登录" },
+  { id: "credentials", label: "订阅账户" },
+  { id: "quota", label: "额度与重置" },
 ];
 
 function authMethodLabel(method: string | null): string {
@@ -1235,7 +1237,7 @@ function AuthProfilesPanel({
         </section>
       ) : null}
 
-      <div className="privacy-lock"><strong>共享状态提醒</strong><span>Codex CLI 与 IDE 扩展共享一个活动账户。轮换只影响之后读取凭据的新会话，不会把 Codex Manager 变成反向代理，也不会按请求自动换号。</span></div>
+      <div className="privacy-lock"><strong>共享状态提醒</strong><span>Codex CLI 与 IDE 扩展共享一个活动账户。轮换只影响之后读取凭据的新会话；官方订阅凭据不会进入本地反代，也不会按请求自动换号。</span></div>
     </div>
   );
 }
@@ -1392,7 +1394,7 @@ function OAuthView({ showNotice }: { showNotice: (notice: Notice) => void }) {
 
   return (
     <div className="view-content oauth-view">
-      <div className="oauth-tabs" role="tablist" aria-label="OAuth 功能">
+      <div className="oauth-tabs" role="tablist" aria-label="官方订阅功能">
         {oauthTabs.map((tab) => (
           <button key={tab.id} type="button" role="tab" aria-selected={activeTab === tab.id} className={activeTab === tab.id ? "is-active" : ""} onClick={() => setActiveTab(tab.id)}>
             {tab.label}
@@ -1400,7 +1402,7 @@ function OAuthView({ showNotice }: { showNotice: (notice: Notice) => void }) {
         ))}
       </div>
       <SectionHeader
-        title={activeTab === "login" ? "Codex OAuth 登录" : activeTab === "credentials" ? "Codex 认证文件" : "Codex 额度查询"}
+        title={activeTab === "login" ? "Codex 官方订阅登录" : activeTab === "credentials" ? "Codex 订阅账户" : "Codex 额度与重置"}
         subtitle={activeTab === "credentials"
           ? "导入的认证秘密只保存在应用专用 macOS Keychain；token、文件路径与原始 JSON 不会返回 WebView、SQLite 或日志。"
           : "由官方 Codex CLI 与 App Server 完成认证和额度读取；OAuth token 不会返回 WebView、SQLite 或日志。"}
@@ -1421,12 +1423,13 @@ function OAuthView({ showNotice }: { showNotice: (notice: Notice) => void }) {
             <div><dt>当前方式</dt><dd>{authMethodLabel(snapshot.authMethod)}</dd></div>
             <div><dt>账号</dt><dd>{snapshot.email ?? "unavailable"}</dd></div>
             <div><dt>套餐</dt><dd>{snapshot.planType ?? "unavailable"}</dd></div>
+            <div><dt>状态采集时间</dt><dd>{formatDate(snapshot.checkedAt)}</dd></div>
           </dl>
           <p className="capability-message">{snapshot.message}</p>
           <button type="button" className="button button-primary oauth-login-button" onClick={() => void startLogin()} disabled={busy !== null || snapshot.loginInProgress}>
             {snapshot.loginInProgress ? "等待浏览器授权…" : busy === "login" ? "启动中…" : snapshot.authenticated ? "重新登录" : "开始登录"}
           </button>
-          <p className="oauth-footnote">登录可能改变 Codex CLI 与 IDE 扩展共享的当前账户。认证档案的导入、删除与切换只会在“认证文件”页由你显式触发。</p>
+          <p className="oauth-footnote">登录可能改变 Codex CLI 与 IDE 扩展共享的当前账户。认证档案的导入、删除与切换只会在“订阅账户”页由你显式触发。</p>
         </section>
       ) : null}
 
@@ -1437,6 +1440,7 @@ function OAuthView({ showNotice }: { showNotice: (notice: Notice) => void }) {
           <div className="quota-summary-row">
             <span>{snapshot.rateLimits.length} 个可展示额度桶</span>
             <span>可用重置次数：{snapshot.availableResetCredits ?? "unavailable"}</span>
+            <span>采集时间：{formatDate(snapshot.checkedAt)}</span>
           </div>
           {!snapshot.rateLimitsAvailable ? <EmptyState title="额度不可用" detail="当前认证方式或 Codex 服务没有返回 ChatGPT 额度；不会用本地 token 消耗估算填充。" /> : null}
           {snapshot.rateLimitsAvailable && snapshot.rateLimits.length === 0 ? <EmptyState title="没有可展示的额度窗口" detail="官方服务返回了额度响应，但没有可识别的窗口。" /> : null}
@@ -1563,6 +1567,10 @@ export function App() {
   const previousViewRef = useRef<View>(view);
 
   activeViewRef.current = view;
+
+  const showGatewayNotice = useCallback((tone: Notice["tone"], message: string) => {
+    setNotice({ tone, message });
+  }, []);
 
   const setCurrentUpdateStatus = useCallback((status: AppUpdateStatus | null) => {
     updateStatusRef.current = status;
@@ -1786,11 +1794,12 @@ export function App() {
       case "overview": return <Overview payload={payload} onNavigate={setView} />;
       case "activity": return <ActivityView initial={payload.activity} projects={projects} onLoad={loadActivity} refreshRevision={activityRefreshRevision} fullRefreshRevision={activityFullRefreshRevision} />;
       case "projects": return <ProjectsView projects={projects} authorizedRoots={payload.settings.authorizedRoots} onProjectsChange={(next) => setPayload((old) => old ? { ...old, projects: next } : old)} showNotice={setNotice} />;
+      case "gateway": return <CodexGatewayView onNotice={showGatewayNotice} />;
       case "oauth": return <OAuthView showNotice={setNotice} />;
       case "pricing": return <PricingView rules={payload.pricingRules} />;
       case "settings": return <SettingsView settings={payload.settings} capability={payload.capability} updateStatus={updateStatus} updateBusy={updateBusy} updateMessage={updateMessage} onSave={(next) => void updateSettings(next)} onProbe={() => void probe()} onCheckUpdate={() => void checkForUpdate()} onInstallUpdate={() => void installUpdate()} saving={saving} />;
     }
-  }, [activityFullRefreshRevision, activityRefreshRevision, checkForUpdate, installUpdate, loadActivity, payload, projects, saving, updateBusy, updateMessage, updateStatus, view]);
+  }, [activityFullRefreshRevision, activityRefreshRevision, checkForUpdate, installUpdate, loadActivity, payload, projects, saving, showGatewayNotice, updateBusy, updateMessage, updateStatus, view]);
 
   return (
     <div className="app-shell">
@@ -1799,7 +1808,7 @@ export function App() {
         <nav className="side-nav" aria-label="主导航">
           {navItems.map((item) => <button type="button" key={item.id} className={view === item.id ? "is-active" : ""} onClick={() => setView(item.id)}><span>{item.label}{item.id === "settings" && updateStatus?.available ? <><span className="update-nav-dot" aria-hidden="true" /><span className="sr-only">，有新版本可用</span></> : null}</span><small>{item.helper}</small></button>)}
         </nav>
-        <div className="sidebar-foot"><span className="runtime-mark" aria-hidden="true" />{shellLabel}<small>不做反向代理；不修改 Codex 配置。</small></div>
+        <div className="sidebar-foot"><span className="runtime-mark" aria-hidden="true" />{shellLabel}<small>网关默认停止；不自动修改 Codex 配置。</small></div>
       </aside>
       <main className="main-area">
         <header className="topbar"><div><span className="topbar-crumb">工作台</span><span className="topbar-separator">/</span><span>{navItems.find((item) => item.id === view)?.label}</span></div><button type="button" className="button button-secondary" onClick={() => void refreshLocalData()} disabled={loading}>{loading ? "刷新中…" : "刷新本地数据"}</button></header>

@@ -8,6 +8,7 @@ mod otel;
 mod platform;
 mod pricing;
 mod projects;
+mod provider_gateway;
 mod safe_fs;
 
 use anyhow::{Context, anyhow};
@@ -75,6 +76,9 @@ struct AppState {
     auth_executable: Mutex<Option<platform::TrustedCodexAuthExecutable>>,
     auth_profiles: std::sync::Arc<auth_profiles::AuthProfileStore>,
     auth_profile_revisions: Mutex<VecDeque<AuthProfileRevision>>,
+    gateway_transition_gate: tokio::sync::Mutex<()>,
+    gateway: Mutex<Option<provider_gateway::ServerHandle>>,
+    gateway_error: Mutex<Option<String>>,
 }
 
 #[derive(Clone)]
@@ -729,6 +733,174 @@ async fn get_codex_account(state: State<'_, AppState>) -> Result<account::Accoun
     })
     .await
     .map_err(|_| "Codex 账户状态读取任务异常结束。".to_string())
+}
+
+#[tauri::command]
+fn list_codex_providers(
+    state: State<'_, AppState>,
+) -> Result<Vec<provider_gateway::ProviderDto>, String> {
+    let store = state.store.lock().map_err(lock_err)?;
+    provider_gateway::list(&store)
+}
+
+#[tauri::command]
+fn save_codex_provider(
+    state: State<'_, AppState>,
+    input: provider_gateway::ProviderSaveInput,
+) -> Result<provider_gateway::ProviderDto, String> {
+    let _transition_guard = state
+        .gateway_transition_gate
+        .try_lock()
+        .map_err(|_| "本地反代正在启动或停止；请稍后再修改供应商。".to_string())?;
+    let gateway = state.gateway.lock().map_err(lock_err)?;
+    if input.id.as_deref().is_some_and(|id| {
+        gateway
+            .as_ref()
+            .is_some_and(|server| server.status().provider_id.as_deref() == Some(id))
+    }) {
+        return Err("该供应商正在被本地反代使用；请先停止服务后再保存。".into());
+    }
+    let store = state.store.lock().map_err(lock_err)?;
+    provider_gateway::save(&store, input)
+}
+
+#[tauri::command]
+fn delete_codex_provider(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<Vec<provider_gateway::ProviderDto>, String> {
+    let _transition_guard = state
+        .gateway_transition_gate
+        .try_lock()
+        .map_err(|_| "本地反代正在启动或停止；请稍后再删除供应商。".to_string())?;
+    let gateway = state.gateway.lock().map_err(lock_err)?;
+    if gateway
+        .as_ref()
+        .is_some_and(|server| server.status().provider_id.as_deref() == Some(&provider_id))
+    {
+        return Err("该供应商正在被本地反代使用；请先停止服务。".into());
+    }
+    drop(gateway);
+    let store = state.store.lock().map_err(lock_err)?;
+    provider_gateway::delete(&store, &provider_id)
+}
+
+#[tauri::command]
+fn get_codex_gateway_status(
+    state: State<'_, AppState>,
+) -> Result<provider_gateway::GatewayStatus, String> {
+    let port = {
+        let store = state.store.lock().map_err(lock_err)?;
+        store.codex_gateway_port().map_err(display_error)?
+    };
+    let error = state.gateway_error.lock().map_err(lock_err)?.clone();
+    let gateway = state.gateway.lock().map_err(lock_err)?;
+    Ok(gateway
+        .as_ref()
+        .map(|server| server.status())
+        .unwrap_or_else(|| provider_gateway::stopped_status(port, error)))
+}
+
+#[tauri::command]
+fn update_codex_gateway_port(
+    state: State<'_, AppState>,
+    port: u16,
+) -> Result<provider_gateway::GatewayStatus, String> {
+    let _transition_guard = state
+        .gateway_transition_gate
+        .try_lock()
+        .map_err(|_| "本地反代正在启动或停止；请稍后再修改端口。".to_string())?;
+    if !(1024..=65535).contains(&port) {
+        return Err("本地反代端口必须在 1024 到 65535 之间。".into());
+    }
+    {
+        let gateway = state.gateway.lock().map_err(lock_err)?;
+        if gateway.is_some() {
+            return Err("本地反代正在运行；请先停止服务后再修改端口。".into());
+        }
+    }
+    state
+        .store
+        .lock()
+        .map_err(lock_err)?
+        .save_codex_gateway_port(port)
+        .map_err(display_error)?;
+    *state.gateway_error.lock().map_err(lock_err)? = None;
+    Ok(provider_gateway::stopped_status(port, None))
+}
+
+#[tauri::command]
+fn start_codex_gateway(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<provider_gateway::GatewayStatus, String> {
+    let _transition_guard = state
+        .gateway_transition_gate
+        .try_lock()
+        .map_err(|_| "本地反代正在启动或停止；请稍后重试。".to_string())?;
+    let mut gateway = state.gateway.lock().map_err(lock_err)?;
+    if gateway.is_some() {
+        return Err("本地反代已在运行；请先停止后再切换供应商。".into());
+    }
+    let store = state.store.lock().map_err(lock_err)?;
+    let port = store.codex_gateway_port().map_err(display_error)?;
+    match tauri::async_runtime::block_on(provider_gateway::start(&store, &provider_id, port)) {
+        Ok(server) => {
+            let status = server.status();
+            *gateway = Some(server);
+            *state.gateway_error.lock().map_err(lock_err)? = None;
+            Ok(status)
+        }
+        Err(error) => {
+            *state.gateway_error.lock().map_err(lock_err)? = Some(error.clone());
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+async fn stop_codex_gateway(
+    state: State<'_, AppState>,
+) -> Result<provider_gateway::GatewayStatus, String> {
+    let _transition_guard = state
+        .gateway_transition_gate
+        .try_lock()
+        .map_err(|_| "本地反代正在启动或停止；请稍后重试。".to_string())?;
+    let server = {
+        let mut gateway = state.gateway.lock().map_err(lock_err)?;
+        gateway.take()
+    };
+    if let Some(server) = server {
+        if let Err(error) = server.stop().await {
+            *state.gateway_error.lock().map_err(lock_err)? = Some(error.clone());
+            return Err(error);
+        }
+    }
+    let port = state
+        .store
+        .lock()
+        .map_err(lock_err)?
+        .codex_gateway_port()
+        .map_err(display_error)?;
+    *state.gateway_error.lock().map_err(lock_err)? = None;
+    Ok(provider_gateway::stopped_status(port, None))
+}
+
+#[tauri::command]
+async fn reveal_codex_gateway_setup(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<provider_gateway::GatewaySetup, String> {
+    if !confirm_native(&app, "显示本地反代配置", "此操作会显示仅用于保护本机 loopback 端口的 bearer token。请勿将该配置或 token 分享给他人。", "显示配置").await? {
+        return Err("未显示本地反代配置。".into());
+    }
+    state
+        .gateway
+        .lock()
+        .map_err(lock_err)?
+        .as_ref()
+        .map(|server| server.setup())
+        .ok_or_else(|| "本地反代尚未启动。".into())
 }
 
 #[tauri::command]
@@ -3021,6 +3193,9 @@ fn main() {
                 auth_executable: Mutex::new(None),
                 auth_profiles: std::sync::Arc::new(auth_profiles::AuthProfileStore::load()),
                 auth_profile_revisions: Mutex::new(VecDeque::new()),
+                gateway_transition_gate: tokio::sync::Mutex::new(()),
+                gateway: Mutex::new(None),
+                gateway_error: Mutex::new(None),
             };
             app.manage(state);
             let handle = app.handle().clone();
@@ -3074,6 +3249,14 @@ fn main() {
             activate_auth_profile,
             delete_auth_profile,
             restore_auth_profile,
+            list_codex_providers,
+            save_codex_provider,
+            delete_codex_provider,
+            get_codex_gateway_status,
+            update_codex_gateway_port,
+            start_codex_gateway,
+            stop_codex_gateway,
+            reveal_codex_gateway_setup,
         ])
         .run(tauri::generate_context!())
         .expect("Codex Manager 运行失败");
@@ -3319,6 +3502,9 @@ mod tests {
             auth_executable: Mutex::new(None),
             auth_profiles: std::sync::Arc::new(auth_profiles::AuthProfileStore::load()),
             auth_profile_revisions: Mutex::new(VecDeque::new()),
+            gateway_transition_gate: tokio::sync::Mutex::new(()),
+            gateway: Mutex::new(None),
+            gateway_error: Mutex::new(None),
         };
         let event = |ordinal: i64, kind: &str, payload: serde_json::Value| {
             serde_json::json!({
@@ -3465,6 +3651,9 @@ mod tests {
             auth_executable: Mutex::new(None),
             auth_profiles: std::sync::Arc::new(auth_profiles::AuthProfileStore::load()),
             auth_profile_revisions: Mutex::new(VecDeque::new()),
+            gateway_transition_gate: tokio::sync::Mutex::new(()),
+            gateway: Mutex::new(None),
+            gateway_error: Mutex::new(None),
         };
 
         let created = create_agents_inner(

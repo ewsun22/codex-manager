@@ -2,7 +2,7 @@
 
 ## 产品边界
 
-Codex Manager 是独立的 Tauri 2 桌面应用，不是 Codex 插件或反向代理。macOS 是首发平台；规范化、存储、价格、项目发现和 AGENTS 解析放在 Rust/SQLite 边界内，为后续 Windows 适配保留平台接口。
+Codex Manager 是独立的 Tauri 2 桌面应用，不是 Codex 插件、系统代理或通用 API 网关。`v0.5.0-beta.1` 增加一个默认停止、Codex-only、IPv4 loopback 的 OpenAI Responses 透明网关；官方订阅仍是独立的受信任 CLI/App Server/Keychain 边界。macOS 是首发平台；规范化、存储、价格、项目发现和 AGENTS 解析放在 Rust/SQLite 边界内，为后续 Windows 适配保留平台接口。
 
 ```text
 Codex Desktop / CLI
@@ -23,6 +23,10 @@ OAuth UI ─ explicit IPC ─ bounded one-shot App Server account adapter ─ ac
 User click ─ explicit IPC ─ exact `codex login` subprocess ─ system browser ─ official Codex credential store
 Native picker ─ bounded JSON ─ isolated official validation ─ app-specific macOS Keychain profiles
 User confirm ─ config/read=file ─ revision/CAS/process lock ─ atomic `auth.json` replace ─ official post-switch verification
+
+Provider UI ─ write-only API Key IPC ─ Keychain secret + SQLite metadata
+User start ─ 127.0.0.1 Responses gateway ─ verified API-key upstream
+Native confirm ─ temporary Codex provider snippet; no automatic config/auth mutation
 ```
 
 ## 采集层
@@ -60,7 +64,17 @@ OAuth 与认证 App Server 不继承任意父进程环境，只保留 HOME、用
 
 认证档案是独立于 SQLite 的平台秘密存储。macOS 后端通过原生选择器读取一个普通 JSON 文件，检查当前 uid、权限不宽于 `0600`、单硬链接、128 KiB、读取前后 fstat、重复键、最大深度/字段数和 ChatGPT OAuth 结构；动态验签并恢复官方 App Server 后，只以 `chatgptAuthTokens` 外部认证提交 access token 与工作区 ID，执行账户/额度探测并确认身份。refresh token 不参与在线探测，也不会生成临时 `auth.json`。验证后的 bytes 使用 zeroizing buffer 写入应用专用 Keychain；Keychain 内部索引持有 email 与工作区 account id 组合的不可逆指纹，用于去重与切换复核，但 WebView DTO 只有随机 id、本地 label、状态和时间。软删除档案在 Keychain 保留 30 天，活动档案和最后一个可用档案不可删除。
 
-账户切换不实现代理或请求调度。Rust 从后端解析 Codex home，只接受当前用户、单硬链接且权限不宽于 `0600` 的 file 模式 `auth.json`；官方 App Server 的 `config/read` 还必须证明最终生效的 `cli_auth_credentials_store` 明确为 `file`，缺失、keyring 或 auto 都 fail closed。写操作经同进程互斥、Manager 实例间 `flock`、用户原生确认和短期 opaque revision；后端复核 SHA-256、mtime、大小、权限与文件身份后，在同目录以强制 `0600` 的临时文件原子替换，并用官方 App Server 验证活动账户。账户复核如触发官方凭据刷新，后端最多重试三次，只有前后文件戳稳定时才使用刷新后的 bytes 更新 Keychain 或回滚。任何外部改写或身份不符均拒绝；后验证或 Keychain 状态提交失败时只在仍能证明文件属于本次切换的条件下回滚。官方 CLI/IDE 不参与该 `flock` 协议，因此删除在提交前额外复核，切换/删除确认也要求先结束正在运行的 Codex 任务。
+账户切换不实现请求调度，也不进入网关供应商池。Rust 从后端解析 Codex home，只接受当前用户、单硬链接且权限不宽于 `0600` 的 file 模式 `auth.json`；官方 App Server 的 `config/read` 还必须证明最终生效的 `cli_auth_credentials_store` 明确为 `file`，缺失、keyring 或 auto 都 fail closed。写操作经同进程互斥、Manager 实例间 `flock`、用户原生确认和短期 opaque revision；后端复核 SHA-256、mtime、大小、权限与文件身份后，在同目录以强制 `0600` 的临时文件原子替换，并用官方 App Server 验证活动账户。账户复核如触发官方凭据刷新，后端最多重试三次，只有前后文件戳稳定时才使用刷新后的 bytes 更新 Keychain 或回滚。任何外部改写或身份不符均拒绝；后验证或 Keychain 状态提交失败时只在仍能证明文件属于本次切换的条件下回滚。官方 CLI/IDE 不参与该 `flock` 协议，因此删除在提交前额外复核，切换/删除确认也要求先结束正在运行的 Codex 任务。
+
+### Codex provider 与本地 Responses 网关
+
+`codex_providers` 只保存随机 id、名称、规范化 Base URL、模型、reasoning effort 与时间；供应商 API Key 保存在独立 Keychain service。保存命令把 API Key 视为 write-only input，普通 list/save DTO 只返回 `hasApiKey`。删除供应商时同时删除其 Keychain item；正在被网关使用的供应商不可删除。
+
+网关由用户显式选择供应商后启动，固定绑定 `127.0.0.1:<persisted-port>`，应用退出或用户停止时释放 listener。启动、停止、改端口、保存和删除 provider 共用一个 transition gate，低层 IPC 也不能在停止等待期间抢跑。停止命令最多等待 graceful shutdown 3 秒，必要时中止 task，只有确认 task 已结束后才返回 stopped。每次安装的本机 bearer 位于 Keychain/原生运行时；除显式 reveal command 生成的完整 provider snippet 外，状态 DTO、SQLite 和日志均不包含它。reveal 先显示 macOS 原生确认；应用不会自动读写 `config.toml` 或 `auth.json`，因此本切片也不声称提供崩溃后配置恢复。
+
+路由 allowlist 只含 `/v1/responses`、`/v1/responses/compact` 和受保护的本机辅助端点。Host/Origin/constant-time bearer 在 body 前校验；body 上限 4 MiB，并发上限 4，上游响应头等待上限 20 秒，流式响应 idle 上限 30 秒。超时释放并发槽并只返回通用失败，不泄露上游正文。客户端 Authorization 不会出站，Rust 只在发送到固定上游 origin 时注入 Keychain API Key；响应只透传 status、Content-Type、Cache-Control、x-request-id 与字节流。请求/响应 body、header、query 和原始上游错误不落盘。
+
+Base URL 只接受无 userinfo/query/fragment 的 `/v1` origin。远程上游必须使用 HTTPS，并在保存/启动时拒绝任何解析到 loopback、私网、link-local、unique-local、unspecified 或 multicast 的地址；HTTP 只允许显式 localhost/loopback 开发上游。HTTP client 禁用 redirect，并把已验证 DNS 结果固定给该 client，避免将供应商 API Key 带到另一 origin。当前是 Responses identity passthrough，不实现 Chat/Anthropic/Gemini transformer、重试/故障转移、请求体日志或官方 OAuth token proxy。
 
 ## 规范化与指标口径
 
@@ -89,6 +103,7 @@ SQLite 位于平台应用数据目录，启用 WAL、foreign keys、busy timeout
 - `projects`：canonical 项目路径、来源、Git/worktree 状态。
 - `agents_revisions`：两阶段 pending/applied revision，用于崩溃恢复、冲突保护和回滚。
 - `settings`：Codex homes、授权根目录、保留期、OTel 开关、价格目录版本和更新检查间隔（1–168 小时，默认 12 小时）。更新检查状态只保存最近检查尝试时间，以及最近成功检查的受限展示元数据：当前/可用版本、发布日期和截断后的 notes。
+- `codex_providers`：`v0.5.0-beta.1` 网关的非秘密供应商元数据；API Key 与本机 bearer 不进入 SQLite。
 
 保留期会清理旧 turn/session 与 OTel 记录；OTel 硬删除只依据本机 `received_at`，不信任客户端时间。AGENTS revision 不受该保留期影响，而是每个文件最多保留 20 版。
 
@@ -106,7 +121,7 @@ SQLite 位于平台应用数据目录，启用 WAL、foreign keys、busy timeout
 
 ## 前端与 IPC
 
-React 只使用 27 个显式 Tauri commands；其中 OTel 凭据只在用户点击显示配置时返回前端。OAuth/认证档案只获得账户摘要、登录状态、档案白名单 DTO 与变更结果；原生导入和确认由 Rust dialog 完成，WebView 没有路径、JSON 或 token。Tauri capability 清单不授予通用 shell、任意文件系统、HTTP、process、dialog 或 updater 插件 API，WebView 使用严格 CSP。浏览器开发模式使用人工构造的 demo adapter，不读取本机 Codex 数据。
+React 只使用 35 个显式 Tauri commands；其中 OTel 与本机网关凭据只在用户点击显示配置并通过原生确认时返回前端。OAuth/认证档案只获得账户摘要、登录状态、档案白名单 DTO 与变更结果；provider 普通 DTO 只有非秘密字段和 `hasApiKey`。原生导入和确认由 Rust dialog 完成，WebView 没有通用路径、JSON、HTTP、shell、process、dialog 或 updater 插件能力。WebView 使用严格 CSP；浏览器开发模式使用人工构造的 demo adapter，不读取本机 Codex 数据或启动真实 listener。
 
 ## 在线更新信任边界
 
@@ -116,9 +131,9 @@ React 只使用 27 个显式 Tauri commands；其中 OTel 凭据只在用户点�
 
 ## 跨平台边界
 
-跨平台：event normalization、SQLite schema、价格、项目模型、AGENTS precedence、DTO 与 React UI。
+跨平台：event normalization、SQLite schema、价格、项目模型、AGENTS precedence、provider DTO 与 React UI。
 
-平台适配：可执行文件发现、稳定文件身份、文件 no-follow/原子替换、应用数据目录、密钥库、原生文件选择/确认和打包签名。macOS 使用 `openat`/`O_NOFOLLOW`、Keychain 与 `flock`；Windows 当前只有部分可编译的 portable fallback，认证档案直接显示不可用。Windows beta 前必须补齐等价 credential vault、reparse-point/原子替换安全验证和安装包测试。
+平台适配：可执行文件发现、稳定文件身份、文件 no-follow/原子替换、应用数据目录、密钥库、原生文件选择/确认和打包签名。macOS 使用 `openat`/`O_NOFOLLOW`、Keychain 与 `flock`；Windows 当前只有部分可编译的 portable fallback，认证档案与 provider secret 直接显示不可用。Windows beta 前必须补齐等价 credential vault、reparse-point/原子替换安全验证和安装包测试。
 
 ## 官方依据
 

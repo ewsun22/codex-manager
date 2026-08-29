@@ -12,7 +12,10 @@ import type {
   BootstrapPayload,
   CodexCapability,
   CodexAccountSnapshot,
+  CodexGatewaySetup,
+  CodexGatewayStatus,
   CodexLoginStartResult,
+  CodexProviderProfile,
   CreateAgentsFileInput,
   DashboardSummary,
   PricingRule,
@@ -21,6 +24,7 @@ import type {
   SaveAgentsResult,
   SourceHealth,
   UpdateInstallResult,
+  SaveCodexProviderInput,
 } from "../shared/contracts.ts";
 import { COMMANDS } from "../shared/contracts.ts";
 
@@ -394,6 +398,42 @@ let authProfiles: AuthProfilesSnapshot = {
   message: "演示模式：档案秘密位于应用专用 macOS Keychain，活动账户使用 file 模式 auth.json。",
 };
 
+let codexProviders: CodexProviderProfile[] = [
+  {
+    id: "provider-demo-relay",
+    name: "Responses 中转",
+    baseUrl: "https://relay.example.test/v1",
+    model: "gpt-5.6-sol",
+    reasoningEffort: "high",
+    hasApiKey: true,
+    createdAt: "2026-08-27T08:30:00.000Z",
+    updatedAt: observedAt,
+  },
+  {
+    id: "provider-demo-local",
+    name: "本机 EasyCLI",
+    baseUrl: "http://127.0.0.1:8317/v1",
+    model: "gpt-5.6-terra",
+    reasoningEffort: "medium",
+    hasApiKey: true,
+    createdAt: "2026-08-27T09:00:00.000Z",
+    updatedAt: observedAt,
+  },
+];
+
+let codexGatewayStatus: CodexGatewayStatus = {
+  state: "stopped",
+  providerId: null,
+  providerName: null,
+  endpoint: null,
+  startedAt: null,
+  requests: 0,
+  failed: 0,
+  inFlight: 0,
+  lastError: null,
+  port: 47653,
+};
+
 let currentAgentsContent = `# signal-catalog agent guidance\n\n## 范围\n\n- 优先修复用户路径，不执行未授权的部署。\n- 数据采集默认仅保留元数据。\n\n## 验收\n\n- 修改后运行相关测试，并报告实际结果。\n`;
 const createdProjectAgents = new Set<string>([projectAgentsPath, `${infraProjectPath}/AGENTS.md`]);
 let revisionCounter = 2;
@@ -652,6 +692,76 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
       authProfiles.profiles = authProfiles.profiles.map((profile) => profile.id === id ? { ...profile, deletedAt: null } : profile);
       return { changed: true, message: "演示模式：档案已恢复。" } satisfies AuthProfileOperationResult as T;
     }
+    case COMMANDS.listCodexProviders:
+      return structuredClone(codexProviders) as T;
+    case COMMANDS.saveCodexProvider: {
+      const input = args.input as SaveCodexProviderInput;
+      const now = new Date().toISOString();
+      const existing = input.id ? codexProviders.find((provider) => provider.id === input.id) : undefined;
+      const profile: CodexProviderProfile = {
+        id: existing?.id ?? `provider-demo-${codexProviders.length + 1}`,
+        name: input.name,
+        baseUrl: input.baseUrl.replace(/\/$/, ""),
+        model: input.model,
+        reasoningEffort: input.reasoningEffort,
+        hasApiKey: Boolean(input.apiKey?.trim()) || existing?.hasApiKey === true,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      codexProviders = existing
+        ? codexProviders.map((provider) => provider.id === existing.id ? profile : provider)
+        : [...codexProviders, profile];
+      return structuredClone(profile) as T;
+    }
+    case COMMANDS.deleteCodexProvider: {
+      const providerId = String(args.providerId ?? "");
+      if (codexGatewayStatus.state === "running" && codexGatewayStatus.providerId === providerId) {
+        throw new Error("运行中的上游不能删除，请先停止网关。");
+      }
+      codexProviders = codexProviders.filter((provider) => provider.id !== providerId);
+      return structuredClone(codexProviders) as T;
+    }
+    case COMMANDS.getCodexGatewayStatus:
+      return structuredClone(codexGatewayStatus) as T;
+    case COMMANDS.updateCodexGatewayPort:
+      if (codexGatewayStatus.state === "running") throw new Error("网关运行中不能修改端口。");
+      codexGatewayStatus = { ...codexGatewayStatus, port: Number(args.port) };
+      return structuredClone(codexGatewayStatus) as T;
+    case COMMANDS.startCodexGateway: {
+      const providerId = String(args.providerId ?? "");
+      const provider = codexProviders.find((item) => item.id === providerId);
+      if (!provider?.hasApiKey) throw new Error("供应商不存在或尚未保存 API Key。");
+      codexGatewayStatus = {
+        ...codexGatewayStatus,
+        state: "running",
+        providerId: provider.id,
+        providerName: provider.name,
+        endpoint: `http://127.0.0.1:${codexGatewayStatus.port}/v1`,
+        startedAt: new Date().toISOString(),
+        lastError: null,
+      };
+      return structuredClone(codexGatewayStatus) as T;
+    }
+    case COMMANDS.stopCodexGateway:
+      codexGatewayStatus = {
+        ...codexGatewayStatus,
+        state: "stopped",
+        providerId: null,
+        providerName: null,
+        endpoint: null,
+        startedAt: null,
+        inFlight: 0,
+      };
+      return structuredClone(codexGatewayStatus) as T;
+    case COMMANDS.revealCodexGatewaySetup:
+      if (codexGatewayStatus.state !== "running" || !codexGatewayStatus.endpoint) {
+        throw new Error("请先启动网关。");
+      }
+      return {
+        port: codexGatewayStatus.port,
+        endpoint: codexGatewayStatus.endpoint,
+        configSnippet: `model_provider = "codex_manager_gateway"\nmodel = "${codexProviders.find((provider) => provider.id === codexGatewayStatus.providerId)?.model ?? "gpt-5.6-sol"}"\nmodel_reasoning_effort = "${codexProviders.find((provider) => provider.id === codexGatewayStatus.providerId)?.reasoningEffort ?? "high"}"\n\n[model_providers.codex_manager_gateway]\nname = "Codex Manager Gateway"\nbase_url = "${codexGatewayStatus.endpoint}"\nwire_api = "responses"\nexperimental_bearer_token = "demo-local-token-not-real"\n`,
+      } satisfies CodexGatewaySetup as T;
     default:
       throw new Error(`演示适配器不支持命令：${command}`);
   }

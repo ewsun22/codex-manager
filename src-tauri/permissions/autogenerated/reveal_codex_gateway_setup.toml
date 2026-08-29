@@ -1,0 +1,9 @@
+# Automatically generated - DO NOT EDIT!
+[[permission]]
+identifier = "allow-reveal-codex-gateway-setup"
+description = "Enables the reveal_codex_gateway_setup command without any pre-configured scope."
+commands.allow = ["reveal_codex_gateway_setup"]
+[[permission]]
+identifier = "deny-reveal-codex-gateway-setup"
+description = "Denies the reveal_codex_gateway_setup command without any pre-configured scope."
+commands.deny = ["reveal_codex_gateway_setup"]

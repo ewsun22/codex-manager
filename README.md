@@ -1,6 +1,6 @@
 # Codex Manager
 
-Codex Manager 是一个独立运行、本地优先的开源 Codex 桌面管理器。它不接管 Codex、不做反向代理，主要用于观察本机 Codex 的模型交互元数据，并集中发现和安全编辑各项目的 `AGENTS.md`。
+Codex Manager 是一个独立运行、本地优先的开源 Codex 桌面管理器。它主要用于观察本机 Codex 的模型交互元数据、管理官方订阅账户与自定义 Responses 供应商，并集中发现和安全编辑各项目的 `AGENTS.md`。`v0.5.0-beta.1` 新增的可选反代只监听 loopback、默认停止，不是系统代理或通用 API 网关。
 
 > 非官方项目，与 OpenAI 无隶属或背书关系。
 
@@ -8,7 +8,7 @@ Codex Manager 是一个独立运行、本地优先的开源 Codex 桌面管理�
 
 ## 当前状态
 
-当前源码版本是 **0.4.0 macOS 签名 beta 候选版**：它在已公开验证的 `v0.3.0` 签名更新链上增加自动更新检查、受限状态持久化和新版本视觉提醒。`v0.2.0` 是不进入在线更新通道的 `Unsigned Community Build`；`v0.2.1`、`v0.2.2` 和 `v0.3.0` 已完成 Developer ID 签名、公证、stapling、Gatekeeper 与公开资产复验。`v0.4.0` 仍必须通过最终 exact-SHA 发布门禁；从已安装的旧签名版本完成真实更新、安装和重启验收后才能标记 updater E2E accepted。
+当前已定版源码版本是 **0.5.0-beta.1 Unsigned Community Build Pre-release 候选版**，包含 Codex 供应商与本地 Responses 网关切片。`v0.2.0` 是不进入在线更新通道的早期 unsigned community prerelease；`v0.2.1`、`v0.2.2`、`v0.3.0` 和 `v0.4.0` 已分别完成 Developer ID 签名、公证、stapling、Gatekeeper 与公开资产复验。`v0.5.0-beta.1` 仍必须从最终 exact SHA 的单次成功 CI 产物发布，且因未签名不会进入稳定 updater；真实供应商和升级安装完成前不能标记 accepted。
 
 已实现的主要能力：
 
@@ -23,6 +23,7 @@ Codex Manager 是一个独立运行、本地优先的开源 Codex 桌面管理�
 - 在授权根目录内创建项目级 `AGENTS.md`，并以 canonical path、逐段 no-follow、SHA/mtime 冲突检查、同目录原子交换和本地 revision 完成保存与恢复。
 - 探测 Desktop 内置或 PATH 中的 Codex CLI，并生成 App Server JSON Schema 指纹；不附着 Codex Desktop 的私有 stdio。
 - OAuth 页面由用户点击启动官方 `codex login` 浏览器流程，并用短生命周期的官方 App Server 读取账户、套餐与 ChatGPT Codex 额度窗口。macOS beta 还支持通过原生文件选择器导入 ChatGPT OAuth `auth.json`、把多个档案秘密保存在应用专用 Keychain、软删除/恢复，以及由用户明确触发的“设为当前”或“轮换到下一个”。token、文件路径、原始 JSON、授权 URL 与回调 URL不进入 WebView、SQLite 或应用日志。
+- `v0.5.0-beta.1` 提供 Codex Responses-compatible 供应商表和显式启停的本地网关。供应商元数据进入 SQLite，API Key 与随机本机 bearer 只进入应用专用 Keychain/原生运行时；普通 DTO 只返回 `hasApiKey`。网关固定监听 `127.0.0.1`，只支持 `/v1/models`、`/v1/responses`、`/v1/responses/compact` 和受保护的本机辅助端点，禁用 redirect 和系统代理，不保存请求/响应 body、header 或 query。它不会自动改写 `config.toml`；配置片段只在用户通过原生确认后临时显示。
 - 设置页提供 GitHub Releases 更新检查：桌面版启动后按需检查，并默认每 12 小时自动检查一次；检查间隔可在设置中配置为 1–168 小时。Rust 后端固定 endpoint 和公钥，只持久化最近检查尝试时间，以及最近成功检查的当前/可用版本、发布日期和截断后的 notes；发现新版本时设置侧栏与应用更新卡片都会提醒。安装前显示 macOS 原生确认框并验证 Tauri 更新签名，下载、安装和重启仍需用户显式操作。
 
 ## 观测边界
@@ -32,7 +33,7 @@ Codex Manager 同时保留“来源”和“可信度”，不同来源不能混
 - rollout 适合历史、模型、effort、token 和 Codex 报告的耗时，但它是内部 JSONL，不是稳定公开 API；累计 token 增长也不能天然宣称为唯一网络请求。
 - OTel `codex.api_request` 日志可提供请求级状态、耗时和安全化 endpoint 分类。本地只保存固定 event/provider/origin/route 枚举；已知价格模型保留标识，未知 model/thread/turn 仅保存不可逆的本地伪名指纹。原始 host/path、租户子域、用户名、密码、query 或 fragment 不落库。
 - 当前 Codex 的 token OTel 日志位于 `codex.sse_event`，而聚合 metrics 通常没有 conversation id；本版不会猜测性地把这些记录拼到某个 API 请求上。
-- 当前原生 Codex OTel 不提供可靠 wire response bytes，因此通常显示 `unavailable`。真实完整 URL、网络 TTFB、wire bytes 和供应商实际账单仍需要未来可选反代或服务端对账。
+- 当前原生 Codex OTel 不提供可靠 wire response bytes，因此通常显示 `unavailable`。`v0.5.0-beta.1` 网关首版只提供运行状态和有界请求/失败/并发计数，尚不把 TTFB、wire bytes 或供应商账单写入活动数据库；未经过网关的官方直连仍显示 `unavailable`。
 - API 等价价格不是 ChatGPT 套餐扣费，也不是中转站账单。未知模型或字段不完整时不估价。
 
 详见 [能力矩阵](docs/capability-matrix.md) 与 [架构说明](docs/architecture.md)。
@@ -62,7 +63,11 @@ npm run tauri:dev
 首次启动会尝试发现现有 `~/.codex`。要编辑项目文件，仍需在“设置”中明确保存授权项目根目录；只观察到项目并不自动授予写权限。
 OAuth 页面读取状态时会启动一次有超时和响应上限的本机 `codex app-server`；只有用户点击“开始登录/重新登录”才运行 `codex login`。macOS 首次使用时会把固定 ChatGPT bundle 中的 Codex 复制到随机 `0700` 临时目录，再用系统 `codesign` 验证 identifier `codex` 与 OpenAI Team ID `2DC432GLL2`；该稳定副本在应用生命周期内复用，但每次启动前都会复验路径。App Server 通过 `POSIX_SPAWN_START_SUSPENDED` 暂停启动，后端以 `+PID` 动态验证实际进程后才恢复执行；PATH、环境覆盖和验签后路径替换不会跨越认证边界。当前非 macOS 构建显示 OAuth `unavailable`。登录进程由后端独立监督并在 10 分钟内退出或强制回收。
 
-认证文件导入同样只接受该已验签 Codex 的隔离验证结果：Rust 原生选择器只读取当前用户拥有、权限不宽于 `0600`、单硬链接且不超过 128 KiB 的普通 JSON，并在读取前后复核文件身份与时间；WebView 不接收路径或内容，API Key 文件和非 ChatGPT OAuth 文件会被拒绝。实际 App Server PID 通过动态签名验证并恢复后，后端才使用官方 `chatgptAuthTokens` 登录请求在内存中提交 access token 和工作区 ID，再读取账户与额度；refresh token 不交给在线探测，也不创建临时 `auth.json`。验证后的档案秘密与内部元数据保存在 `cc.codex.manager.auth-profiles.v1` 应用专用 macOS Keychain 服务，不进入 SQLite。切换只支持 Codex 的 file 模式活动 `auth.json`：后端同时通过 App Server `config/read` 证明最终生效的 `cli_auth_credentials_store` 明确为 `file`，并要求文件属于当前用户、权限不宽于 `0600`、只有一个硬链接，再执行 Manager 实例间互斥、opaque revision、SHA/mtime/文件身份 CAS、同目录原子替换和切换后官方账户复核；如果官方流程刷新了活动凭据，管理器会重新读取新 bytes 和文件戳后再持久化或回滚。keyring/auto 模式会安全拒绝。官方 Codex 进程不遵守 Manager 的进程锁，因此删除提交前会再次复核活动文件，但用户仍应先结束正在运行的 Codex 任务。删除不是立即销毁：非活动且非最后一个可用档案会进入 30 天回收站，期间可以恢复，过期后才从应用专用 Keychain 清理。Codex CLI 与 IDE 扩展共享活动账户，因此切换影响之后读取凭据的新会话；本应用不会按请求或在后台自动换号，也不是反向代理。官方认证行为见 [Codex Authentication](https://developers.openai.com/codex/auth)，账户、配置与额度协议见 [Codex App Server](https://developers.openai.com/codex/app-server)。
+认证文件导入同样只接受该已验签 Codex 的隔离验证结果：Rust 原生选择器只读取当前用户拥有、权限不宽于 `0600`、单硬链接且不超过 128 KiB 的普通 JSON，并在读取前后复核文件身份与时间；WebView 不接收路径或内容，API Key 文件和非 ChatGPT OAuth 文件会被拒绝。实际 App Server PID 通过动态签名验证并恢复后，后端才使用官方 `chatgptAuthTokens` 登录请求在内存中提交 access token 和工作区 ID，再读取账户与额度；refresh token 不交给在线探测，也不创建临时 `auth.json`。验证后的档案秘密与内部元数据保存在 `cc.codex.manager.auth-profiles.v1` 应用专用 macOS Keychain 服务，不进入 SQLite。
+
+切换只支持 Codex 的 file 模式活动 `auth.json`：后端同时通过 App Server `config/read` 证明最终生效的 `cli_auth_credentials_store` 明确为 `file`，并要求文件属于当前用户、权限不宽于 `0600`、只有一个硬链接，再执行 Manager 实例间互斥、opaque revision、SHA/mtime/文件身份 CAS、同目录原子替换和切换后官方账户复核；如果官方流程刷新了活动凭据，管理器会重新读取新 bytes 和文件戳后再持久化或回滚。keyring/auto 模式会安全拒绝。官方 Codex 进程不遵守 Manager 的进程锁，因此删除提交前会再次复核活动文件，但用户仍应先结束正在运行的 Codex 任务。删除不是立即销毁：非活动且非最后一个可用档案会进入 30 天回收站，期间可以恢复，过期后才从应用专用 Keychain 清理。Codex CLI 与 IDE 扩展共享活动账户，因此切换影响之后读取凭据的新会话；本应用不会按请求或在后台自动换号。官方 OAuth 凭据不会进入 `v0.5.0-beta.1` 的 API-key 网关。官方认证行为见 [Codex Authentication](https://developers.openai.com/codex/auth)，账户、配置与额度协议见 [Codex App Server](https://developers.openai.com/codex/app-server)。
+
+`v0.5.0-beta.1` 网关只在用户选择一个已保存的 API-key 供应商并点击启动后监听。远程 Base URL 必须是解析到公网地址的 HTTPS origin，`http` 仅允许明确的 `localhost`/loopback 开发上游；userinfo、query、fragment、私网/link-local/unspecified/multicast 地址和 30x redirect 会被拒绝。网关不会安装 CA、注册系统代理、常驻后台或自动接管 Codex。要使用它，用户需在原生确认后自行将生成的 provider 片段合并到 Codex 配置；停止服务前应先恢复直连配置。
 
 桌面版启动后会按需检查更新，并按设置的间隔（默认 12 小时，允许 1–168 小时）再次检查；仅访问后端固定的 GitHub `latest.json`。成功或失败都从最近一次检查尝试起遵守该间隔；自动检查失败不会打断使用，也不会覆盖上一次成功检查状态。浏览器 demo 不自动联网。检查状态只保留最近尝试时间与受限展示元数据，不保存 URL、签名对象、下载句柄、错误详情或凭据；下载、签名校验、安装和重启仍要求用户显式操作，并在同进程重新检查、版本核对和 macOS 原生确认后继续。
 
@@ -103,14 +108,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 ./scripts/verify-release.sh unsigned
 ```
 
-本机没有 Developer ID 时，`package-macos.sh` 只能生成 unsigned `.app`/`.dmg`。发布目录固定为不受 Vite `dist/` 清理影响的 `artifacts/release/`。2026-08-27 的历史本机产物是 `artifacts/release/Codex Manager_0.1.0_aarch64.dmg`，SHA-256 为 `a66968a63b3d246f8a1a3ee6e61800e01c2adf94f8dd0e7bdd4be145117fff74`；该值对应首次提交前的工作树，不能用于当前 `0.3.0` 签名候选。`.github/workflows/release.yml` 仅能手动从 `main` 当前 SHA 创建签名草稿 Release，缺少 Tauri 或 Apple 签名凭据时失败。签名、公证、更新清单与发布的状态边界见 [发布运行手册](docs/release.md)。
+本机没有 Developer ID 时，`package-macos.sh` 只能生成 unsigned `.app`/`.dmg`。发布目录固定为不受 Vite `dist/` 清理影响的 `artifacts/release/`。2026-08-27 的历史本机产物是 `artifacts/release/Codex Manager_0.1.0_aarch64.dmg`，SHA-256 为 `a66968a63b3d246f8a1a3ee6e61800e01c2adf94f8dd0e7bdd4be145117fff74`；该值对应首次提交前的工作树，不能用于当前版本。`v0.5.0-beta.1` community Pre-release 只能使用最终 `main` exact SHA 的成功 CI unsigned artifact；`.github/workflows/release.yml` 继续只服务签名稳定通道。签名、公证、更新清单与发布的状态边界见 [发布运行手册](docs/release.md)。
 
 ## 隐私与开源
 
-- 默认只保存模型使用元数据、项目路径、checkpoint 和设置；不保存 Codex 消息正文、Authorization、Cookie、API Key、OAuth code、完整环境变量或请求 query。
+- 默认只保存模型使用元数据、项目路径、checkpoint、供应商非秘密元数据和设置；不保存 Codex 消息正文、Authorization、Cookie、OAuth code、完整环境变量或请求 query。用户提供的供应商 API Key 与本机网关 bearer 只进入应用专用 Keychain/原生运行时，不进入 SQLite、普通 WebView DTO 或日志。
 - OAuth 页的 email、套餐、认证方式和额度仅保留在当前 UI 内存中；原始 App Server 响应不会落盘。用户明确导入的认证档案是例外：原始凭据只在原生后端的 zeroizing 内存中校验，验证后进入应用专用 macOS Keychain；WebView/SQLite/日志只接触不含 email、路径或 token 的档案 DTO。应用不导出/编辑凭据，不做代理式自动轮换。
 - AGENTS 编辑功能需要在本地保存有限 revision，因此这些 revision 会包含用户主动编辑的 AGENTS 文本；每个文件最多保留 20 版。
-- 数据默认不上传；唯一监听服务是用户显式开启的 loopback OTel receiver。
-- 本项目采用 Apache-2.0。EasyCLIProxyAPI 只作为产品信息架构与行为研究参考；其 GUI 仓库未提供可确认的许可证，因此本项目采用基于 OpenAI 官方接口的 clean-room 实现，不复制其源码、样式、图标或品牌资产。
+- 数据默认不上传；只有用户显式开启的 loopback OTel receiver 和 `v0.5.0-beta.1` Codex Responses 网关会监听本机端口。网关启动后会把用户主动发送给它的请求转发到所选供应商，因此该供应商按其自身隐私条款接收内容。
+- 本项目采用 Apache-2.0。AI Toolbox 的 MIT 仓库仅以固定 commit `3f2faef5b7a453169d4325d89fab290154233723` 作为产品行为和失败模式参考；本功能基于 OpenAI 官方 Responses/config/App Server 契约 clean-room 实现，不复制其源码、样式、图标、品牌或来自 AxonHub 的 LGPL transformer fixture。EasyCLIProxyAPI 仍只作为产品信息架构参考；未确认许可证的 GUI 代码不进入本仓库。
 
 完整说明见 [PRIVACY.md](PRIVACY.md)、[SECURITY.md](SECURITY.md) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

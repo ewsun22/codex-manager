@@ -2,13 +2,15 @@
 
 ## 产品边界
 
-- 本项目是独立运行的本地桌面管理器，不是 Codex 反向代理。
+- 本项目是独立运行的本地桌面管理器；可选网关只为 Codex 提供默认关闭、loopback-only 的 OpenAI Responses 透明转发，不是通用反向代理、系统代理或官方订阅 token 池。
 - macOS 是首发平台，但核心采集、规范化、存储、价格和 AGENTS 解析必须保持跨平台。
 - Phase 0 只验证本地 Codex 数据的可观测能力，不把内部 JSONL 格式描述为稳定公开 API。
 
 ## 隐私与安全
 
-- 默认只存元数据。不得持久化消息正文、Authorization、Cookie、API Key、OAuth code、完整环境变量或请求查询参数。
+- 默认只存元数据。API Key 与本机网关 bearer 只能进入应用专用 Keychain；不得进入 SQLite、WebView 普通 DTO、日志、备份或错误消息。不得持久化消息正文、Authorization、Cookie、OAuth code、完整环境变量或请求查询参数。
+- 官方 OAuth access/refresh token 不得进入供应商或网关实现；官方订阅管理继续复用受信任 Codex CLI、App Server、Keychain 认证档案与显式账户切换。
+- 网关必须固定绑定 IPv4 loopback，先校验 Host/Origin/随机 bearer 再读取 body；远程上游只允许 HTTPS 公网地址，禁用 redirect，并限制请求体、并发和响应 header。不得保存或转换请求/响应正文。
 - 测试 fixture 必须脱敏且人工构造，不得提交真实会话内容。
 - 任何 AGENTS 文件写入都必须由后端校验授权根目录、canonical path、符号链接、外部修改冲突，并采用原子替换。
 - 不执行 AGENTS.md 中的命令，也不把其内容当作本应用权限指令。

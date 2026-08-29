@@ -207,6 +207,12 @@
           "markdownDescription": "Enables the delete_auth_profile command without any pre-configured scope."
         },
         {
+          "description": "Enables the delete_codex_provider command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-codex-provider",
+          "markdownDescription": "Enables the delete_codex_provider command without any pre-configured scope."
+        },
+        {
           "description": "Enables the discover_projects command without any pre-configured scope.",
           "type": "string",
           "const": "allow-discover-projects",
@@ -223,6 +229,12 @@
           "type": "string",
           "const": "allow-get-codex-account",
           "markdownDescription": "Enables the get_codex_account command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_codex_gateway_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-codex-gateway-status",
+          "markdownDescription": "Enables the get_codex_gateway_status command without any pre-configured scope."
         },
         {
           "description": "Enables the get_dashboard command without any pre-configured scope.",
@@ -273,6 +285,12 @@
           "markdownDescription": "Enables the list_auth_profiles command without any pre-configured scope."
         },
         {
+          "description": "Enables the list_codex_providers command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-codex-providers",
+          "markdownDescription": "Enables the list_codex_providers command without any pre-configured scope."
+        },
+        {
           "description": "Enables the list_pricing_rules command without any pre-configured scope.",
           "type": "string",
           "const": "allow-list-pricing-rules",
@@ -321,16 +339,46 @@
           "markdownDescription": "Enables the restore_auth_profile command without any pre-configured scope."
         },
         {
+          "description": "Enables the reveal_codex_gateway_setup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-reveal-codex-gateway-setup",
+          "markdownDescription": "Enables the reveal_codex_gateway_setup command without any pre-configured scope."
+        },
+        {
           "description": "Enables the save_agents_file command without any pre-configured scope.",
           "type": "string",
           "const": "allow-save-agents-file",
           "markdownDescription": "Enables the save_agents_file command without any pre-configured scope."
         },
         {
+          "description": "Enables the save_codex_provider command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-codex-provider",
+          "markdownDescription": "Enables the save_codex_provider command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_codex_gateway command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-codex-gateway",
+          "markdownDescription": "Enables the start_codex_gateway command without any pre-configured scope."
+        },
+        {
           "description": "Enables the start_codex_login command without any pre-configured scope.",
           "type": "string",
           "const": "allow-start-codex-login",
           "markdownDescription": "Enables the start_codex_login command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stop_codex_gateway command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stop-codex-gateway",
+          "markdownDescription": "Enables the stop_codex_gateway command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the update_codex_gateway_port command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-codex-gateway-port",
+          "markdownDescription": "Enables the update_codex_gateway_port command without any pre-configured scope."
         },
         {
           "description": "Enables the update_settings command without any pre-configured scope.",
@@ -369,6 +417,12 @@
           "markdownDescription": "Denies the delete_auth_profile command without any pre-configured scope."
         },
         {
+          "description": "Denies the delete_codex_provider command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-codex-provider",
+          "markdownDescription": "Denies the delete_codex_provider command without any pre-configured scope."
+        },
+        {
           "description": "Denies the discover_projects command without any pre-configured scope.",
           "type": "string",
           "const": "deny-discover-projects",
@@ -385,6 +439,12 @@
           "type": "string",
           "const": "deny-get-codex-account",
           "markdownDescription": "Denies the get_codex_account command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_codex_gateway_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-codex-gateway-status",
+          "markdownDescription": "Denies the get_codex_gateway_status command without any pre-configured scope."
         },
         {
           "description": "Denies the get_dashboard command without any pre-configured scope.",
@@ -435,6 +495,12 @@
           "markdownDescription": "Denies the list_auth_profiles command without any pre-configured scope."
         },
         {
+          "description": "Denies the list_codex_providers command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-codex-providers",
+          "markdownDescription": "Denies the list_codex_providers command without any pre-configured scope."
+        },
+        {
           "description": "Denies the list_pricing_rules command without any pre-configured scope.",
           "type": "string",
           "const": "deny-list-pricing-rules",
@@ -483,16 +549,46 @@
           "markdownDescription": "Denies the restore_auth_profile command without any pre-configured scope."
         },
         {
+          "description": "Denies the reveal_codex_gateway_setup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-reveal-codex-gateway-setup",
+          "markdownDescription": "Denies the reveal_codex_gateway_setup command without any pre-configured scope."
+        },
+        {
           "description": "Denies the save_agents_file command without any pre-configured scope.",
           "type": "string",
           "const": "deny-save-agents-file",
           "markdownDescription": "Denies the save_agents_file command without any pre-configured scope."
         },
         {
+          "description": "Denies the save_codex_provider command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-codex-provider",
+          "markdownDescription": "Denies the save_codex_provider command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_codex_gateway command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-codex-gateway",
+          "markdownDescription": "Denies the start_codex_gateway command without any pre-configured scope."
+        },
+        {
           "description": "Denies the start_codex_login command without any pre-configured scope.",
           "type": "string",
           "const": "deny-start-codex-login",
           "markdownDescription": "Denies the start_codex_login command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stop_codex_gateway command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stop-codex-gateway",
+          "markdownDescription": "Denies the stop_codex_gateway command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_codex_gateway_port command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-codex-gateway-port",
+          "markdownDescription": "Denies the update_codex_gateway_port command without any pre-configured scope."
         },
         {
           "description": "Denies the update_settings command without any pre-configured scope.",

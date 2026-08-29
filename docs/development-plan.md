@@ -40,7 +40,7 @@
 - [x] SHA/mtime 冲突、同目录原子替换、fsync、两阶段 revision 与崩溃恢复
 - [x] 每文件最多 20 个本地 revision，支持带当前 SHA 的恢复
 
-## Phase 4：macOS beta 工程 — signed stable channel released; v0.4.0 release pending
+## Phase 4：macOS beta 工程 — signed stable channel released through v0.4.0; updater E2E pending
 
 - [x] 隐私、路径安全、CSP 与显式 Tauri command capability
 - [x] 原创应用图标与 macOS 13+ bundle 配置
@@ -65,9 +65,24 @@
 - [x] `v0.2.2` exact source `a2359e20eda9423f509a6a76f59d3e4c61a10ddc` 完成签名发布与公开复验；release run `33245641061`、published verify run `33246307716` 均成功，九项资产和 Release ID `378939150` 已核对
 - [ ] 尚未取得从已安装 `v0.2.1` 到 `v0.2.2` 的真实 updater E2E 证据；不得把签名发布与公开复验外推成客户端更新验收
 - [x] `v0.3.0` 已从 exact source `fab415af2d9da6dfa41e79c7073bfb9fbb5fb818` 完成签名发布与公开复验；release run `33254920672`、published verification run `33255604307` 均成功，Release ID 为 `378997476`，九项资产已核对
-- [ ] `v0.4.0` 从最终 `main` exact SHA 完成 fresh signed release、公开复验，以及从已安装旧签名版本下载、验签、安装、重启的 updater E2E
+- [x] `v0.4.0` 已从 exact source `e462db05aa1f2608509cbf333d992bbd89be9a1d` 完成签名发布与公开复验；release run `33278181464`、published verification run `33278878143` 均成功
+- [ ] 尚未取得从已安装旧签名版本到 `v0.4.0` 的真实检查、下载、验签、安装、重启 updater E2E 证据
 
 ## 后续阶段
+
+### Phase 5：Codex 供应商与 Responses 网关 — v0.5.0-beta.1 candidate; real-provider acceptance pending
+
+- [x] 供应商非秘密元数据使用统一 SQLite store；API Key 使用应用专用 macOS Keychain，WebView DTO 只返回 `hasApiKey`
+- [x] 新增表格优先的“供应商与反代”界面，并把既有 OAuth/认证档案/额度入口明确命名为“官方订阅”
+- [x] 显式启动/停止固定 IPv4 loopback 的 Responses identity gateway；随机本机 bearer、body/并发限制、受限响应 header 与 redirect disabled
+- [x] 只支持 `/v1/responses` 与 `/v1/responses/compact`；不把官方 OAuth token 放入反代池
+- [x] 远程 HTTPS 公网和显式 loopback HTTP 两类上游；拒绝 userinfo、query、fragment、私网/link-local 等地址
+- [x] 原生确认后只显示手动配置片段；本版不自动改写 `config.toml` 或 `auth.json`
+- [ ] `v0.5.0-beta.1` 从最终 exact SHA 的单次成功 CI artifact 发布为 `Unsigned Community Build` GitHub Pre-release，并完成公开资产回下载复验
+- [ ] 用用户授权的真实 API-key 上游完成 Codex CLI Responses E2E、费用确认与恢复直连验收
+- [ ] 为运行中配置漂移、退出前恢复、崩溃恢复设计受管 config state machine；在此之前网关不会自动接管 Codex
+
+首版明确不做 Chat/Anthropic/Gemini 转换、provider failover/retry pool、远程 provider catalog、自定义 header DSL、请求正文日志、官方订阅代理或后台自动换号。
 
 ### Windows beta
 
@@ -77,4 +92,4 @@
 
 ### 可选精确网络观测
 
-只有产品明确需要完整 URL、真实 TTFB、wire bytes 或中转站路由时，才单独设计可选反代。该模块必须默认关闭、独立授权、避免记录 body/credentials，并另做证书、代理配置和流式协议安全评审。
+Phase 5 的网关只完成默认关闭的 Codex Responses 透明转发和进程内状态，不把完整 URL、TTFB、wire bytes 或上游账单写入活动库。若后续需要精确网络观测，必须另行设计字段 provenance、留存、流式终态、配置接管/恢复和真实 Codex E2E，不得从“listener 已启动”推导为业务验收。

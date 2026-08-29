@@ -1,6 +1,6 @@
 {
   "name": "codex-manager",
-  "version": "0.4.0",
+  "version": "0.5.0-beta.1",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
@@ -14,7 +14,7 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "test": "node --test tests/activity-presentation.test.ts tests/activity-refresh.test.ts tests/agents.test.ts tests/dependency-audit.test.ts tests/jsonl-reader.test.ts tests/oauth.test.ts tests/pricing.test.ts tests/release-state.test.ts tests/rollout-parser.test.ts tests/scan-secrets.test.ts tests/updater-signature.test.ts tests/updater.test.ts tests/workflow-shell.test.ts",
+    "test": "node --test tests/activity-presentation.test.ts tests/activity-refresh.test.ts tests/agents.test.ts tests/dependency-audit.test.ts tests/gateway.test.ts tests/jsonl-reader.test.ts tests/oauth.test.ts tests/pricing.test.ts tests/release-state.test.ts tests/rollout-parser.test.ts tests/scan-secrets.test.ts tests/updater-signature.test.ts tests/updater.test.ts tests/workflow-shell.test.ts",
     "typecheck": "tsc -p tsconfig.json",
     "probe": "node tools/probe.ts",
     "check": "npm run typecheck && npm test && node tools/probe.ts tests/fixtures/rollout-basic.jsonl",

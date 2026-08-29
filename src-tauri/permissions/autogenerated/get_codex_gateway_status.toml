@@ -1,0 +1,9 @@
+# Automatically generated - DO NOT EDIT!
+[[permission]]
+identifier = "allow-get-codex-gateway-status"
+description = "Enables the get_codex_gateway_status command without any pre-configured scope."
+commands.allow = ["get_codex_gateway_status"]
+[[permission]]
+identifier = "deny-get-codex-gateway-status"
+description = "Denies the get_codex_gateway_status command without any pre-configured scope."
+commands.deny = ["get_codex_gateway_status"]

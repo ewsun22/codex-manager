@@ -31,6 +31,14 @@
     "allow-import-auth-profile",
     "allow-activate-auth-profile",
     "allow-delete-auth-profile",
-    "allow-restore-auth-profile"
+    "allow-restore-auth-profile",
+    "allow-list-codex-providers",
+    "allow-save-codex-provider",
+    "allow-delete-codex-provider",
+    "allow-get-codex-gateway-status",
+    "allow-update-codex-gateway-port",
+    "allow-start-codex-gateway",
+    "allow-stop-codex-gateway",
+    "allow-reveal-codex-gateway-setup"
   ]
 }

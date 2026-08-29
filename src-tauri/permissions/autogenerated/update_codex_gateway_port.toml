@@ -1,0 +1,9 @@
+# Automatically generated - DO NOT EDIT!
+[[permission]]
+identifier = "allow-update-codex-gateway-port"
+description = "Enables the update_codex_gateway_port command without any pre-configured scope."
+commands.allow = ["update_codex_gateway_port"]
+[[permission]]
+identifier = "deny-update-codex-gateway-port"
+description = "Denies the update_codex_gateway_port command without any pre-configured scope."
+commands.deny = ["update_codex_gateway_port"]
