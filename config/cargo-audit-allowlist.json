@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-08-29",
+  "releaseTarget": "aarch64-apple-darwin",
+  "warnings": [
+    { "kind": "unmaintained", "id": "RUSTSEC-2024-0413", "package": "atk", "version": "0.18.2", "targetExcluded": true, "rationale": "Linux GTK3-only indirect Tauri dependency; absent from the macOS arm64 release graph." },
+    { "kind": "unmaintained", "id": "RUSTSEC-2024-0416", "package": "atk-sys", "version": "0.18.2", "targetExcluded": true, "rationale": "Linux GTK3-only indirect Tauri dependency; absent from the macOS arm64 release graph." },
+    { "kind": "unmaintained", "id": "RUSTSEC-2024-0412", "package": "gdk", "version": "0.18.2", "targetExcluded": true, "rationale": "Linux GTK3-only indirect Tauri dependency; absent from the macOS arm64 release graph." },
+    { "kind": "unmaintained", "id": "RUSTSEC-2024-0418", "package": "gdk-sys", "version": "0.18.2", "targetExcluded": true, "rationale": "Linux GTK3-only indirect Tauri dependency; absent from the macOS arm64 release graph." },
+    { "kind": "unmaintained", "id": "RUSTSEC-2024-0411", "package": "gdkwayland-sys", "version": "0.18.2", "targetExcluded": true, "rationale": "Linux GTK3-only indirect Tauri dependency; absent from the macOS arm64 release graph." },
+    { "kind": "unmaintained", "id": "RUSTSEC-2024-0417", "package": "gdkx11", "version": "0.18.2", "targetExcluded": true, "rationale": "Linux GTK3-only indirect Tauri dependency; absent from the macOS arm64 release graph." },
+    { "kind": "unmaintained", "id": "RUSTSEC-2024-0414", "package": "gdkx11-sys", "version": "0.18.2", "targetExcluded": true, "rationale": "Linux GTK3-only indirect Tauri dependency; absent from the macOS arm64 release graph." },
+    { "kind": "unmaintained", "id": "RUSTSEC-2024-0415", "package": "gtk", "version": "0.18.2", "targetExcluded": true, "rationale": "Linux GTK3-only indirect Tauri dependency; absent from the macOS arm64 release graph." },
+    { "kind": "unmaintained", "id": "RUSTSEC-2024-0420", "package": "gtk-sys", "version": "0.18.2", "targetExcluded": true, "rationale": "Linux GTK3-only indirect Tauri dependency; absent from the macOS arm64 release graph." },
+    { "kind": "unmaintained", "id": "RUSTSEC-2024-0419", "package": "gtk3-macros", "version": "0.18.2", "targetExcluded": true, "rationale": "Linux GTK3-only indirect Tauri dependency; absent from the macOS arm64 release graph." },
+    { "kind": "unmaintained", "id": "RUSTSEC-2024-0370", "package": "proc-macro-error", "version": "1.0.4", "targetExcluded": false, "rationale": "Locked transitive macro dependency; maintenance warning only, tracked until the upstream Tauri dependency graph removes it." },
+    { "kind": "unmaintained", "id": "RUSTSEC-2025-0134", "package": "rustls-pemfile", "version": "2.2.0", "targetExcluded": false, "rationale": "Locked transitive dependency with no vulnerability advisory; tracked until the upstream networking stack removes it." },
+    { "kind": "unmaintained", "id": "RUSTSEC-2025-0081", "package": "unic-char-property", "version": "0.9.0", "targetExcluded": false, "rationale": "Locked transitive UNIC dependency; maintenance warning only and retained pending an upstream Tauri migration." },
+    { "kind": "unmaintained", "id": "RUSTSEC-2025-0075", "package": "unic-char-range", "version": "0.9.0", "targetExcluded": false, "rationale": "Locked transitive UNIC dependency; maintenance warning only and retained pending an upstream Tauri migration." },
+    { "kind": "unmaintained", "id": "RUSTSEC-2025-0080", "package": "unic-common", "version": "0.9.0", "targetExcluded": false, "rationale": "Locked transitive UNIC dependency; maintenance warning only and retained pending an upstream Tauri migration." },
+    { "kind": "unmaintained", "id": "RUSTSEC-2025-0100", "package": "unic-ucd-ident", "version": "0.9.0", "targetExcluded": false, "rationale": "Locked transitive UNIC dependency; maintenance warning only and retained pending an upstream Tauri migration." },
+    { "kind": "unmaintained", "id": "RUSTSEC-2025-0098", "package": "unic-ucd-version", "version": "0.9.0", "targetExcluded": false, "rationale": "Locked transitive UNIC dependency; maintenance warning only and retained pending an upstream Tauri migration." },
+    { "kind": "unsound", "id": "RUSTSEC-2024-0429", "package": "glib", "version": "0.18.5", "targetExcluded": true, "rationale": "The affected Linux GTK/glib chain is absent from the aarch64-apple-darwin release graph; target exclusion is rechecked on every release audit." }
+  ]
+}

@@ -9,6 +9,14 @@ on:
         description: Exact source version to release, for example 0.2.1
         required: true
         type: string
+      resume_run_id:
+        description: Optional exact prior workflow run ID whose sealed signed-transfer artifact must be reused
+        required: false
+        type: string
+      resume_release_id:
+        description: Optional exact existing draft Release ID; must be supplied with resume_run_id
+        required: false
+        type: string
 
 concurrency:
   group: release-macos-arm64-${{ inputs.version }}
@@ -23,24 +31,20 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.version.outputs.value }}
+      resume: ${{ steps.version.outputs.resume }}
     steps:
       - name: Check out the manually selected source revision
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
-
-      - name: Set up the locked Rust toolchain
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable on 2026-08-27
-        with:
-          toolchain: 1.98.0
 
       - name: Reject stale, non-main, or previously used release sources
         env:
@@ -48,31 +52,35 @@ jobs:
           DISPATCH_REF: ${{ github.ref }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
-          REQUESTED_VERSION: ${{ inputs.version }}
+          RESUME_RELEASE_ID: ${{ inputs.resume_release_id }}
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+          SOURCE_SHA: ${{ github.sha }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           test "$DISPATCH_REF" = "refs/heads/main"
-          remote_main_sha="$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)"
           test "$(git rev-parse HEAD)" = "$DISPATCH_SHA"
-          test "$remote_main_sha" = "$DISPATCH_SHA"
-          if gh api "repos/$REPOSITORY/git/ref/tags/v$REQUESTED_VERSION" >/dev/null 2>&1; then
-            echo "Release tag v$REQUESTED_VERSION already exists; refusing to overwrite it." >&2
+          if { [ -n "$RESUME_RUN_ID" ] && [ -z "$RESUME_RELEASE_ID" ]; } || \
+             { [ -z "$RESUME_RUN_ID" ] && [ -n "$RESUME_RELEASE_ID" ]; }; then
+            echo "resume_run_id and resume_release_id must be supplied together." >&2
             exit 1
           fi
-          release_count="$(
-            gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" |
-              jq -er --arg tag "v$REQUESTED_VERSION" '[.[][] | select(.tag_name == $tag)] | length'
-          )"
-          if [ "$release_count" -ne 0 ]; then
-            echo "Release v$REQUESTED_VERSION already exists; refusing to overwrite it." >&2
-            exit 1
+          if [ -n "$RESUME_RUN_ID" ]; then
+            [[ "$RESUME_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+            [[ "$RESUME_RELEASE_ID" =~ ^[1-9][0-9]*$ ]]
           fi
+          command=(node scripts/release-github.mjs preflight --output "$RUNNER_TEMP/release-preflight.json")
+          if [ -n "$RESUME_RUN_ID" ]; then
+            command+=(--resume-release-id "$RESUME_RELEASE_ID")
+          fi
+          "${command[@]}"
 
       - name: Verify source versions and updater configuration
         id: version
         env:
           REQUESTED_VERSION: ${{ inputs.version }}
           EXPECTED_UPDATER_ENDPOINT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
         run: |
           set -euo pipefail
           if ! [[ "$REQUESTED_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
@@ -94,18 +102,25 @@ jobs:
           '
           grep -Eq '^tauri-plugin-updater[[:space:]]*=' src-tauri/Cargo.toml
           grep -REq 'tauri_plugin_updater::' src-tauri/src
+          npm run release:dry-run
           printf 'value=%s\n' "$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
+          if [ -n "$RESUME_RUN_ID" ]; then
+            printf 'resume=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'resume=false\n' >> "$GITHUB_OUTPUT"
+          fi
 
   build:
     name: Build secret-free release input
     needs: preflight
+    if: ${{ inputs.resume_run_id == '' }}
     runs-on: macos-15
     timeout-minutes: 90
     permissions:
       contents: read
     steps:
       - name: Check out the validated source revision
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -118,7 +133,7 @@ jobs:
           test "$(uname -m)" = "arm64"
 
       - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -150,13 +165,12 @@ jobs:
       - name: Generate SBOM and license inventories
         run: ./scripts/sbom.sh && ./scripts/licenses.sh && shasum -a 256 -c artifacts/release/sbom/SHA256SUMS
 
-      - name: Build the unsigned app input and standalone updater verifier
+      - name: Build the unsigned app input
         env:
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
           npm run tauri -- build --target aarch64-apple-darwin --bundles app --no-sign
-          cargo build --release --manifest-path src-tauri/Cargo.toml --example verify_updater_signature
           app_bundle="$(find target/aarch64-apple-darwin/release/bundle/macos -maxdepth 1 -type d -name '*.app' -print -quit)"
           test -d "$app_bundle"
           executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_bundle/Contents/Info.plist")"
@@ -165,6 +179,7 @@ jobs:
 
       - name: Package the immutable signing input
         env:
+          REPOSITORY: ${{ github.repository }}
           SOURCE_SHA: ${{ github.sha }}
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
@@ -177,8 +192,6 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$input_root/unsigned-app.zip"
           ditto artifacts/release/sbom "$input_root/artifacts/release/sbom"
           ditto artifacts/release/licenses "$input_root/artifacts/release/licenses"
-          cp target/release/examples/verify_updater_signature "$input_root/tools/verify_updater_signature"
-          chmod 700 "$input_root/tools/verify_updater_signature"
           cp "docs/release-notes/v$VERSION.md" "$input_root/RELEASE-NOTES.md"
           PUBLIC_KEY_PATH="$input_root/tools/updater.pub" node --input-type=module -e '
             import { readFileSync, writeFileSync } from "node:fs";
@@ -189,12 +202,21 @@ jobs:
             if (decoded.length === 0) throw new Error("updater public key is invalid");
             writeFileSync(process.env.PUBLIC_KEY_PATH, decoded, { mode: 0o600 });
           '
+          test -n "${ImageOS:-}"
+          test -n "${ImageVersion:-}"
+          macos_version="$(sw_vers -productVersion)"
+          xcode_version="$(xcodebuild -version | paste -sd ' ' -)"
+          gh_version="$(gh --version | sed -n '1p')"
           jq -n \
-            --arg version "$VERSION" --arg sourceSha "$SOURCE_SHA" --arg target aarch64-apple-darwin \
+            --arg version "$VERSION" --arg repository "$REPOSITORY" --arg sourceSha "$SOURCE_SHA" --arg sourceRef refs/heads/main \
+            --arg workflowRef "$GITHUB_WORKFLOW_REF" --arg runId "$GITHUB_RUN_ID" --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg target aarch64-apple-darwin \
+            --arg imageOS "$ImageOS" --arg imageVersion "$ImageVersion" \
+            --arg macOSVersion "$macos_version" --arg xcodeVersion "$xcode_version" \
             --arg node "$(node --version)" --arg npm "$(npm --version)" \
             --arg rustc "$(rustc --version)" --arg cargo "$(cargo --version)" \
-            --arg tauri "$(node node_modules/@tauri-apps/cli/tauri.js --version)" \
-            '{version:$version,sourceSha:$sourceSha,target:$target,toolchain:{node:$node,npm:$npm,rustc:$rustc,cargo:$cargo,tauri:$tauri}}' \
+            --arg tauri "$(node node_modules/@tauri-apps/cli/tauri.js --version)" --arg gh "$gh_version" \
+            '{schemaVersion:2,version:$version,source:{repository:$repository,sha:$sourceSha,ref:$sourceRef,workflowRef:$workflowRef,runId:$runId,runAttempt:$runAttempt},target:$target,runner:{imageOS:$imageOS,imageVersion:$imageVersion,macOSVersion:$macOSVersion,xcodeVersion:$xcodeVersion},toolchain:{node:$node,npm:$npm,rustc:$rustc,cargo:$cargo,tauri:$tauri,gh:$gh}}' \
             > "$input_root/BUILD-INPUT.json"
           archive="$upload_root/codex-manager-v$VERSION-signing-input.tar.gz"
           COPYFILE_DISABLE=1 tar -czf "$archive" -C "$input_root" .
@@ -211,12 +233,25 @@ jobs:
   sign:
     name: Sign, notarize, staple, and seal artifacts
     needs: [preflight, build]
+    if: ${{ inputs.resume_run_id == '' }}
     runs-on: macos-15
-    timeout-minutes: 120
+    timeout-minutes: 180
     environment: release
     permissions:
       contents: read
     steps:
+      - name: Check out the exact release control source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js for the integrity-pinned signer and evidence validation
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
       - name: Verify the runner is macOS arm64
         run: |
           set -euo pipefail
@@ -243,19 +278,17 @@ jobs:
           rm -rf -- "$input_root"
           mkdir -p "$input_root"
           tar -xzf "$archive" -C "$input_root"
-          jq -e --arg version "$VERSION" --arg sourceSha "$SOURCE_SHA" \
-            '.version == $version and .sourceSha == $sourceSha and .target == "aarch64-apple-darwin"' \
-            "$input_root/BUILD-INPUT.json" >/dev/null
-          test "$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_SHA"
-          release_count="$(
-            gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" |
-              jq -er --arg tag "v$VERSION" '[.[][] | select(.tag_name == $tag)] | length'
-          )"
-          if gh api "repos/$REPOSITORY/git/ref/tags/v$VERSION" >/dev/null 2>&1 || \
-             [ "$release_count" -ne 0 ]; then
-            echo "Tag or Release v$VERSION appeared while approval was pending; refusing to continue." >&2
-            exit 1
-          fi
+          REPOSITORY="$REPOSITORY" VERSION="$VERSION" SOURCE_SHA="$SOURCE_SHA" BUILD_INPUT="$input_root/BUILD-INPUT.json" \
+            node --input-type=module -e '
+              import { readFileSync } from "node:fs";
+              import { validateBuildInput } from "./scripts/release-state.mjs";
+              validateBuildInput(JSON.parse(readFileSync(process.env.BUILD_INPUT, "utf8")), {
+                repository: process.env.REPOSITORY,
+                version: process.env.VERSION,
+                sourceSha: process.env.SOURCE_SHA,
+              });
+            '
+          node scripts/release-github.mjs preflight --output "$RUNNER_TEMP/post-approval-preflight.json"
 
       - name: Install the updater signer from integrity-pinned packages
         run: |
@@ -267,8 +300,10 @@ jobs:
           rm -f -- "$cli_archive" "$native_archive"
           mkdir -p "$signer_root/cli" "$signer_root/native"
           curl --proto '=https' --tlsv1.2 --fail --show-error --silent --location \
+            --retry 5 --retry-all-errors --retry-delay 2 --retry-max-time 120 \
             'https://registry.npmjs.org/@tauri-apps/cli/-/cli-2.11.4.tgz' --output "$cli_archive"
           curl --proto '=https' --tlsv1.2 --fail --show-error --silent --location \
+            --retry 5 --retry-all-errors --retry-delay 2 --retry-max-time 120 \
             'https://registry.npmjs.org/@tauri-apps/cli-darwin-arm64/-/cli-darwin-arm64-2.11.4.tgz' --output "$native_archive"
           cli_integrity="sha512-$(openssl dgst -sha512 -binary "$cli_archive" | openssl base64 -A)"
           native_integrity="sha512-$(openssl dgst -sha512 -binary "$native_archive" | openssl base64 -A)"
@@ -321,7 +356,7 @@ jobs:
           chmod 600 "$certificate_path"
           security create-keychain -p "$keychain_password" "$keychain_path"
           security unlock-keychain -p "$keychain_password" "$keychain_path"
-          security set-keychain-settings -lut 7200 "$keychain_path"
+          security set-keychain-settings -lut 10800 "$keychain_path"
           existing_keychains=()
           while IFS= read -r existing_keychain; do
             existing_keychain="$(sed -E 's/^[[:space:]]*\"?//; s/\"?[[:space:]]*$//' <<< "$existing_keychain")"
@@ -363,8 +398,10 @@ jobs:
           grep -Fqx "TeamIdentifier=$APPLE_TEAM_ID" <<< "$app_info"
           grep -Eq '^CodeDirectory .* flags=.*runtime' <<< "$app_info"
           grep -Eq '^Timestamp=' <<< "$app_info"
-          entitlements="$(codesign --display --entitlements :- "$app_bundle" 2>&1 || true)"
-          if grep -Eq 'com\.apple\.security\.(get-task-allow|cs\.disable-library-validation|cs\.allow-unsigned-executable-memory|cs\.allow-dyld-environment-variables)' <<< "$entitlements"; then
+          entitlements="$signing_root/evidence/APP-ENTITLEMENTS.plist"
+          codesign --display --entitlements :- "$app_bundle" > "$entitlements" 2>/dev/null
+          if [ -s "$entitlements" ]; then plutil -lint "$entitlements" >/dev/null; fi
+          if grep -Eq 'com\.apple\.security\.(get-task-allow|cs\.disable-library-validation|cs\.allow-unsigned-executable-memory|cs\.allow-dyld-environment-variables)' "$entitlements"; then
             echo "The signed app contains a forbidden release entitlement." >&2
             exit 1
           fi
@@ -372,11 +409,12 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$app_archive"
           xcrun notarytool submit "$app_archive" --keychain-profile "$notary_profile" --keychain "$keychain_path" \
             --wait --timeout 60m --output-format json \
-            | jq -e '{id,status,message} | select(.status == "Accepted")' > "$signing_root/evidence/APP-NOTARIZATION.json"
+            | jq -e '{id,status,message:(.message // "")} | select(.status == "Accepted")' > "$signing_root/evidence/APP-NOTARIZATION.json"
           rm -f -- "$app_archive"
           xcrun stapler staple "$app_bundle"
           xcrun stapler validate "$app_bundle"
-          spctl --assess --type execute --verbose=4 "$app_bundle"
+          app_gatekeeper="$(spctl --assess --type execute --verbose=4 "$app_bundle" 2>&1)"
+          grep -Fq 'source=Notarized Developer ID' <<< "$app_gatekeeper"
 
       - name: Create and sign the updater archive
         env:
@@ -396,7 +434,7 @@ jobs:
           node "$signer_root/cli/tauri.js" signer sign "$tarball" >/dev/null
           unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
           test -s "$tarball.sig"
-          "$input_root/tools/verify_updater_signature" "$tarball" "$tarball.sig" "$input_root/tools/updater.pub"
+          node scripts/verify-updater-signature.mjs "$tarball" "$tarball.sig" "$input_root/tools/updater.pub"
 
       - name: Create, sign, notarize, and staple the DMG
         env:
@@ -423,11 +461,12 @@ jobs:
           grep -Eq '^Timestamp=' <<< "$dmg_info"
           xcrun notarytool submit "$dmg" --keychain-profile "$notary_profile" --keychain "$keychain_path" \
             --wait --timeout 60m --output-format json \
-            | jq -e '{id,status,message} | select(.status == "Accepted")' > "$signing_root/evidence/DMG-NOTARIZATION.json"
+            | jq -e '{id,status,message:(.message // "")} | select(.status == "Accepted")' > "$signing_root/evidence/DMG-NOTARIZATION.json"
           xcrun stapler staple "$dmg"
           xcrun stapler validate "$dmg"
           hdiutil verify "$dmg"
-          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
+          dmg_gatekeeper="$(spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg" 2>&1)"
+          grep -Fq 'source=Notarized Developer ID' <<< "$dmg_gatekeeper"
 
       - name: Verify local signed payload and the apps inside updater and DMG
         env:
@@ -443,32 +482,49 @@ jobs:
           dmg="$signing_root/release-assets/codex-manager-v$VERSION-aarch64.dmg"
           verify_app() {
             local candidate="$1"
+            local label="$2"
             codesign --verify --deep --strict --verbose=2 "$candidate"
-            local info
+            local info entitlements executable gatekeeper
             info="$(codesign --display --verbose=4 "$candidate" 2>&1)"
             grep -Fqx "Authority=$APPLE_SIGNING_IDENTITY" <<< "$info"
             grep -Fqx "TeamIdentifier=$APPLE_TEAM_ID" <<< "$info"
             grep -Eq '^CodeDirectory .* flags=.*runtime' <<< "$info"
             grep -Eq '^Timestamp=' <<< "$info"
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$candidate/Contents/Info.plist")" = "cc.codex.manager"
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$candidate/Contents/Info.plist")" = "$VERSION"
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$candidate/Contents/Info.plist")" = "$VERSION"
+            executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$candidate/Contents/Info.plist")"
+            [[ "$(file "$candidate/Contents/MacOS/$executable")" == *"Mach-O 64-bit executable arm64"* ]]
+            entitlements="$signing_root/evidence/$label-entitlements.plist"
+            codesign --display --entitlements :- "$candidate" > "$entitlements" 2>/dev/null
+            if [ -s "$entitlements" ]; then plutil -lint "$entitlements" >/dev/null; fi
+            if grep -Eq 'com\.apple\.security\.(get-task-allow|cs\.disable-library-validation|cs\.allow-unsigned-executable-memory|cs\.allow-dyld-environment-variables)' "$entitlements"; then
+              echo "A signed app contains a forbidden release entitlement." >&2
+              exit 1
+            fi
             xcrun stapler validate "$candidate"
-            spctl --assess --type execute --verbose=4 "$candidate"
+            gatekeeper="$(spctl --assess --type execute --verbose=4 "$candidate" 2>&1)"
+            grep -Fq 'source=Notarized Developer ID' <<< "$gatekeeper"
           }
-          verify_app "$app_bundle"
+          verify_app "$app_bundle" local-app
           codesign --verify --strict --verbose=2 "$dmg"
           xcrun stapler validate "$dmg"
           hdiutil verify "$dmg"
-          "$input_root/tools/verify_updater_signature" "$tarball" "$tarball.sig" "$input_root/tools/updater.pub"
+          node scripts/verify-updater-signature.mjs "$tarball" "$tarball.sig" "$input_root/tools/updater.pub"
           updater_extract="$signing_root/updater-extract"
           mkdir -p "$updater_extract"
           tar -xzf "$tarball" -C "$updater_extract"
           updater_app="$(find "$updater_extract" -maxdepth 1 -type d -name '*.app' -print -quit)"
-          verify_app "$updater_app"
+          verify_app "$updater_app" updater-app
           mount_point="$signing_root/dmg-mount"
           mkdir -p "$mount_point"
           hdiutil attach "$dmg" -readonly -nobrowse -noautoopen -mountpoint "$mount_point" >/dev/null
           trap 'hdiutil detach "$mount_point" >/dev/null 2>&1 || true' EXIT
+          test "$(find "$mount_point" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" -eq 2
+          test -L "$mount_point/Applications"
+          test "$(readlink "$mount_point/Applications")" = "/Applications"
           dmg_app="$(find "$mount_point" -maxdepth 1 -type d -name '*.app' -print -quit)"
-          verify_app "$dmg_app"
+          verify_app "$dmg_app" dmg-app
           local_cdhash="$(codesign --display --verbose=4 "$app_bundle" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
           updater_cdhash="$(codesign --display --verbose=4 "$updater_app" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
           dmg_cdhash="$(codesign --display --verbose=4 "$dmg_app" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
@@ -493,29 +549,53 @@ jobs:
           dmg="$assets/codex-manager-v$VERSION-aarch64.dmg"
           (cd "$input_root" && zip -qry "$assets/codex-manager-v$VERSION-sbom.zip" artifacts/release/sbom)
           (cd "$input_root" && zip -qry "$assets/codex-manager-v$VERSION-licenses.zip" artifacts/release/licenses)
-          identity_sha256="$(printf '%s' "$APPLE_SIGNING_IDENTITY" | shasum -a 256 | awk '{print $1}')"
+          authority_sha256="$(printf '%s' "$APPLE_SIGNING_IDENTITY" | shasum -a 256 | awk '{print $1}')"
           app_cdhash="$(codesign --display --verbose=4 "$app_bundle" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
           dmg_cdhash="$(codesign --display --verbose=4 "$dmg" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
           updater_public_key_sha256="$(shasum -a 256 "$input_root/tools/updater.pub" | awk '{print $1}')"
+          cert_dir="$signing_root/evidence/leaf-certificate"
+          mkdir -p "$cert_dir"
+          (cd "$cert_dir" && codesign --display --extract-certificates "$app_bundle" >/dev/null 2>&1)
+          test -s "$cert_dir/codesign0"
+          leaf_certificate_sha256="$(shasum -a 256 "$cert_dir/codesign0" | awk '{print $1}')"
+          rm -rf -- "$cert_dir"
+          bundle_identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_bundle/Contents/Info.plist")"
+          bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_bundle/Contents/Info.plist")"
+          bundle_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app_bundle/Contents/Info.plist")"
+          test -n "${ImageOS:-}"
+          test -n "${ImageVersion:-}"
+          macos_version="$(sw_vers -productVersion)"
+          xcode_version="$(xcodebuild -version | paste -sd ' ' -)"
+          gh_version="$(gh --version | sed -n '1p')"
+          notarytool_version="$(xcrun notarytool --version | paste -sd ' ' -)"
+          signed_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           jq -n \
-            --arg version "$VERSION" --arg sourceSha "$SOURCE_SHA" --arg repository "$REPOSITORY" \
-            --arg workflowRunId "$GITHUB_RUN_ID" --arg workflowRunAttempt "$GITHUB_RUN_ATTEMPT" \
-            --arg target aarch64-apple-darwin --arg teamId "$APPLE_TEAM_ID" --arg identitySha256 "$identity_sha256" \
-            --arg appCdhash "$app_cdhash" --arg dmgCdhash "$dmg_cdhash" --arg updaterPublicKeySha256 "$updater_public_key_sha256" \
+            --arg version "$VERSION" --arg signedAt "$signed_at" --arg sourceSha "$SOURCE_SHA" --arg repository "$REPOSITORY" --arg sourceRef refs/heads/main \
+            --arg workflowRef "$GITHUB_WORKFLOW_REF" --arg workflowRunId "$GITHUB_RUN_ID" --arg workflowRunAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg bundleIdentifier "$bundle_identifier" --arg bundleVersion "$bundle_version" --arg bundleBuild "$bundle_build" \
+            --arg imageOS "$ImageOS" --arg imageVersion "$ImageVersion" --arg macOSVersion "$macos_version" \
+            --arg xcodeVersion "$xcode_version" --arg nodeVersion "$(node --version)" --arg ghVersion "$gh_version" \
+            --arg notarytoolVersion "$notarytool_version" --arg teamId "$APPLE_TEAM_ID" \
+            --arg authoritySha256 "$authority_sha256" --arg leafCertificateSha256 "$leaf_certificate_sha256" \
+            --arg appCdHash "$app_cdhash" --arg dmgCdHash "$dmg_cdhash" --arg updaterPublicKeySha256 "$updater_public_key_sha256" \
             --slurpfile appNotarization "$signing_root/evidence/APP-NOTARIZATION.json" \
             --slurpfile dmgNotarization "$signing_root/evidence/DMG-NOTARIZATION.json" \
-            '{schemaVersion:1,version:$version,sourceSha:$sourceSha,repository:$repository,workflowRunId:$workflowRunId,workflowRunAttempt:$workflowRunAttempt,target:$target,apple:{teamId:$teamId,identitySha256:$identitySha256,appCdhash:$appCdhash,dmgCdhash:$dmgCdhash,appNotarization:$appNotarization[0],dmgNotarization:$dmgNotarization[0]},updater:{publicKeySha256:$updaterPublicKeySha256}}' \
+            '{schemaVersion:2,version:$version,signedAt:$signedAt,source:{repository:$repository,sha:$sourceSha,ref:$sourceRef,workflowRef:$workflowRef,runId:$workflowRunId,runAttempt:$workflowRunAttempt},target:{triple:"aarch64-apple-darwin",architecture:"arm64",bundleIdentifier:$bundleIdentifier,bundleVersion:$bundleVersion,bundleBuild:$bundleBuild},signingRunner:{imageOS:$imageOS,imageVersion:$imageVersion,macOSVersion:$macOSVersion,xcodeVersion:$xcodeVersion,nodeVersion:$nodeVersion,ghVersion:$ghVersion,notarytoolVersion:$notarytoolVersion},apple:{teamId:$teamId,authoritySha256:$authoritySha256,leafCertificateSha256:$leafCertificateSha256,app:{cdHash:$appCdHash,notarization:$appNotarization[0],hardenedRuntime:true,secureTimestamp:true,forbiddenEntitlementsAbsent:true,stapled:true,gatekeeperSource:"Notarized Developer ID"},dmg:{cdHash:$dmgCdHash,embeddedAppCdHash:$appCdHash,notarization:$dmgNotarization[0],secureTimestamp:true,stapled:true,gatekeeperSource:"Notarized Developer ID"}},updater:{publicKeySha256:$updaterPublicKeySha256,embeddedAppCdHash:$appCdHash}}' \
             > "$assets/SIGNING-EVIDENCE.json"
           cp "$input_root/RELEASE-NOTES.md" "$signing_root/RELEASE-NOTES.md"
+          cp "$input_root/BUILD-INPUT.json" "$signing_root/BUILD-INPUT.json"
           mkdir -p "$signing_root/tools"
-          cp "$input_root/tools/verify_updater_signature" "$signing_root/tools/verify_updater_signature"
           cp "$input_root/tools/updater.pub" "$signing_root/tools/updater.pub"
-          chmod 700 "$signing_root/tools/verify_updater_signature"
+          REPOSITORY="$REPOSITORY" VERSION="$VERSION" SOURCE_SHA="$SOURCE_SHA" \
+            node scripts/release-metadata.mjs make-intent \
+            --asset-dir "$assets" --build-input "$signing_root/BUILD-INPUT.json" \
+            --signing-evidence "$assets/SIGNING-EVIDENCE.json" --output "$signing_root/RELEASE-INTENT.json"
           transfer_root="artifacts/signed-transfer"
           rm -rf -- "$transfer_root"
           mkdir -p "$transfer_root"
           transfer_archive="$transfer_root/codex-manager-v$VERSION-signed-transfer.tar.gz"
-          COPYFILE_DISABLE=1 tar -czf "$transfer_archive" -C "$signing_root" release-assets RELEASE-NOTES.md tools
+          COPYFILE_DISABLE=1 tar -czf "$transfer_archive" -C "$signing_root" \
+            release-assets RELEASE-NOTES.md BUILD-INPUT.json RELEASE-INTENT.json tools
           (cd "$transfer_root" && shasum -a 256 "$(basename "$transfer_archive")" > "$(basename "$transfer_archive").sha256")
 
       - name: Remove ephemeral Apple credentials before any upload
@@ -552,126 +632,100 @@ jobs:
           retention-days: 14
 
   draft:
-    name: Create and remotely verify draft Release
-    needs: [preflight, sign]
+    name: Reconcile and remotely verify draft Release
+    needs: [preflight, build, sign]
+    if: >-
+      ${{
+        always() &&
+        needs.preflight.result == 'success' &&
+        (
+          (inputs.resume_run_id == '' && needs.build.result == 'success' && needs.sign.result == 'success') ||
+          (inputs.resume_run_id != '' && needs.build.result == 'skipped' && needs.sign.result == 'skipped')
+        )
+      }}
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 90
     permissions:
       contents: write
       id-token: write
       attestations: write
     steps:
+      - name: Check out the exact release control source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js for release reconciliation
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
       - name: Verify the runner is macOS arm64
         run: |
           set -euo pipefail
           test "$(uname -s)" = "Darwin"
           test "$(uname -m)" = "arm64"
 
-      - name: Download the sealed signed payload
+      - name: Download the exact sealed signed payload
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: codex-manager-macos-${{ needs.preflight.outputs.version }}-signed-transfer
           path: signed-transfer
+          run-id: ${{ inputs.resume_run_id || github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
 
-      - name: Verify transfer integrity and prepare local release assets
+      - name: Verify transfer identity, integrity, and release intent
         env:
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          TRANSFER_RUN_ID: ${{ inputs.resume_run_id || github.run_id }}
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
           archive="signed-transfer/codex-manager-v$VERSION-signed-transfer.tar.gz"
           (cd signed-transfer && shasum -a 256 -c "$(basename "$archive").sha256")
-          mkdir -p release-work
+          rm -rf -- release-work release-evidence
+          mkdir -p release-work release-evidence
           tar -xzf "$archive" -C release-work
+          test -f release-work/BUILD-INPUT.json
+          test -f release-work/RELEASE-INTENT.json
           test -f release-work/RELEASE-NOTES.md
-          jq -e --arg version "$VERSION" '.version == $version and .apple.appNotarization.status == "Accepted" and .apple.dmgNotarization.status == "Accepted"' \
-            release-work/release-assets/SIGNING-EVIDENCE.json >/dev/null
+          test -f release-work/tools/updater.pub
+          REPOSITORY="$REPOSITORY" VERSION="$VERSION" SOURCE_SHA="$SOURCE_SHA" \
+            node scripts/release-metadata.mjs validate-intent \
+            --intent release-work/RELEASE-INTENT.json \
+            --asset-dir release-work/release-assets \
+            --build-input release-work/BUILD-INPUT.json \
+            --signing-evidence release-work/release-assets/SIGNING-EVIDENCE.json
+          jq -e --arg runId "$TRANSFER_RUN_ID" '.signingRun.id == $runId' \
+            release-work/RELEASE-INTENT.json >/dev/null
 
-      - name: Recheck immutable source and create a new draft Release
+      - name: Create or reconcile one exact draft Release
         id: release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
+          RESUME_RELEASE_ID: ${{ inputs.resume_release_id }}
           SOURCE_SHA: ${{ github.sha }}
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
-          test "$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_SHA"
-          release_count="$(
-            gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" |
-              jq -er --arg tag "v$VERSION" '[.[][] | select(.tag_name == $tag)] | length'
-          )"
-          if gh api "repos/$REPOSITORY/git/ref/tags/v$VERSION" >/dev/null 2>&1 || \
-             [ "$release_count" -ne 0 ]; then
-            echo "Tag or Release v$VERSION already exists; refusing to overwrite it." >&2
-            exit 1
+          command=(
+            node scripts/release-github.mjs create-or-resolve-draft
+            --notes release-work/RELEASE-NOTES.md
+            --output release-work/release.json
+          )
+          if [ -n "$RESUME_RELEASE_ID" ]; then
+            command+=(--resume-release-id "$RESUME_RELEASE_ID")
           fi
-          release_json="$(
-            jq -n \
-              --arg tag "v$VERSION" \
-              --arg sourceSha "$SOURCE_SHA" \
-              --arg name "Codex Manager v$VERSION" \
-              --rawfile body release-work/RELEASE-NOTES.md \
-              '{tag_name: $tag, target_commitish: $sourceSha, name: $name, body: $body, draft: true, prerelease: false, generate_release_notes: false}' |
-              gh api --method POST "repos/$REPOSITORY/releases" --input -
-          )"
-          printf '%s' "$release_json" | jq -e \
-            --arg tag "v$VERSION" --arg sourceSha "$SOURCE_SHA" \
-            '.draft == true and .prerelease == false and .tag_name == $tag and .target_commitish == $sourceSha and (.assets | length) == 0' >/dev/null
-          release_id="$(printf '%s' "$release_json" | jq -er .id)"
-          matching_releases='[]'
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            matching_releases="$(
-              gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" |
-                jq -c --arg tag "v$VERSION" '[.[][] | select(.tag_name == $tag) | {id, draft, prerelease, target_commitish}]'
-            )"
-            match_count="$(printf '%s' "$matching_releases" | jq -er length)"
-            if [ "$match_count" -eq 0 ]; then
-              if [ "$attempt" -eq 10 ]; then
-                echo "Created draft v$VERSION did not become list-visible within the bounded retry window." >&2
-                exit 1
-              fi
-              sleep 2
-              continue
-            fi
-            printf '%s' "$matching_releases" | jq -e \
-              --argjson releaseId "$release_id" --arg sourceSha "$SOURCE_SHA" \
-              'length == 1 and .[0].id == $releaseId and .[0].draft == true and .[0].prerelease == false and .[0].target_commitish == $sourceSha' >/dev/null
-            break
-          done
+          "${command[@]}"
+          release_id="$(jq -er '.id | select(type == "number" and . > 0)' release-work/release.json)"
           printf 'id=%s\n' "$release_id" >> "$GITHUB_OUTPUT"
 
-      - name: Upload signed core assets to the unique draft
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_ID: ${{ steps.release.outputs.id }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          release_json="$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID")"
-          printf '%s' "$release_json" | jq -e '.draft == true and (.assets | length) == 0' >/dev/null
-          upload_base="$(printf '%s' "$release_json" | jq -er '.upload_url | sub("\\{\\?name,label\\}$"; "")')"
-          test "$upload_base" = "https://uploads.github.com/repos/$REPOSITORY/releases/$RELEASE_ID/assets"
-          upload_asset() {
-            asset="$1"
-            asset_name="$(basename "$asset")"
-            encoded_name="$(jq -rn --arg value "$asset_name" '$value | @uri')"
-            asset_size="$(stat -f %z "$asset")"
-            asset_json="$(
-              gh api --method POST -H "Content-Type: application/octet-stream" \
-                --input "$asset" "$upload_base?name=$encoded_name"
-            )"
-            asset_id="$(printf '%s' "$asset_json" | jq -er .id)"
-            printf '%s' "$asset_json" | jq -e --arg name "$asset_name" --argjson size "$asset_size" \
-              '.id > 0 and .name == $name and .state == "uploaded" and .size == $size' >/dev/null
-            gh api "repos/$REPOSITORY/releases/assets/$asset_id" | jq -e \
-              --arg name "$asset_name" --argjson id "$asset_id" --argjson size "$asset_size" \
-              '.id == $id and .name == $name and .state == "uploaded" and .size == $size' >/dev/null
-          }
-          for asset in release-work/release-assets/*; do
-            upload_asset "$asset"
-          done
-
-      - name: Create updater manifest, complete provenance, and release checksum manifest
+      - name: Upload or reconcile the signed core asset set
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_ID: ${{ steps.release.outputs.id }}
@@ -680,68 +734,87 @@ jobs:
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
-          assets="release-work/release-assets"
-          tar_name="codex-manager-v$VERSION-aarch64.app.tar.gz"
-          tar_url="$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID/assets" --jq ".[] | select(.name == \"$tar_name\") | .browser_download_url")"
-          test -n "$tar_url"
-          signature="$(tr -d '\r\n' < "$assets/$tar_name.sig")"
-          published_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          jq -n --arg version "$VERSION" --arg notes "Codex Manager v$VERSION signed macOS arm64 release" \
-            --arg pub_date "$published_at" --arg signature "$signature" --arg url "$tar_url" \
-            '{version:$version,notes:$notes,pub_date:$pub_date,platforms:{"darwin-aarch64":{signature:$signature,url:$url},"darwin-aarch64-app":{signature:$signature,url:$url}}}' \
-            > "$assets/latest.json"
-          release_json="$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID")"
-          jq -n --arg version "$VERSION" --arg sourceSha "$SOURCE_SHA" --arg repository "$REPOSITORY" \
-            --arg releaseId "$RELEASE_ID" --arg workflowRunId "$GITHUB_RUN_ID" --arg workflowRunAttempt "$GITHUB_RUN_ATTEMPT" \
-            --arg workflowRef "$GITHUB_WORKFLOW_REF" --arg runnerImage "${ImageOS:-macos15}" \
-            --slurpfile signing "$assets/SIGNING-EVIDENCE.json" \
-            --argjson assets "$(printf '%s' "$release_json" | jq '[.assets[] | {id,name,browserDownloadUrl:.browser_download_url,size}]')" \
-            '{schemaVersion:1,version:$version,sourceSha:$sourceSha,repository:$repository,releaseId:$releaseId,workflowRunId:$workflowRunId,workflowRunAttempt:$workflowRunAttempt,workflowRef:$workflowRef,runnerImage:$runnerImage,signing:$signing[0],uploadedCoreAssets:$assets}' \
-            > "$assets/BUILD-PROVENANCE.json"
-          manifest="$assets/SHA256SUMS-v$VERSION-signed"
-          (cd "$assets" && find . -maxdepth 1 -type f ! -name "$(basename "$manifest")" -print0 \
-            | sort -z | xargs -0 shasum -a 256 | sed 's#  \./#  #') > "$manifest"
+          node scripts/release-github.mjs sync-assets \
+            --release-id "$RELEASE_ID" \
+            --asset-dir release-work/release-assets \
+            --output release-work/core-assets.json
 
-      - name: Upload final metadata without overwriting any asset
+      - name: Create deterministic updater metadata and complete provenance
+        env:
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          assets=release-work/release-assets
+          tarball="$assets/codex-manager-v$VERSION-aarch64.app.tar.gz"
+          published_at="$(jq -er .signedAt "$assets/SIGNING-EVIDENCE.json")"
+          node scripts/release-github.mjs make-latest \
+            --signature-file "$tarball.sig" \
+            --published-at "$published_at" \
+            --notes "Codex Manager v$VERSION signed macOS arm64 release" \
+            --output "$assets/latest.json"
+          node scripts/release-metadata.mjs make-provenance \
+            --asset-dir "$assets" \
+            --build-input release-work/BUILD-INPUT.json \
+            --signing-evidence "$assets/SIGNING-EVIDENCE.json" \
+            --core-records release-work/core-assets.json \
+            --release-id "$RELEASE_ID" \
+            --output "$assets/BUILD-PROVENANCE.json"
+          manifest="$assets/SHA256SUMS-v$VERSION-signed"
+          manifest_name="$(basename "$manifest")"
+          manifest_partial="$RUNNER_TEMP/$manifest_name.partial-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          (
+            cd "$assets"
+            find . -maxdepth 1 -type f ! -name "$manifest_name" -print0 |
+              LC_ALL=C sort -z |
+              xargs -0 shasum -a 256 |
+              sed 's#  \./#  #'
+          ) > "$manifest_partial"
+          test "$(wc -l < "$manifest_partial" | tr -d ' ')" -eq 8
+          mv -f -- "$manifest_partial" "$manifest"
+
+      - name: Upload or reconcile the complete nine-asset set
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_ID: ${{ steps.release.outputs.id }}
           REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
-          release_json="$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID")"
-          printf '%s' "$release_json" | jq -e '.draft == true' >/dev/null
-          upload_base="$(printf '%s' "$release_json" | jq -er '.upload_url | sub("\\{\\?name,label\\}$"; "")')"
-          test "$upload_base" = "https://uploads.github.com/repos/$REPOSITORY/releases/$RELEASE_ID/assets"
-          upload_asset() {
-            asset="$1"
-            asset_name="$(basename "$asset")"
-            encoded_name="$(jq -rn --arg value "$asset_name" '$value | @uri')"
-            asset_size="$(stat -f %z "$asset")"
-            asset_json="$(
-              gh api --method POST -H "Content-Type: application/octet-stream" \
-                --input "$asset" "$upload_base?name=$encoded_name"
-            )"
-            asset_id="$(printf '%s' "$asset_json" | jq -er .id)"
-            printf '%s' "$asset_json" | jq -e --arg name "$asset_name" --argjson size "$asset_size" \
-              '.id > 0 and .name == $name and .state == "uploaded" and .size == $size' >/dev/null
-            gh api "repos/$REPOSITORY/releases/assets/$asset_id" | jq -e \
-              --arg name "$asset_name" --argjson id "$asset_id" --argjson size "$asset_size" \
-              '.id == $id and .name == $name and .state == "uploaded" and .size == $size' >/dev/null
-          }
-          for name in latest.json BUILD-PROVENANCE.json "SHA256SUMS-v$VERSION-signed"; do
-            asset="release-work/release-assets/$name"
-            test "$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID/assets" --jq "[.[] | select(.name == \"$name\")] | length")" -eq 0
-            upload_asset "$asset"
-          done
+          node scripts/release-github.mjs sync-assets \
+            --release-id "$RELEASE_ID" \
+            --asset-dir release-work/release-assets \
+            --output release-work/final-assets.json
 
       - name: Attest every final draft asset
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: release-work/release-assets/*
+          show-summary: true
 
-      - name: Redownload and verify every draft asset
+      - name: Preserve generated attestation evidence outside Release assets
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          ATTESTATION_ID: ${{ steps.attest.outputs.attestation-id }}
+          ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
+        run: |
+          set -euo pipefail
+          test -f "$ATTESTATION_BUNDLE"
+          [[ "$ATTESTATION_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$ATTESTATION_URL" == "https://github.com/$GITHUB_REPOSITORY/attestations/$ATTESTATION_ID" ]]
+          mkdir -p release-evidence/generated release-evidence/control
+          cp "$ATTESTATION_BUNDLE" release-evidence/generated/generated-attestation-bundle.json
+          jq -n \
+            --arg id "$ATTESTATION_ID" \
+            --arg url "$ATTESTATION_URL" \
+            '{attestationId:$id,attestationUrl:$url}' \
+            > release-evidence/generated/generated-attestation.json
+
+      - name: Redownload by asset ID and verify the complete draft chain
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_ID: ${{ steps.release.outputs.id }}
@@ -750,120 +823,49 @@ jobs:
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
-          assets="release-work/release-assets"
           remote="$RUNNER_TEMP/codex-manager-remote-release"
-          tools="release-work/tools"
           rm -rf -- "$remote"
-          mkdir -p "$remote"
-          release_json="$(gh api "repos/$REPOSITORY/releases/$RELEASE_ID")"
-          printf '%s' "$release_json" | jq -e --arg sourceSha "$SOURCE_SHA" '.draft == true and .target_commitish == $sourceSha' >/dev/null
-          if gh api "repos/$REPOSITORY/git/ref/tags/v$VERSION" >/dev/null 2>&1; then
-            echo "Release tag v$VERSION appeared during draft verification; refusing to continue." >&2
-            exit 1
-          fi
-          matching_releases="$(
-            gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" |
-              jq -c --arg tag "v$VERSION" '[.[][] | select(.tag_name == $tag) | {id, draft, prerelease, target_commitish}]'
-          )"
-          printf '%s' "$matching_releases" | jq -e \
-            --argjson releaseId "$RELEASE_ID" --arg sourceSha "$SOURCE_SHA" \
-            'length == 1 and .[0].id == $releaseId and .[0].draft == true and .[0].prerelease == false and .[0].target_commitish == $sourceSha' >/dev/null
-          local_names="$(find "$assets" -maxdepth 1 -type f -exec basename {} \; | sort | jq -Rsc 'split("\n")[:-1]')"
-          listed_assets='[]'
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            listed_assets="$(
-              gh api --paginate --slurp "repos/$REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" |
-                jq -c '[.[][]]'
-            )"
-            remote_names="$(printf '%s' "$listed_assets" | jq -c '[.[].name] | sort')"
-            jq -ne --argjson actual "$remote_names" --argjson expected "$local_names" \
-              '$actual - $expected | length == 0' >/dev/null
-            all_uploaded="$(printf '%s' "$listed_assets" | jq -r 'all(.[].state; . == "uploaded")')"
-            if [ "$local_names" = "$remote_names" ] && [ "$all_uploaded" = true ]; then
-              break
-            fi
-            if [ "$attempt" -eq 10 ]; then
-              echo "Expected draft assets did not become fully list-visible within the bounded retry window." >&2
-              exit 1
-            fi
-            sleep 2
+          mkdir -p "$remote" release-evidence/attestations release-evidence/control
+          node scripts/release-github.mjs download-assets \
+            --release-id "$RELEASE_ID" \
+            --asset-dir release-work/release-assets \
+            --destination "$remote" \
+            --output release-evidence/control/remote-assets.json
+          cmp -s release-work/final-assets.json release-evidence/control/remote-assets.json
+          for local_asset in release-work/release-assets/*; do
+            cmp -s "$local_asset" "$remote/$(basename "$local_asset")"
           done
-          release_json="$(printf '%s' "$release_json" | jq -c --argjson assets "$listed_assets" '.assets = $assets')"
-          while IFS=$'\t' read -r asset_id asset_name; do
-            gh api -H 'Accept: application/octet-stream' "repos/$REPOSITORY/releases/assets/$asset_id" > "$remote/$asset_name"
-          done < <(printf '%s' "$release_json" | jq -r '.assets[] | [.id,.name] | @tsv')
-          (cd "$remote" && shasum -a 256 -c "SHA256SUMS-v$VERSION-signed")
-          for local_asset in "$assets"/*; do cmp -s "$local_asset" "$remote/$(basename "$local_asset")"; done
-          tarball="$remote/codex-manager-v$VERSION-aarch64.app.tar.gz"
-          signature="$tarball.sig"
-          dmg="$remote/codex-manager-v$VERSION-aarch64.dmg"
-          "$tools/verify_updater_signature" "$tarball" "$signature" "$tools/updater.pub"
-          jq -e --arg version "$VERSION" --arg signature "$(tr -d '\r\n' < "$signature")" \
-            '.version == $version and ([.platforms | keys[]] | sort) == ["darwin-aarch64","darwin-aarch64-app"] and ([.platforms[].signature] | all(. == $signature))' \
-            "$remote/latest.json" >/dev/null
-          expected_tar_url="$(printf '%s' "$release_json" | jq -er --arg name "$(basename "$tarball")" '.assets[] | select(.name == $name) | .browser_download_url')"
-          jq -e --arg url "$expected_tar_url" '([.platforms[].url] | all(. == $url))' "$remote/latest.json" >/dev/null
-          jq -e --arg version "$VERSION" --arg sourceSha "$SOURCE_SHA" --arg releaseId "$RELEASE_ID" \
-            '.version == $version and .sourceSha == $sourceSha and .releaseId == $releaseId and .signing.apple.appNotarization.status == "Accepted" and .signing.apple.dmgNotarization.status == "Accepted"' \
-            "$remote/BUILD-PROVENANCE.json" >/dev/null
-          unzip -t "$remote/codex-manager-v$VERSION-sbom.zip"
-          unzip -t "$remote/codex-manager-v$VERSION-licenses.zip"
-          sbom_extract="$remote/sbom-extract"
-          mkdir -p "$sbom_extract"
-          unzip -q "$remote/codex-manager-v$VERSION-sbom.zip" -d "$sbom_extract"
-          (cd "$sbom_extract" && shasum -a 256 -c artifacts/release/sbom/SHA256SUMS)
-          signing_evidence="$remote/SIGNING-EVIDENCE.json"
-          expected_team="$(jq -er .apple.teamId "$signing_evidence")"
-          expected_identity_sha="$(jq -er .apple.identitySha256 "$signing_evidence")"
-          verify_app() {
-            local candidate="$1"
-            codesign --verify --deep --strict --verbose=2 "$candidate"
-            local info authority authority_sha
-            info="$(codesign --display --verbose=4 "$candidate" 2>&1)"
-            authority="$(awk -F= '/^Authority=Developer ID Application:/{print substr($0, index($0,"=") + 1); exit}' <<< "$info")"
-            authority_sha="$(printf '%s' "$authority" | shasum -a 256 | awk '{print $1}')"
-            test "$authority_sha" = "$expected_identity_sha"
-            grep -Fqx "TeamIdentifier=$expected_team" <<< "$info"
-            grep -Eq '^CodeDirectory .* flags=.*runtime' <<< "$info"
-            grep -Eq '^Timestamp=' <<< "$info"
-            xcrun stapler validate "$candidate"
-            spctl --assess --type execute --verbose=4 "$candidate"
-          }
-          updater_extract="$remote/updater-extract"
-          mkdir -p "$updater_extract"
-          tar -xzf "$tarball" -C "$updater_extract"
-          updater_app="$(find "$updater_extract" -maxdepth 1 -type d -name '*.app' -print -quit)"
-          verify_app "$updater_app"
-          codesign --verify --strict --verbose=2 "$dmg"
-          dmg_info="$(codesign --display --verbose=4 "$dmg" 2>&1)"
-          dmg_authority="$(awk -F= '/^Authority=Developer ID Application:/{print substr($0, index($0,"=") + 1); exit}' <<< "$dmg_info")"
-          test "$(printf '%s' "$dmg_authority" | shasum -a 256 | awk '{print $1}')" = "$expected_identity_sha"
-          grep -Fqx "TeamIdentifier=$expected_team" <<< "$dmg_info"
-          grep -Eq '^Timestamp=' <<< "$dmg_info"
-          xcrun stapler validate "$dmg"
-          hdiutil verify "$dmg"
-          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
-          mount_point="$remote/dmg-mount"
-          mkdir -p "$mount_point"
-          hdiutil attach "$dmg" -readonly -nobrowse -noautoopen -mountpoint "$mount_point" >/dev/null
-          trap 'hdiutil detach "$mount_point" >/dev/null 2>&1 || true' EXIT
-          dmg_app="$(find "$mount_point" -maxdepth 1 -type d -name '*.app' -print -quit)"
-          verify_app "$dmg_app"
-          updater_cdhash="$(codesign --display --verbose=4 "$updater_app" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
-          dmg_cdhash="$(codesign --display --verbose=4 "$dmg_app" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}')"
-          test "$updater_cdhash" = "$dmg_cdhash"
-          hdiutil detach "$mount_point"
-          trap - EXIT
-          for remote_asset in "$remote"/*; do
-            [ -f "$remote_asset" ] || continue
-            gh attestation verify "$remote_asset" --repo "$REPOSITORY" --source-digest "$SOURCE_SHA" \
-              --source-ref refs/heads/main --signer-workflow "$REPOSITORY/.github/workflows/release.yml" >/dev/null
-          done
+          ASSET_DIR="$remote" \
+          ASSET_RECORDS_PATH=release-evidence/control/remote-assets.json \
+          BUILD_INPUT_PATH=release-work/BUILD-INPUT.json \
+          RELEASE_ID="$RELEASE_ID" \
+          REPOSITORY="$REPOSITORY" \
+          SOURCE_SHA="$SOURCE_SHA" \
+          TOOLS_DIR=release-work/tools \
+          VERSION="$VERSION" \
+            ./scripts/verify-macos-release.sh
+          node scripts/release-github.mjs verify-attestations \
+            --asset-dir "$remote" \
+            --evidence-dir release-evidence/attestations \
+            --output release-evidence/attestations/index.json
+          node scripts/release-github.mjs verify-state \
+            --mode draft \
+            --release-id "$RELEASE_ID" \
+            --output release-evidence/control/final-release.json
+          node scripts/release-metadata.mjs make-verification \
+            --mode draft \
+            --release-id "$RELEASE_ID" \
+            --asset-records release-evidence/control/remote-assets.json \
+            --attestations-index release-evidence/attestations/index.json \
+            --provenance "$remote/BUILD-PROVENANCE.json" \
+            --output release-evidence/RELEASE-VERIFICATION.json
+          cp release-work/release.json release-work/core-assets.json release-work/final-assets.json \
+            release-evidence/control/
 
       - name: Upload remotely verified release evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: codex-manager-macos-${{ needs.preflight.outputs.version }}-release-evidence
-          path: release-work/release-assets/
+          path: release-evidence/
           if-no-files-found: error
           retention-days: 30

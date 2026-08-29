@@ -1,0 +1,161 @@
+name: Verify existing macOS Release
+
+# This workflow is read-only. It never signs, uploads, edits, publishes, or
+# deletes a GitHub Release. Draft mode downloads by exact asset ID; published
+# mode downloads all assets through canonical public tag URLs.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Verify an unpublished draft or a manually published Release
+        required: true
+        default: draft
+        type: choice
+        options:
+          - draft
+          - published
+      version:
+        description: Exact SemVer without the v prefix
+        required: true
+        type: string
+      release_id:
+        description: Exact numeric GitHub Release ID
+        required: true
+        type: string
+      source_sha:
+        description: Exact 40-character source commit bound to the Release
+        required: true
+        type: string
+
+concurrency:
+  group: verify-release-${{ inputs.release_id }}-${{ inputs.mode }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  attestations: read
+
+jobs:
+  verify:
+    name: Read-only ${{ inputs.mode }} verification
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Check out the exact released source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Validate exact verification inputs
+        env:
+          RELEASE_ID: ${{ inputs.release_id }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(uname -s)" = "Darwin"
+          test "$(uname -m)" = "arm64"
+          ./scripts/check-version-sync.sh "$VERSION"
+          npm run release:dry-run
+
+      - name: Extract the configured updater public key
+        run: |
+          set -euo pipefail
+          tools="$RUNNER_TEMP/codex-manager-release-verifier-tools"
+          rm -rf -- "$tools"
+          mkdir -p "$tools"
+          PUBLIC_KEY_PATH="$tools/updater.pub" node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
+            const encoded = config.plugins?.updater?.pubkey;
+            if (typeof encoded !== "string" || encoded.length === 0) throw new Error("updater public key is missing");
+            const decoded = Buffer.from(encoded, "base64");
+            if (decoded.length === 0) throw new Error("updater public key is invalid");
+            writeFileSync(process.env.PUBLIC_KEY_PATH, decoded, { mode: 0o600 });
+          '
+
+      - name: Download the exact Release asset set
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODE: ${{ inputs.mode }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          remote="$RUNNER_TEMP/codex-manager-existing-release"
+          evidence=release-evidence
+          rm -rf -- "$remote" "$evidence"
+          mkdir -p "$remote" "$evidence/control" "$evidence/attestations"
+          node scripts/release-github.mjs download-release \
+            --mode "$MODE" \
+            --release-id "$RELEASE_ID" \
+            --destination "$remote" \
+            --output "$evidence/control/remote-assets.json"
+          jq -e '.buildInput | type == "object"' "$remote/BUILD-PROVENANCE.json" >/dev/null
+          jq '.buildInput' "$remote/BUILD-PROVENANCE.json" > "$evidence/control/BUILD-INPUT.json"
+
+      - name: Verify hashes, updater, provenance, app, DMG, notarization, and Gatekeeper
+        env:
+          RELEASE_ID: ${{ inputs.release_id }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          ASSET_DIR="$RUNNER_TEMP/codex-manager-existing-release" \
+          ASSET_RECORDS_PATH=release-evidence/control/remote-assets.json \
+          BUILD_INPUT_PATH=release-evidence/control/BUILD-INPUT.json \
+          RELEASE_ID="$RELEASE_ID" \
+          REPOSITORY="$REPOSITORY" \
+          SOURCE_SHA="$SOURCE_SHA" \
+          TOOLS_DIR="$RUNNER_TEMP/codex-manager-release-verifier-tools" \
+          VERSION="$VERSION" \
+            ./scripts/verify-macos-release.sh
+
+      - name: Verify all attestations and recheck final Release state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODE: ${{ inputs.mode }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          remote="$RUNNER_TEMP/codex-manager-existing-release"
+          node scripts/release-github.mjs verify-attestations \
+            --asset-dir "$remote" \
+            --evidence-dir release-evidence/attestations \
+            --output release-evidence/attestations/index.json
+          node scripts/release-github.mjs verify-state \
+            --mode "$MODE" \
+            --release-id "$RELEASE_ID" \
+            --output release-evidence/control/final-release.json
+          node scripts/release-metadata.mjs make-verification \
+            --mode "$MODE" \
+            --release-id "$RELEASE_ID" \
+            --asset-records release-evidence/control/remote-assets.json \
+            --attestations-index release-evidence/attestations/index.json \
+            --provenance "$remote/BUILD-PROVENANCE.json" \
+            --output release-evidence/RELEASE-VERIFICATION.json
+
+      - name: Upload read-only verification evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-manager-v${{ inputs.version }}-${{ inputs.mode }}-verification
+          path: release-evidence/
+          if-no-files-found: error
+          retention-days: 30

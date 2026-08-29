@@ -28,7 +28,7 @@
 - 认证档案导入完全位于原生后端：文件选择器不把路径或 bytes 返回 WebView；普通文件/当前 uid/权限不宽于 `0600`/单硬链接/128 KiB/读取前后 fstat/JSON 重复键/深度与字段数均受限。实际 App Server PID 动态验签并恢复后，后端才以 zeroizing 请求通过官方 `chatgptAuthTokens` 流程提交 access token 和工作区 ID，refresh token 不交给在线探测，也不创建临时 `auth.json`。验证后的秘密以 zeroizing buffer 处理并存入应用专用 Keychain，IPC 只返回白名单元数据。
 - 活动账户切换只支持安全的 file 模式 `auth.json`。App Server `config/read` 必须证明最终生效的 `cli_auth_credentials_store` 明确为 `file`；同进程异步门闩、Codex Manager 实例间非阻塞锁、opaque revision、SHA/mtime/文件身份 CAS、`0600` 同目录原子替换、切换后官方账户复核与条件回滚共同防止并发覆盖。活动账户读取如触发官方凭据刷新，后端必须在文件稳定后重新取得 bytes 和文件戳，再用于 Keychain 更新或回滚。官方登录子进程的整个生命周期也持有 Manager 进程锁。keyring/auto、配置缺失、外部改写、身份不符、活动/最后档案删除均 fail closed；删除提交前再次读取活动文件，软删除保留 30 天后才清理。CLI/IDE 不遵守 Manager 的锁，用户仍须结束正在运行的 Codex 任务。
 - SQLite 在 Unix 上使用私有目录/文件权限、WAL、foreign keys、busy timeout 和全库页数硬上限；OTel 另有总行数配额与单事务批量上限。
-- CI action 以完整 commit SHA 固定；发布流程包含 lockfile、审计、secret scan、SBOM、许可证清单与 artifact SHA-256。
+- CI action 以完整 commit SHA 固定；发布流程包含 lockfile、fail-closed 审计、无 `rg` 依赖且未完整扫描即失败的 secret scan、SBOM、许可证清单与 artifact SHA-256。
 
 ## 已知边界
 
@@ -39,7 +39,7 @@
 - 官方 Codex 可能按用户自己的 `cli_auth_credentials_store` 设置把活动凭据保存在 OS credential store 或 `~/.codex/auth.json`。多档案切换不会改写该设置，只支持 file 模式；keyring/auto 会拒绝切换。切换活动文件会影响共享该缓存的 CLI 与 IDE 扩展。
 - 当前轮换是用户确认后的整账户显式切换，不是请求级调度；不会检测限额后后台自动换号，也不会迁移正在运行的会话。
 - 当前没有启动时自动更新或远程撤回机制。在线更新会将完整更新包读入内存后验签；严格下载字节上限是后续加固项。
-- 签名发布已拆成 secret-free build、无 Release 写权限的受保护 sign、无 Apple/updater secret 的 draft 三个 job；sign 不执行 build artifact 携带的 signer，而是先下载固定版本 Tauri signer 并核对 lockfile 固化的 SHA-512，updater 私钥只在紧邻签名命令的独立 step 注入并在命令后 unset。临时证书/Keychain 在任何上传前清理，实际 updater 和所有 draft 资产回下载复验。updater 私钥的独立离线恢复备份仍必须在首次发布前完成。
+- 签名发布已拆成 secret-free build、无 Release 写权限的受保护 sign、无 Apple/updater secret 的 draft 三个 job；sign/draft 不执行 build artifact 携带的 signer 或 verifier。sign 先下载固定版本 Tauri signer并核对 SHA-512，updater 私钥只在紧邻签名命令的独立 step 注入并在命令后 unset；验签使用 exact checkout 中仅依赖 Node 标准密码库的 Minisign/Ed25519 verifier，transfer 只携带公开 updater key。临时证书/Keychain 在任何上传前清理。draft 只允许 exact source/Release/asset digest 调和，所有资产按 ID 回下载复验；人工发布后另由只读 workflow 匿名验证正式 tag URL 和 latest alias。发布人员已报告 updater 私钥存在独立离线备份，首次发布前仍须复核实际恢复介质。
 
 ## 已完成的安全验证
 
@@ -49,4 +49,4 @@
 
 Community prerelease 必须确认测试、clippy、依赖审计、secret scan、SBOM/许可证、DMG 完整性与下载后 SHA-256，并确认没有 `latest.json` 或 updater bundle；发布文案必须披露 unsigned/unnotarized 状态。
 
-签名稳定发布还必须确认 Developer ID 身份准确、Hardened Runtime 签名验证通过、notarytool 返回 accepted、stapler validate 通过、Tauri updater 签名与 `latest.json` 中绑定该版本 tarball 的 GitHub `browser_download_url` 匹配、最终 artifact SHA-256 与发布记录一致。任何一步缺失都必须保持相应的 `unsigned community prerelease`、`signed`、`notarized`、`draft` 或 `unreleased` 状态，不能越级表述。
+签名稳定发布还必须确认 Developer ID 身份、leaf certificate、Team ID、Hardened Runtime、secure timestamp、无禁用 entitlement、notarytool `Accepted`、`stapler validate`、Gatekeeper、Tauri updater 签名、SBOM/许可证、九项 asset digest 与 attestation 全部一致。`latest.json` 只能绑定确定性的 `https://github.com/<owner>/<repo>/releases/download/v<VERSION>/<tar-name>`；任何 `untagged-*` URL 都是阻断。draft 通过只叫 `draft remotely verified`；人工发布后还必须验证 tag/release/latest 与 exact SHA、匿名回下载九项正式 URL并重跑完整链。任何一步缺失都保持相应的 `unsigned community prerelease`、`signed`、`notarized`、`draft`、`published but unverified` 或 `unreleased` 状态，不能越级表述。
