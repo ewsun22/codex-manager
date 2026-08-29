@@ -3,6 +3,8 @@
 日期：2026-08-27
 状态：implemented、verified locally、unsigned packaged、GitHub updater infrastructure configured；未 signed、未 notarized、未 draft/released
 
+> 状态更新（2026-08-29）：上面一行及下方 `v0.2.1` 候选审计是历史快照。`v0.2.1` 后续已从 exact source `fbe42de828f4f64549d9a4b36bc506fd15b11aa2` 完成签名、公证、stapling、公开发布和匿名回下载复验；对应 release run 为 `33240800663`，published verify run 为 `33241992763`。当前 `v0.2.2` 发布边界以 [发布运行手册](release.md) 和 [v0.2.2 发布说明](release-notes/v0.2.2.md) 为准。
+
 ## 环境
 
 - macOS 27.0，Apple Silicon `arm64`。

@@ -8,7 +8,7 @@ Codex Manager 是一个独立运行、本地优先的开源 Codex 桌面管理�
 
 ## 当前状态
 
-当前源码版本是 **0.2.1 macOS 签名 beta 候选版**：P1 本地数据层、P2 使用记录 UI、P3 项目与 AGENTS 管理、P4 隐私/安全/供应链与本地打包，以及用户主动触发的 OAuth 账户/认证档案管理都已实现并通过本机验证。`v0.2.0` 已作为明确标注的 `Unsigned Community Build` GitHub prerelease 发布；它没有 `latest.json` 或 updater bundle，不进入稳定在线更新通道。`v0.2.1` 只有在 Developer ID 签名、Apple 公证、stapling、Gatekeeper 与远端资产验证完成后，才可作为面向普通用户的正式 macOS beta 发布。
+当前源码版本是 **0.2.2 macOS 签名 beta 候选版**：它在 `v0.2.1` 首个 Developer ID 签名稳定版上优化大型活动库的启动与刷新路径，并增加每 5 秒自动显示最新已采集记录。`v0.2.0` 是不进入在线更新通道的 `Unsigned Community Build`；`v0.2.1` 已完成签名、公证、stapling、Gatekeeper、公开资产复验并成为可信 updater 起点。`v0.2.2` 必须重新通过同一 exact-SHA 发布门禁，并从已安装的 `v0.2.1` 完成真实更新、安装和重启验收后才能标记 accepted。
 
 已实现的主要能力：
 
@@ -93,7 +93,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 ./scripts/verify-release.sh unsigned
 ```
 
-本机没有 Developer ID 时，`package-macos.sh` 只能生成 unsigned `.app`/`.dmg`。发布目录固定为不受 Vite `dist/` 清理影响的 `artifacts/release/`。2026-08-27 的历史本机产物是 `artifacts/release/Codex Manager_0.1.0_aarch64.dmg`，SHA-256 为 `a66968a63b3d246f8a1a3ee6e61800e01c2adf94f8dd0e7bdd4be145117fff74`；该值对应首次提交前的工作树，不能用于当前 `0.2.1` 签名候选。`.github/workflows/release.yml` 仅能手动从 `main` 当前 SHA 创建签名草稿 Release，缺少 Tauri 或 Apple 签名凭据时失败。签名、公证、更新清单与发布的状态边界见 [发布运行手册](docs/release.md)。
+本机没有 Developer ID 时，`package-macos.sh` 只能生成 unsigned `.app`/`.dmg`。发布目录固定为不受 Vite `dist/` 清理影响的 `artifacts/release/`。2026-08-27 的历史本机产物是 `artifacts/release/Codex Manager_0.1.0_aarch64.dmg`，SHA-256 为 `a66968a63b3d246f8a1a3ee6e61800e01c2adf94f8dd0e7bdd4be145117fff74`；该值对应首次提交前的工作树，不能用于当前 `0.2.2` 签名候选。`.github/workflows/release.yml` 仅能手动从 `main` 当前 SHA 创建签名草稿 Release，缺少 Tauri 或 Apple 签名凭据时失败。签名、公证、更新清单与发布的状态边界见 [发布运行手册](docs/release.md)。
 
 ## 隐私与开源
 

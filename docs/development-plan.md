@@ -1,6 +1,6 @@
 # 开发计划与状态
 
-状态日期：2026-08-27。`implemented`、`verified locally`、`packaged`、`signed`、`notarized` 和 `released` 是不同边界。
+状态日期：2026-08-29。`implemented`、`verified locally`、`packaged`、`signed`、`notarized`、`released` 和 `updater E2E accepted` 是不同边界。
 
 ## Phase 0：可行性探针 — completed
 
@@ -40,7 +40,7 @@
 - [x] SHA/mtime 冲突、同目录原子替换、fsync、两阶段 revision 与崩溃恢复
 - [x] 每文件最多 20 个本地 revision，支持带当前 SHA 的恢复
 
-## Phase 4：macOS beta 工程 — implemented, packaged and verified locally; external release gates pending
+## Phase 4：macOS beta 工程 — signed stable channel released; v0.2.2 update acceptance pending
 
 - [x] 隐私、路径安全、CSP 与显式 Tauri command capability
 - [x] 原创应用图标与 macOS 13+ bundle 配置
@@ -57,9 +57,9 @@
 - [x] 同一 run 的 app/DMG notarization 均为 `Accepted`，stapling 与 Gatekeeper 验证通过；该状态不得外推到后续 source SHA
 - [x] `v0.2.0` unsigned community prerelease 已发布，且保持无 updater manifest 的独立通道
 - [x] 精确复核并删除旧 No-Go draft `378845893`；只对 `606a927c4f536b0f15a22a8ec850b6c99a97a117` dispatch 一次并完成人工 sign 审批，app/DMG sign/notary/staple/Gatekeeper、本地全链和 credential cleanup 通过
-- [ ] 提交 core asset 顺序无关身份比较修复和真实文件级回归测试；获得新的明确授权后推送新 exact SHA，并 fresh dispatch 一次且不填写 resume 输入
-- [ ] 新 SHA 的 `v0.2.1` draft 全链、人工 Publish、匿名 post-publish 回下载和干净机 DMG 安装/启动验收
-- [ ] 在 `v0.2.1` 之后的更高 SemVer 上完成首个可信 updater 下载、验签、安装与重启 E2E
+- [x] `v0.2.1` exact source `fbe42de828f4f64549d9a4b36bc506fd15b11aa2` 完成 draft 全链、人工 Publish 和匿名 post-publish 回下载复验；release run `33240800663`、published verify run `33241992763` 均成功
+- [x] 本机 `/Applications/Codex Manager.app` 的 `v0.2.1` 通过 strict codesign、Notarized Developer ID Gatekeeper 与 stapler 验证，可作为可信更新起点
+- [ ] `v0.2.2` 从最终 `main` exact SHA 完成 fresh signed release、公开复验，以及从 `v0.2.1` 下载、验签、安装、重启的首个 updater E2E
 
 ## 后续阶段
 

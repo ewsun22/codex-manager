@@ -14,16 +14,13 @@
 
 `ci.yml` 默认只做 unsigned artifact，可用于人工创建上述 community prerelease。`release.yml` 只服务签名稳定通道：只能手动运行，并且只允许 `main` 当前远端 SHA；它使用受保护的 GitHub `release` Environment，凭据不齐时必须失败。没有证书、Team ID 和 notarization 凭据时，禁止模拟签名成功、绕过门禁或向 community prerelease 添加 updater manifest。
 
-## 2026-08-29 v0.2.1 签名候选状态
+## 2026-08-29 v0.2.2 签名候选状态
 
-- `v0.2.0` 已从 `87099222b0e9a50c4410a040c9600e23c53afb23` 发布为公开 `Unsigned Community Build` prerelease，只含 unsigned DMG、SBOM、许可证和 community SHA manifest；2026-08-29 回下载四项资产后，外层 SHA manifest、DMG `hdiutil verify` 均通过，稳定 `latest.json` endpoint 返回 404。该 tag/Release 不得覆盖或补入 updater 资产。
-- 签名候选源码已提高到 `0.2.1`，避免复用公开的 `v0.2.0` tag。它包含同一应用功能以及本次签名、notarization、stapling、provenance 和远端复验工作流加固。
-- 本机仍没有 Developer ID Application identity，但 GitHub `release` Environment 已配置工作流要求的 6 项 Apple secret 和 2 项 Tauri updater secret，并保持 `main` custom branch policy 与人工 reviewer 门禁。发布人员已报告 updater 私钥的独立离线备份完成；仓库和工作流只记录 secret 名称，不记录值。
-- 前七次失败 run 的根因依次是 runner 缺少 `rg`、Hardened Runtime 输出解析错误、DMG detach 目标错误、用 tag REST 读取 draft、创建后的 Release 列表传播延迟、读取 stale 的 Release 内嵌 assets、以及固定 20 秒资产可见性窗口。它们说明 GitHub Release/asset/attestation 必须按 eventual-consistency 状态机处理，不能继续追加固定次数轮询。
-- Actions run `33227321418` / source `91d5081b1ffbb3b837dfc1776ec8ca8d86d25de9` 生成的签名产物本体已由仓库外总审计验证：app/DMG 的 Developer ID、Hardened Runtime、secure timestamp、Apple `Accepted`、stapling、Gatekeeper、updater 签名、SBOM、哈希与九项 attestation 都成立。该结论只绑定这个 exact SHA 和字节。
-- 同一 run 的 secret gate 实际因缺少 `rg` 被 `|| true` 静默吞掉；旧 draft `378845893` 的 `latest.json` 又包含永久失效的 `untagged-*` URL。该 draft 在确认 exact ID/source、九项 asset、无 tag 和两个未过期恢复 artifact 后已于 2026-08-29 精确删除，不能再作为任何当前状态证据。
-- 修复提交 `606a927c4f536b0f15a22a8ec850b6c99a97a117` 已推送到 `main`，唯一 dispatch 的 run `33239136597` 已通过 preflight、真实 fail-closed secret scan、Rust/audit/SBOM、arm64 build，以及 app/DMG 的 Developer ID、Hardened Runtime、Apple `Accepted`、stapling、Gatekeeper、updater 签名和本地全链复验；临时 Apple Keychain/凭据也在上传 signed-transfer 前清理。
-- 同一 run 的 draft job 在创建 Release 之前失败：`RELEASE-INTENT.json` 用 `localeCompare("en")` 排列六项 core asset，而复验端用默认字典序，随后把两个内容完全相同但顺序不同的数组直接字符串比较。远端未创建 draft、未创建 `v0.2.1` tag、未上传 Release asset；sealed signed-transfer Actions artifact 是本次已签名产物的恢复证据。当前工作树只包含“按名称规范化后逐记录比较”的本地修复与真实文件级回归测试；在新的提交、推送和 dispatch 获得明确授权前保持 **No-Go**。
+- `v0.2.0` 是从 `87099222b0e9a50c4410a040c9600e23c53afb23` 发布的公开 `Unsigned Community Build` prerelease，不含 updater 资产，仍与签名通道隔离。
+- `v0.2.1` 已从 exact source `fbe42de828f4f64549d9a4b36bc506fd15b11aa2` 完成签名发布：run `33240800663` 通过 Developer ID、双 notary `Accepted`、stapling、Gatekeeper、updater 签名、SBOM、provenance、attestation 与草稿全量回下载门禁；公开后只读 run `33241992763` 又对正式 tag URL、`releases/latest` 和 `latest.json` alias 完成匿名复验。该版本是 `v0.2.2` 的可信 updater 起点。
+- `v0.2.2` 只增加大型活动库的性能与自动刷新切片：启动 bootstrap 延后全量 dashboard 与 `COUNT`，活动页每 5 秒读取小型采集水位，仅在变化时重载当前页；列表、总数和水位使用同一 SQLite 读事务快照，覆盖独立 OTel 写连接。
+- 本次版本必须从最终 `main` exact SHA fresh dispatch 一次，不填写 resume 输入；工作流仍只创建 draft。人工复核并 Publish 后，必须运行 `Verify existing macOS Release` 的 `published` 模式。
+- 发布公开复验后，还要从当前已安装、已签名且已公证的 `v0.2.1` 实际执行检查更新、下载验签、确认安装、重启与版本/活动页验证；完成前状态最多是 `published publicly verified`，不能写成 `updater E2E accepted`。
 
 ## Unsigned Community Build 发布
 
