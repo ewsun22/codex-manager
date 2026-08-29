@@ -52,7 +52,7 @@
 - [x] 完整安全扫描的 12 项发现已修复，并经独立只读验证
 - [x] 应用内手动检查/确认安装更新，GitHub Releases 草稿工作流、Tauri 更新签名公钥与 `release` Environment 边界
 - [x] 签名 release workflow 拆分为 secret-free build、受保护 sign、无签名 secret 的 draft，并加入 tag 不可覆盖、双 notary Accepted、实际 updater 验签、全资产回下载、attestation 与清理后置验证
-- [x] 2026-08-29 Actions run `33224136890` 在 exact source `9a376f1cda4aa035a4d79793d081e95f39cd51dc` 完成 Developer ID Application/Hardened Runtime 签名；本机仍无可用 identity
+- [x] 2026-08-29 Actions run `33225969842` 在 exact source `74bcb1d07449a817c850be3fd37a87582cd636f7` 完成 Developer ID Application/Hardened Runtime 签名；本机仍无可用 identity
 - [x] 同一 run 的 app/DMG notarization 均为 `Accepted`，stapling 与 Gatekeeper 验证通过；该状态不得外推到后续 source SHA
 - [x] `v0.2.0` unsigned community prerelease 已发布，且保持无 updater manifest 的独立通道
 - [ ] `v0.2.1` 修复 SHA 的签名 beta 草稿、attestation、远端下载验证与人工发布（Environment 已具备；需重新运行并人工审批）

@@ -769,8 +769,26 @@ jobs:
             --argjson releaseId "$RELEASE_ID" --arg sourceSha "$SOURCE_SHA" \
             'length == 1 and .[0].id == $releaseId and .[0].draft == true and .[0].prerelease == false and .[0].target_commitish == $sourceSha' >/dev/null
           local_names="$(find "$assets" -maxdepth 1 -type f -exec basename {} \; | sort | jq -Rsc 'split("\n")[:-1]')"
-          remote_names="$(printf '%s' "$release_json" | jq -c '[.assets[].name] | sort')"
-          test "$local_names" = "$remote_names"
+          listed_assets='[]'
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            listed_assets="$(
+              gh api --paginate --slurp "repos/$REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" |
+                jq -c '[.[][]]'
+            )"
+            remote_names="$(printf '%s' "$listed_assets" | jq -c '[.[].name] | sort')"
+            jq -ne --argjson actual "$remote_names" --argjson expected "$local_names" \
+              '$actual - $expected | length == 0' >/dev/null
+            all_uploaded="$(printf '%s' "$listed_assets" | jq -r 'all(.[].state; . == "uploaded")')"
+            if [ "$local_names" = "$remote_names" ] && [ "$all_uploaded" = true ]; then
+              break
+            fi
+            if [ "$attempt" -eq 10 ]; then
+              echo "Expected draft assets did not become fully list-visible within the bounded retry window." >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          release_json="$(printf '%s' "$release_json" | jq -c --argjson assets "$listed_assets" '.assets = $assets')"
           while IFS=$'\t' read -r asset_id asset_name; do
             gh api -H 'Accept: application/octet-stream' "repos/$REPOSITORY/releases/assets/$asset_id" > "$remote/$asset_name"
           done < <(printf '%s' "$release_json" | jq -r '.assets[] | [.id,.name] | @tsv')
