@@ -17,7 +17,10 @@ export interface MetricValue<T> {
 export interface DashboardSummary {
   activityRevision: string;
   rangeLabel: string;
+  /** Completed or otherwise terminal task summaries in the selected range. */
   records: number;
+  /** Canonical model-call records represented by the task summaries. */
+  modelCalls: number;
   successful: number;
   failed: number;
   inputTokens: number | null;
@@ -26,12 +29,23 @@ export interface DashboardSummary {
   outputTokens: number | null;
   reasoningOutputTokens: number | null;
   equivalentCostUsd: number | null;
+  /** Calls included in the equivalent API-cost estimate. */
+  pricedCalls: number;
+  /** All canonical calls considered for equivalent API-cost coverage. */
+  totalCostCalls: number;
+  pricedTokens: number | null;
+  observedTokens: number | null;
+  unpricedCalls: number;
 }
 
-export type ActivityResult = "success" | "failure" | "running" | "unknown";
+export type ActivityResult = "success" | "failure" | "running" | "unknown" | "accounted" | "unobserved";
+export type ActivityKind = "turn" | "modelCall" | "otelRequest";
+export type ActivityTimingScope = "turn" | "request" | "unavailable";
 
 export interface ActivityRecord {
   id: string;
+  /** Determines the row's semantic unit; it is never inferred by the UI. */
+  activityKind: ActivityKind;
   occurredAt: string;
   projectName: string | null;
   projectPath: string | null;
@@ -53,6 +67,12 @@ export interface ActivityRecord {
   firstVisibleOutputMs: MetricValue<number>;
   responseBytes: MetricValue<number>;
   result: ActivityResult;
+  /** The associated task result for a model call or OTel request, if observed. */
+  parentTurnResult: ActivityResult | null;
+  /** States whether timing values apply to the task, request, or neither. */
+  timingScope: ActivityTimingScope;
+  /** Canonical model-call count represented by this row. */
+  modelCallCount: number;
   statusCode: number | null;
 }
 
@@ -64,6 +84,7 @@ export interface ActivityQuery {
   effort?: string | null;
   result?: ActivityResult | null;
   search?: string | null;
+  view?: "turns" | "modelCalls";
   refreshOnly?: boolean;
   revisionOnly?: boolean;
 }
@@ -112,6 +133,8 @@ export interface ProjectSummary {
   isGit: boolean;
   worktree: boolean;
   lastSeenAt: string | null;
+  /** The newest observed conversation timestamp under this project. */
+  lastConversationAt: string | null;
   agentsFileCount: number;
   hasAgentsFile: boolean;
 }

@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { invokeBackend, isDesktopRuntime } from "./app/client.ts";
 import { preferredAgentsFile } from "./app/agents.ts";
 import {
-  confidenceLabel,
   formatCount,
   formatDate,
   formatMetric,
   formatMs,
   formatRatio,
   formatUsd,
+  metricProvenanceLabel,
 } from "./app/format.ts";
 import {
   COMMANDS,
@@ -67,6 +67,8 @@ function resultLabel(result: ActivityRecord["result"]): string {
     failure: "失败",
     running: "进行中",
     unknown: "未知",
+    accounted: "已记录",
+    unobserved: "未观测到结束",
   }[result];
 }
 
@@ -94,19 +96,19 @@ function ValueWithProvenance<T>({
   metric,
   format,
   className = "",
+  showProvenance = false,
 }: {
   metric: MetricValue<T>;
   format?: (value: T) => string;
   className?: string;
+  showProvenance?: boolean;
 }) {
   const value = formatMetric(metric, format);
   const unavailable = metric.value === null;
   return (
     <span className={`metric-value ${unavailable ? "is-unavailable" : ""} ${className}`.trim()}>
       <span>{value}</span>
-      <span className="metric-source" title={`来源：${metric.source}；可信度：${confidenceLabel(metric.confidence)}`}>
-        {unavailable ? "不可用" : confidenceLabel(metric.confidence)}
-      </span>
+      {showProvenance ? <span className="metric-source">{metricProvenanceLabel(metric)}</span> : null}
     </span>
   );
 }
@@ -196,7 +198,8 @@ function SourceHealthCards({ sources }: { sources: SourceHealth[] }) {
 
 function Overview({ payload, onNavigate }: { payload: BootstrapPayload; onNavigate: (view: View) => void }) {
   const summary = payload.summary;
-  const successRate = summary && summary.records > 0 ? summary.successful / summary.records : null;
+  const terminalTasks = summary ? summary.successful + summary.failed : 0;
+  const successRate = summary && terminalTasks > 0 ? summary.successful / terminalTasks : null;
   const cacheRatio =
     summary?.inputTokens !== null
     && summary?.inputTokens !== undefined
@@ -204,6 +207,9 @@ function Overview({ payload, onNavigate }: { payload: BootstrapPayload; onNaviga
     && summary.cachedInputTokens !== null
       ? summary.cachedInputTokens / summary.inputTokens
       : null;
+  const costCoverage = summary && summary.totalCostCalls > 0
+    ? `${formatCount(summary.pricedCalls)}/${formatCount(summary.totalCostCalls)} 次调用 · ${formatCount(summary.pricedTokens, true)}/${formatCount(summary.observedTokens, true)} token`
+    : "暂无可计价调用";
 
   return (
     <div className="view-content">
@@ -218,10 +224,10 @@ function Overview({ payload, onNavigate }: { payload: BootstrapPayload; onNaviga
       />
 
       <section className="metric-grid" aria-label="核心指标">
-        <MetricCard label="交互记录" value={formatCount(summary?.records)} detail={summary ? `${formatCount(summary.successful)} 成功 · ${formatCount(summary.failed)} 失败` : "启动后在后台汇总"} />
+        <MetricCard label="任务记录" value={formatCount(summary?.records)} detail={summary ? `${formatCount(summary.modelCalls)} 次模型交互 · ${formatCount(summary.successful)} 成功 · ${formatCount(summary.failed)} 失败` : "启动后在后台汇总"} />
         <MetricCard label="缓存命中" value={formatRatio(cacheRatio)} detail={summary ? `${formatCount(summary.cachedInputTokens, true)} read · ${formatCount(summary.cacheWriteInputTokens, true)} write` : "启动后在后台汇总"} tone="accent" />
-        <MetricCard label="API 等价估算" value={formatUsd(summary?.equivalentCostUsd)} detail={summary ? "目录估算；套餐与中转账单不可得" : "按单次 model call 后台计价"} tone="accent" />
-        <MetricCard label="成功率" value={formatRatio(successRate)} detail={summary ? "缺少状态码的记录不会猜测" : "启动后在后台汇总"} tone={summary?.failed ? "warn" : "default"} />
+        <MetricCard label="API 等价估算" value={formatUsd(summary?.equivalentCostUsd)} detail={summary ? `已覆盖 ${costCoverage}${summary.unpricedCalls ? ` · ${formatCount(summary.unpricedCalls)} 次未覆盖` : ""}` : "按去重后的单次 model call 计价"} tone="accent" />
+        <MetricCard label="终态任务成功率" value={formatRatio(successRate)} detail={summary ? "仅已观测成功/失败终态；进行中与未观测结束不猜测" : "启动后在后台汇总"} tone={summary?.failed ? "warn" : "default"} />
       </section>
 
       <section className="overview-grid">
@@ -229,7 +235,7 @@ function Overview({ payload, onNavigate }: { payload: BootstrapPayload; onNaviga
           <div className="panel-title-row">
             <div>
               <h2 id="recent-activity-heading">最近活动</h2>
-              <p>包含归一化模型交互与已观测 API 请求；token 快照已去重。</p>
+              <p>任务汇总优先；token 快照已去重，模型交互数量单独统计。</p>
             </div>
             <button type="button" className="text-button" onClick={() => onNavigate("activity")}>
               全部记录
@@ -327,6 +333,8 @@ function ActivityFilters({
           <option value="success">成功</option>
           <option value="failure">失败</option>
           <option value="running">进行中</option>
+          <option value="unobserved">未观测到结束</option>
+          {query.view === "modelCalls" ? <option value="accounted">已记录的模型交互</option> : null}
           <option value="unknown">未知</option>
         </select>
       </label>
@@ -335,10 +343,31 @@ function ActivityFilters({
   );
 }
 
-function ActivityTable({ page, onSelect }: { page: ActivityPage; onSelect: (record: ActivityRecord) => void }) {
-  if (!page.items.length) {
-    return <EmptyState title="没有匹配的活动记录" detail="调整筛选条件，或等待下一轮本地采集完成。" />;
+function timingUnavailableReason(record: ActivityRecord, field: "firstVisibleOutput" | "duration"): string {
+  if (record.activityKind === "modelCall") return "该条是 token 结算记录；本地 rollout 未提供调用级耗时。";
+  if (record.activityKind === "otelRequest" && field === "firstVisibleOutput") return "OTel 请求记录未提供首个输出时间。";
+  if (record.activityKind === "otelRequest") return "OTel 请求记录未提供总耗时。";
+  if (record.result === "running") return "任务仍在进行，尚未产生完整耗时。";
+  if (record.result === "unobserved") return "未观测到任务结束事件，无法计算完整耗时。";
+  return "当前采集来源未提供该时间指标。";
+}
+
+function TimingValue({ record, metric, field }: { record: ActivityRecord; metric: MetricValue<number>; field: "firstVisibleOutput" | "duration" }) {
+  if (record.timingScope === "unavailable" || metric.value === null) {
+    return <span className="timing-missing" title={timingUnavailableReason(record, field)}><span>—</span><small>{timingUnavailableReason(record, field)}</small></span>;
   }
+  return <ValueWithProvenance metric={metric} format={formatMs} />;
+}
+
+function ResultPill({ result, statusCode }: { result: ActivityRecord["result"]; statusCode?: number | null }) {
+  return <span className={`result-pill result-${result}`}>{resultLabel(result)}{statusCode ? ` · ${statusCode}` : ""}</span>;
+}
+
+function ActivityTable({ page, view, onSelect }: { page: ActivityPage; view: NonNullable<ActivityQuery["view"]>; onSelect: (record: ActivityRecord) => void }) {
+  if (!page.items.length) {
+    return <EmptyState title={view === "turns" ? "没有匹配的任务汇总" : "没有匹配的模型交互"} detail="调整筛选条件，或等待下一轮本地采集完成。" />;
+  }
+  const turns = view === "turns";
   return (
     <div className="table-scroll">
       <table className="activity-table">
@@ -352,27 +381,34 @@ function ActivityTable({ page, onSelect }: { page: ActivityPage; onSelect: (reco
             <th scope="col">缓存写</th>
             <th scope="col">输出</th>
             <th scope="col">总计</th>
+            <th scope="col">{turns ? "模型调用" : "所属任务"}</th>
+            {!turns ? <th scope="col">记录状态</th> : null}
             <th scope="col">首个输出</th>
             <th scope="col">总耗时</th>
-            <th scope="col">结果</th>
+            {turns ? <th scope="col">任务状态</th> : null}
           </tr>
         </thead>
         <tbody>
           {page.items.map((record) => (
-            <tr key={record.id} tabIndex={0} onClick={() => onSelect(record)} onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") onSelect(record);
+            <tr key={record.id} tabIndex={0} role="button" aria-label={`查看 ${record.projectName ?? "未关联项目"} 于 ${formatDate(record.occurredAt)} 的详情`} onClick={() => onSelect(record)} onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onSelect(record);
+              }
             }}>
               <td><time dateTime={record.occurredAt}>{formatDate(record.occurredAt)}</time></td>
-              <td><strong>{formatMetric(record.model)}</strong><small>{formatMetric(record.effort)}</small></td>
-              <td><span className="project-cell">{record.projectName ?? "unavailable"}</span></td>
+              <td><strong>{formatMetric(record.model)}</strong><small>{record.activityKind === "otelRequest" ? "OTel 请求" : formatMetric(record.effort)}</small></td>
+              <td><span className="project-cell" title={record.projectPath ?? record.projectName ?? "未关联项目"}>{record.projectName ?? "未关联项目"}</span></td>
               <td><ValueWithProvenance metric={record.inputTokens} format={formatCount} /></td>
               <td><ValueWithProvenance metric={record.cachedInputTokens} format={formatCount} /></td>
               <td><ValueWithProvenance metric={record.cacheWriteInputTokens} format={formatCount} /></td>
               <td><ValueWithProvenance metric={record.outputTokens} format={formatCount} /></td>
               <td><ValueWithProvenance metric={record.totalTokens} format={formatCount} className="strong-value" /></td>
-              <td><ValueWithProvenance metric={record.firstVisibleOutputMs} format={formatMs} /></td>
-              <td><ValueWithProvenance metric={record.durationMs} format={formatMs} /></td>
-              <td><span className={`result-pill result-${record.result}`}>{resultLabel(record.result)}{record.statusCode ? ` · ${record.statusCode}` : ""}</span></td>
+              {turns ? <td><strong>{formatCount(record.modelCallCount)}</strong><small>次已去重调用</small></td> : <td>{record.parentTurnResult ? <ResultPill result={record.parentTurnResult} /> : <span className="muted">未关联任务</span>}</td>}
+              {!turns ? <td><ResultPill result={record.result} /></td> : null}
+              <td><TimingValue record={record} metric={record.firstVisibleOutputMs} field="firstVisibleOutput" /></td>
+              <td><TimingValue record={record} metric={record.durationMs} field="duration" /></td>
+              {turns ? <td><ResultPill result={record.result} statusCode={record.statusCode} /></td> : null}
             </tr>
           ))}
         </tbody>
@@ -404,28 +440,57 @@ function ActivityDrawer({ record, onClose }: { record: ActivityRecord; onClose: 
       <aside className="drawer" role="dialog" aria-modal="true" aria-labelledby="activity-detail-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="drawer-header">
           <div>
-            <p className="eyebrow">调用详情</p>
+            <p className="eyebrow">{record.activityKind === "turn" ? "任务汇总详情" : record.activityKind === "otelRequest" ? "OTel 请求详情" : "模型交互详情"}</p>
             <h2 id="activity-detail-title">{formatMetric(record.model)}</h2>
             <p>{formatDate(record.occurredAt)} · {record.projectName ?? "未关联项目"}</p>
           </div>
           <button type="button" className="button button-secondary" onClick={onClose}>关闭</button>
         </div>
         <div className="detail-callout">
-          <span className={`result-pill result-${record.result}`}>{resultLabel(record.result)}</span>
+          <ResultPill result={record.result} statusCode={record.statusCode} />
+          {record.activityKind !== "turn" ? <span>所属任务：{record.parentTurnResult ? resultLabel(record.parentTurnResult) : "未关联"}</span> : <span>模型调用：{formatCount(record.modelCallCount)} 次</span>}
           <span>会话 {record.sessionId}</span>
-          <span>状态 {record.statusCode ?? "unavailable"}</span>
+          {record.activityKind === "modelCall" ? <span>耗时：{timingUnavailableReason(record, "duration")}</span> : null}
         </div>
         <dl className="detail-list">
           {items.map(([label, metric, format]) => (
             <div key={label}>
               <dt>{label}</dt>
-              <dd><ValueWithProvenance metric={metric} format={format} /></dd>
+              <dd><ValueWithProvenance metric={metric} format={format} showProvenance /></dd>
             </div>
           ))}
         </dl>
         <p className="drawer-footnote">本页仅显示归一化后的元数据；请求正文、Authorization 与 Cookie 不会进入界面或数据库。</p>
       </aside>
     </div>
+  );
+}
+
+function PaginationControls({
+  pageNumber,
+  pageSize,
+  hasPrevious,
+  hasNext,
+  disabled,
+  onPrevious,
+  onNext,
+  compact = false,
+}: {
+  pageNumber: number;
+  pageSize: number;
+  hasPrevious: boolean;
+  hasNext: boolean;
+  disabled: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
+  compact?: boolean;
+}) {
+  return (
+    <nav className={`pagination ${compact ? "pagination-compact" : ""}`} aria-label="活动记录分页">
+      <button type="button" className="button button-secondary" onClick={onPrevious} disabled={disabled || !hasPrevious}>上一页</button>
+      <span aria-live="polite">第 {pageNumber} 页 · 每页 {pageSize} 条</span>
+      <button type="button" className="button button-secondary" onClick={onNext} disabled={disabled || !hasNext}>下一页</button>
+    </nav>
   );
 }
 
@@ -442,7 +507,7 @@ function ActivityView({
   refreshRevision: number;
   fullRefreshRevision: number;
 }) {
-  const [query, setQuery] = useState<ActivityQuery>({ limit: 50 });
+  const [query, setQuery] = useState<ActivityQuery>({ limit: 50, view: "turns" });
   const [page, setPage] = useState<ActivityPage>(initial);
   const [selected, setSelected] = useState<ActivityRecord | null>(null);
   const [loading, setLoading] = useState(false);
@@ -459,6 +524,8 @@ function ActivityView({
   const latestLoadId = useRef(0);
   const pendingLoad = useRef<{ id: number; query: ActivityQuery; blocking: boolean; countTotal: boolean } | null>(null);
   const observedQueryKey = useRef(activityQueryKey(query));
+  const turnTabRef = useRef<HTMLButtonElement>(null);
+  const modelCallsTabRef = useRef<HTMLButtonElement>(null);
 
   queryRef.current = query;
 
@@ -561,6 +628,22 @@ function ActivityView({
     setCursorHistory((history) => [...history, query.cursor ?? null]);
     setQuery((current) => ({ ...current, cursor: page.nextCursor }));
   };
+  const handleViewTabKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    const currentView = query.view ?? "turns";
+    const nextView = event.key === "Home"
+      ? "turns"
+      : event.key === "End"
+        ? "modelCalls"
+        : event.key === "ArrowRight" || event.key === "ArrowLeft"
+          ? currentView === "turns" ? "modelCalls" : "turns"
+          : null;
+    if (!nextView) return;
+    event.preventDefault();
+    updateQuery({ ...query, view: nextView });
+    window.requestAnimationFrame(() => {
+      (nextView === "turns" ? turnTabRef : modelCallsTabRef).current?.focus();
+    });
+  };
 
   useEffect(() => {
     // Bootstrap already contains the first activity page. Do not immediately
@@ -592,36 +675,43 @@ function ActivityView({
 
   return (
     <div className="view-content">
-      <SectionHeader title="活动记录" subtitle="每行代表一次归一化模型交互或 OTel API 请求；没有模型调用的失败 turn 仍会保留。不能可靠取得的字段会明确显示 unavailable。" />
+      <SectionHeader title="活动记录" subtitle="默认按任务汇总展示真实状态和任务级耗时；模型交互保留 token 结算与 OTel 请求，不把任务状态或耗时伪造为调用结果。" />
+      <div className="activity-view-tabs" role="tablist" aria-label="活动记录视图">
+        <button ref={turnTabRef} type="button" role="tab" aria-selected={(query.view ?? "turns") === "turns"} tabIndex={(query.view ?? "turns") === "turns" ? 0 : -1} className={(query.view ?? "turns") === "turns" ? "is-active" : ""} onClick={() => updateQuery({ ...query, view: "turns" })} onKeyDown={handleViewTabKeyDown}>任务汇总</button>
+        <button ref={modelCallsTabRef} type="button" role="tab" aria-selected={query.view === "modelCalls"} tabIndex={query.view === "modelCalls" ? 0 : -1} className={query.view === "modelCalls" ? "is-active" : ""} onClick={() => updateQuery({ ...query, view: "modelCalls" })} onKeyDown={handleViewTabKeyDown}>模型交互</button>
+      </div>
       <ActivityFilters
         query={query}
         records={page.items}
         projects={projects}
         onChange={updateQuery}
-        onReset={() => { setCursorHistory([]); setQuery({ limit: 50 }); }}
+        onReset={() => { setCursorHistory([]); setQuery({ limit: 50, view: query.view ?? "turns" }); }}
       />
       <section className="panel table-panel" aria-labelledby="activity-table-heading">
         <div className="panel-title-row">
           <div>
-            <h2 id="activity-table-heading">{formatCount(page.total)} 条记录</h2>
-            <p>可信度标签描述采集路径，不能替代账单或服务端日志。<span role="status" aria-live="polite"> 每 5 秒自动更新{syncing ? " · 正在同步…" : updatedAt ? ` · 最近更新 ${formatDate(updatedAt)}` : ""}</span></p>
+            <h2 id="activity-table-heading">{formatCount(page.total)} 条{(query.view ?? "turns") === "turns" ? "任务" : "模型交互"}</h2>
+            <p><span role="status" aria-live="polite">每 5 秒自动更新{syncing ? " · 正在同步…" : updatedAt ? ` · 最近更新 ${formatDate(updatedAt)}` : ""}</span></p>
+            <details className="data-explanation">
+              <summary>数据说明</summary>
+              <p>表格默认只显示数值。打开详情可查看每个字段来自 Codex 本地记录、推导计算、价格目录或服务端/OTel 元数据；这些来源说明不等同于账单或服务端审计日志。</p>
+            </details>
           </div>
-          <label className="page-size">
-            <span>每页</span>
-            <select value={query.limit ?? 50} onChange={(event) => updateQuery({ ...query, limit: Number(event.target.value) })}>
-              <option value={25}>25</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-            </select>
-          </label>
+          <div className="activity-table-controls">
+            <label className="page-size">
+              <span>每页</span>
+              <select aria-label="每页显示数量" value={query.limit ?? 50} onChange={(event) => updateQuery({ ...query, limit: Number(event.target.value) })}>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </label>
+            <PaginationControls pageNumber={cursorHistory.length + 1} pageSize={query.limit ?? 50} hasPrevious={cursorHistory.length > 0} hasNext={Boolean(page.nextCursor)} disabled={loading} onPrevious={goPrevious} onNext={goNext} compact />
+          </div>
         </div>
         {error ? <InlineNotice notice={{ tone: "error", message: error }} onClose={() => setError(null)} /> : null}
-        {loading ? <LoadingState label="正在应用筛选…" /> : <ActivityTable page={page} onSelect={setSelected} />}
-        <div className="pagination" aria-label="活动记录分页">
-          <button type="button" className="button button-secondary" onClick={goPrevious} disabled={loading || cursorHistory.length === 0}>上一页</button>
-          <span>第 {cursorHistory.length + 1} 页 · 每页 {query.limit ?? 50} 条</span>
-          <button type="button" className="button button-secondary" onClick={goNext} disabled={loading || !page.nextCursor}>下一页</button>
-        </div>
+        {loading ? <LoadingState label="正在应用筛选…" /> : <ActivityTable page={page} view={query.view ?? "turns"} onSelect={setSelected} />}
+        <PaginationControls pageNumber={cursorHistory.length + 1} pageSize={query.limit ?? 50} hasPrevious={cursorHistory.length > 0} hasNext={Boolean(page.nextCursor)} disabled={loading} onPrevious={goPrevious} onNext={goNext} />
       </section>
       {selected ? <ActivityDrawer record={selected} onClose={() => setSelected(null)} /> : null}
     </div>
@@ -666,7 +756,10 @@ function ProjectList({
               onClick={() => onSelect(project)}
             >
               <span className="project-row-main">
-                <strong>{project.name}</strong>
+                <span className="project-row-heading">
+                  <strong>{project.name}</strong>
+                  <time dateTime={project.lastConversationAt ?? undefined}>{project.lastConversationAt ? `最后对话 ${formatDate(project.lastConversationAt)}` : "尚未观测到对话"}</time>
+                </span>
                 <small>{project.canonicalPath}</small>
               </span>
               <span className="project-flags">

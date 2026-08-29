@@ -222,6 +222,10 @@ struct Activity {
     first_visible_output_ms: Metric<i64>,
     response_bytes: Metric<i64>,
     result: String,
+    activity_kind: String,
+    parent_turn_result: Option<String>,
+    timing_scope: String,
+    model_call_count: i64,
     status_code: Option<i64>,
 }
 
@@ -235,6 +239,7 @@ struct ActivityQuery {
     effort: Option<String>,
     result: Option<String>,
     search: Option<String>,
+    view: Option<String>,
     refresh_only: Option<bool>,
     revision_only: Option<bool>,
 }
@@ -256,12 +261,18 @@ struct Summary {
     records: i64,
     successful: i64,
     failed: i64,
+    model_calls: i64,
     input_tokens: Option<i64>,
     cached_input_tokens: Option<i64>,
     cache_write_input_tokens: Option<i64>,
     output_tokens: Option<i64>,
     reasoning_output_tokens: Option<i64>,
     equivalent_cost_usd: Option<f64>,
+    priced_calls: i64,
+    total_cost_calls: i64,
+    priced_tokens: Option<i64>,
+    observed_tokens: Option<i64>,
+    unpriced_calls: i64,
 }
 
 #[derive(Serialize)]
@@ -284,6 +295,7 @@ struct Project {
     is_git: bool,
     worktree: bool,
     last_seen_at: Option<String>,
+    last_conversation_at: Option<String>,
     agents_file_count: i64,
     has_agents_file: bool,
 }
@@ -1243,11 +1255,12 @@ fn dashboard_inner(state: &AppState) -> Result<Summary, String> {
     let has_cost_inputs = !snapshot.cost_inputs.is_empty();
     let mut usage = Some(TokenUsage::default());
     let mut total_cost = 0.0;
-    let mut all_priced = true;
+    let mut priced_calls = 0_i64;
+    let mut priced_tokens = 0_i64;
+    let mut observed_tokens = 0_i64;
     for input in snapshot.cost_inputs {
         let Some(call_total) = input.input_tokens.checked_add(input.output_tokens) else {
             usage = None;
-            all_priced = false;
             continue;
         };
         let call_usage = TokenUsage {
@@ -1260,14 +1273,14 @@ fn dashboard_inner(state: &AppState) -> Result<Summary, String> {
         };
         if !call_usage.is_valid() {
             usage = None;
-            all_priced = false;
             continue;
         }
         usage = usage.and_then(|current| current.checked_add(&call_usage));
+        observed_tokens = observed_tokens.saturating_add(call_usage.total_tokens);
         if let Some(estimate) = pricing::estimate(input.model.as_deref(), &call_usage) {
             total_cost += estimate.total_usd;
-        } else {
-            all_priced = false;
+            priced_calls += 1;
+            priced_tokens = priced_tokens.saturating_add(call_usage.total_tokens);
         }
     }
     Ok(Summary {
@@ -1276,13 +1289,18 @@ fn dashboard_inner(state: &AppState) -> Result<Summary, String> {
         records: snapshot.records,
         successful: snapshot.successful,
         failed: snapshot.failed,
+        model_calls: snapshot.model_calls,
         input_tokens: usage.as_ref().map(|value| value.input_tokens),
         cached_input_tokens: usage.as_ref().map(|value| value.cached_input_tokens),
         cache_write_input_tokens: usage.as_ref().map(|value| value.cache_write_input_tokens),
         output_tokens: usage.as_ref().map(|value| value.output_tokens),
         reasoning_output_tokens: usage.as_ref().map(|value| value.reasoning_output_tokens),
-        equivalent_cost_usd: (has_cost_inputs && all_priced && usage.is_some())
-            .then_some(total_cost),
+        equivalent_cost_usd: (has_cost_inputs && priced_calls > 0).then_some(total_cost),
+        priced_calls,
+        total_cost_calls: snapshot.model_calls,
+        priced_tokens: usage.is_some().then_some(priced_tokens),
+        observed_tokens: usage.is_some().then_some(observed_tokens),
+        unpriced_calls: snapshot.model_calls.saturating_sub(priced_calls),
     })
 }
 
@@ -1305,6 +1323,8 @@ fn list_activity_inner(state: &AppState, query: ActivityQuery) -> Result<Activit
         Some("success") => Some("success".to_string()),
         Some("failure") => Some("failure".to_string()),
         Some("running") => Some("running".to_string()),
+        Some("unobserved") => Some("unobserved".to_string()),
+        Some("accounted") => Some("accounted".to_string()),
         Some("unknown") => Some("unknown".to_string()),
         _ => None,
     };
@@ -1312,6 +1332,7 @@ fn list_activity_inner(state: &AppState, query: ActivityQuery) -> Result<Activit
     let snapshot = {
         let store = state.store.lock().map_err(lock_err)?;
         let filter = ActivityFilter {
+            view: query.view,
             cursor: query.cursor,
             limit: query.limit,
             project_path: non_empty(query.project_path),
@@ -1437,9 +1458,21 @@ fn activity_public(row: ActivityRow) -> Activity {
             "completed" => "success",
             "failed" | "aborted" => "failure",
             "running" => "running",
+            "unobserved" => "unobserved",
+            "accounted" => "accounted",
             _ => "unknown",
         }
         .into(),
+        activity_kind: row.activity_kind,
+        parent_turn_result: row.parent_turn_result.map(|value| match value.as_str() {
+            "completed" => "success".into(),
+            "failed" | "aborted" => "failure".into(),
+            "running" => "running".into(),
+            "unobserved" => "unobserved".into(),
+            _ => "unknown".into(),
+        }),
+        timing_scope: row.timing_scope,
+        model_call_count: row.model_call_count,
         status_code: row.status_code,
     }
 }
@@ -1997,6 +2030,7 @@ fn discover_projects_inner(state: &AppState) -> Result<(), String> {
                 is_git: project.is_git,
                 worktree: project.worktree,
                 last_seen_at: (project.source == "observed").then(|| now.clone()),
+                last_conversation_at: None,
             })
             .map_err(display_error)?;
     }
@@ -2041,6 +2075,7 @@ fn project_public(row: ProjectRow, agents_file_count: i64, has_agents_file: bool
         is_git: row.is_git,
         worktree: row.worktree,
         last_seen_at: row.last_seen_at,
+        last_conversation_at: row.last_conversation_at,
         agents_file_count,
         has_agents_file,
     }
@@ -3136,7 +3171,10 @@ mod tests {
             .store
             .lock()
             .unwrap()
-            .page_activity(&ActivityFilter::default())
+            .page_activity(&ActivityFilter {
+                view: Some("modelCalls".into()),
+                ..Default::default()
+            })
             .unwrap();
         assert_eq!(first.total, 1);
 
@@ -3152,7 +3190,10 @@ mod tests {
             .store
             .lock()
             .unwrap()
-            .page_activity(&ActivityFilter::default())
+            .page_activity(&ActivityFilter {
+                view: Some("modelCalls".into()),
+                ..Default::default()
+            })
             .unwrap();
         assert_eq!(resumed.total, 2);
         assert_eq!(
@@ -3196,6 +3237,7 @@ mod tests {
                 is_git: false,
                 worktree: false,
                 last_seen_at: None,
+                last_conversation_at: None,
             })
             .unwrap();
         let state = AppState {

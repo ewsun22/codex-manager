@@ -23,6 +23,8 @@ jobs:
         run: npm ci
       - name: Version consistency
         run: ./scripts/check-version-sync.sh
+      - name: Documentation and release note consistency
+        run: npm run docs:check
       - name: JavaScript checks
         run: npm run typecheck && npm test && npm run build
       - name: Secret regression scan

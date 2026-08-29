@@ -1,4 +1,4 @@
-import type { MetricConfidence, MetricValue } from "../shared/contracts.ts";
+import type { MetricConfidence, MetricSource, MetricValue } from "../shared/contracts.ts";
 
 const numberFormatter = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 });
 const compactNumberFormatter = new Intl.NumberFormat("zh-CN", {
@@ -55,4 +55,20 @@ export function confidenceLabel(confidence: MetricConfidence): string {
     low: "低可信",
     unavailable: "不可用",
   }[confidence];
+}
+
+export function metricSourceLabel(source: MetricSource): string {
+  return {
+    rollout: "Codex 本地记录",
+    derived: "由已观测数据计算",
+    configured: "价格目录规则",
+    server: "服务端或 OTel 请求元数据",
+    manual: "手动配置",
+    unavailable: "此来源未提供",
+  }[source];
+}
+
+export function metricProvenanceLabel(metric: Pick<MetricValue<unknown>, "source" | "confidence">): string {
+  const confidence = metric.confidence === "unavailable" ? "无法评估" : confidenceLabel(metric.confidence);
+  return `${metricSourceLabel(metric.source)} · ${confidence}`;
 }

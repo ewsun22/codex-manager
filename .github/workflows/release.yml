@@ -750,10 +750,13 @@ jobs:
           assets=release-work/release-assets
           tarball="$assets/codex-manager-v$VERSION-aarch64.app.tar.gz"
           published_at="$(jq -er .signedAt "$assets/SIGNING-EVIDENCE.json")"
+          node scripts/release-notes.mjs summary \
+            --input "release-work/RELEASE-NOTES.md" \
+            --output "$RUNNER_TEMP/release-notes-summary.txt"
           node scripts/release-github.mjs make-latest \
             --signature-file "$tarball.sig" \
             --published-at "$published_at" \
-            --notes "Codex Manager v$VERSION signed macOS arm64 release" \
+            --notes "$(cat "$RUNNER_TEMP/release-notes-summary.txt")" \
             --output "$assets/latest.json"
           node scripts/release-metadata.mjs make-provenance \
             --asset-dir "$assets" \

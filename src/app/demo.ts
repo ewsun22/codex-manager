@@ -35,6 +35,7 @@ const summary: DashboardSummary = {
   activityRevision,
   rangeLabel: "最近 24 小时",
   records: 60,
+  modelCalls: 60,
   successful: 45,
   failed: 15,
   inputTokens: 7_642_600,
@@ -43,11 +44,17 @@ const summary: DashboardSummary = {
   outputTokens: 10_912,
   reasoningOutputTokens: 1_305,
   equivalentCostUsd: 7.8642,
+  pricedCalls: 57,
+  totalCostCalls: 60,
+  pricedTokens: 7_645_920,
+  observedTokens: 7_730_721,
+  unpricedCalls: 3,
 };
 
 const activitySeed: ActivityRecord[] = [
   {
     id: "turn-00042",
+    activityKind: "turn",
     occurredAt: "2026-08-27T10:31:45.000Z",
     projectName: "signal-catalog",
     projectPath,
@@ -69,10 +76,14 @@ const activitySeed: ActivityRecord[] = [
     firstVisibleOutputMs: { value: 3_766, source: "rollout", confidence: "medium" },
     responseBytes: { value: null, source: "unavailable", confidence: "unavailable" },
     result: "success",
+    parentTurnResult: null,
+    timingScope: "turn",
+    modelCallCount: 2,
     statusCode: 200,
   },
   {
     id: "turn-00041",
+    activityKind: "turn",
     occurredAt: "2026-08-27T10:30:52.000Z",
     projectName: "infra-scripts",
     projectPath: "/Users/example/Projects/infra-scripts",
@@ -94,10 +105,14 @@ const activitySeed: ActivityRecord[] = [
     firstVisibleOutputMs: { value: 4_368, source: "rollout", confidence: "medium" },
     responseBytes: { value: 8_491, source: "server", confidence: "medium" },
     result: "success",
+    parentTurnResult: null,
+    timingScope: "turn",
+    modelCallCount: 1,
     statusCode: 200,
   },
   {
     id: "turn-00040",
+    activityKind: "turn",
     occurredAt: "2026-08-27T10:29:16.000Z",
     projectName: "signal-catalog",
     projectPath,
@@ -119,10 +134,14 @@ const activitySeed: ActivityRecord[] = [
     firstVisibleOutputMs: { value: null, source: "unavailable", confidence: "unavailable" },
     responseBytes: { value: null, source: "unavailable", confidence: "unavailable" },
     result: "failure",
+    parentTurnResult: null,
+    timingScope: "turn",
+    modelCallCount: 1,
     statusCode: 500,
   },
   {
     id: "turn-00039",
+    activityKind: "turn",
     occurredAt: "2026-08-27T10:24:11.000Z",
     projectName: "marketing-site",
     projectPath: "/Users/example/Projects/marketing-site",
@@ -144,6 +163,9 @@ const activitySeed: ActivityRecord[] = [
     firstVisibleOutputMs: { value: 4_426, source: "rollout", confidence: "medium" },
     responseBytes: { value: 10_991, source: "server", confidence: "medium" },
     result: "success",
+    parentTurnResult: null,
+    timingScope: "turn",
+    modelCallCount: 3,
     statusCode: 200,
   },
 ];
@@ -156,6 +178,8 @@ const activity: ActivityRecord[] = Array.from({ length: 60 }, (_, index) => {
   const cached = seed.cachedInputTokens.value === null ? null : Math.min(seed.cachedInputTokens.value + (index * 183), input ?? 0);
   const output = seed.outputTokens.value === null ? null : seed.outputTokens.value + (index % 9);
   const cacheWrite = seed.cacheWriteInputTokens.value === null ? null : seed.cacheWriteInputTokens.value + (index % 5) * 64;
+  const isOtelRequest = index % 11 === 6;
+  const isModelCall = !isOtelRequest && index % 3 === 1;
   return {
     ...seed,
     id: `turn-${String(sequence).padStart(5, "0")}`,
@@ -167,6 +191,18 @@ const activity: ActivityRecord[] = Array.from({ length: 60 }, (_, index) => {
     cacheWriteInputTokens: { ...seed.cacheWriteInputTokens, value: cacheWrite },
     outputTokens: { ...seed.outputTokens, value: output },
     totalTokens: { ...seed.totalTokens, value: input === null || output === null ? null : input + output },
+    activityKind: isOtelRequest ? "otelRequest" : isModelCall ? "modelCall" : "turn",
+    result: isModelCall ? "accounted" : seed.result,
+    parentTurnResult: isModelCall ? seed.result : null,
+    timingScope: isOtelRequest ? "request" : isModelCall ? "unavailable" : "turn",
+    modelCallCount: isOtelRequest ? 0 : isModelCall ? 1 : seed.modelCallCount,
+    firstVisibleOutputMs: (isModelCall || isOtelRequest)
+      ? { value: null, source: "unavailable", confidence: "unavailable" }
+      : seed.firstVisibleOutputMs,
+    durationMs: isModelCall
+      ? { value: null, source: "unavailable", confidence: "unavailable" }
+      : seed.durationMs,
+    statusCode: isModelCall ? null : seed.statusCode,
   };
 });
 
@@ -180,6 +216,7 @@ const projects: ProjectSummary[] = [
     isGit: true,
     worktree: false,
     lastSeenAt: observedAt,
+    lastConversationAt: observedAt,
     agentsFileCount: 2,
     hasAgentsFile: true,
   },
@@ -192,6 +229,7 @@ const projects: ProjectSummary[] = [
     isGit: true,
     worktree: true,
     lastSeenAt: "2026-08-27T10:30:52.000Z",
+    lastConversationAt: "2026-08-27T10:30:52.000Z",
     agentsFileCount: 1,
     hasAgentsFile: true,
   },
@@ -204,6 +242,7 @@ const projects: ProjectSummary[] = [
     isGit: true,
     worktree: false,
     lastSeenAt: null,
+    lastConversationAt: null,
     agentsFileCount: 0,
     hasAgentsFile: false,
   },
@@ -423,6 +462,9 @@ function chainFor(project: ProjectSummary): AgentsChain {
 function filterActivity(query: ActivityQuery | undefined): ActivityRecord[] {
   const search = query?.search?.trim().toLocaleLowerCase();
   return activity.filter((item) => {
+    const view = query?.view ?? "turns";
+    if (view === "turns" && item.activityKind !== "turn") return false;
+    if (view === "modelCalls" && item.activityKind === "turn") return false;
     if (query?.projectPath && item.projectPath !== query.projectPath) return false;
     if (query?.model && item.model.value !== query.model) return false;
     if (query?.effort && item.effort.value !== query.effort) return false;

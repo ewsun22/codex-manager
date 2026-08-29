@@ -13,6 +13,7 @@ const project: ProjectSummary = {
   isGit: true,
   worktree: false,
   lastSeenAt: null,
+  lastConversationAt: null,
   agentsFileCount: 1,
   hasAgentsFile: true,
 };

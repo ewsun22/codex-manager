@@ -12,6 +12,8 @@
 8. `published publicly verified`：人工 Publish 后，Release、`releases/latest`、tag 与 exact source SHA 一致，九个正式 tag URL 和 `latest.json` alias 均匿名回下载并重跑完整门禁。
 9. `updater E2E accepted`：已有可信签名客户端真实下载更高 SemVer、验签、安装并重启成功。首个签名版本无法满足这项状态。
 
+Release note 采用 `docs/release-notes/v<VERSION>.md` 的固定章节。CI 通过 `npm run docs:check` 校验章节和状态词；Release 正文直接使用完整 note，`scripts/release-notes.mjs` 从其中的“概览”和“主要变化”生成 `latest.json.notes` 短摘要。两者必须来自同一文件，摘要不包含凭据或隐私数据。
+
 `ci.yml` 默认只做 unsigned artifact，可用于人工创建上述 community prerelease。`release.yml` 只服务签名稳定通道：只能手动运行，并且只允许 `main` 当前远端 SHA；它使用受保护的 GitHub `release` Environment，凭据不齐时必须失败。没有证书、Team ID 和 notarization 凭据时，禁止模拟签名成功、绕过门禁或向 community prerelease 添加 updater manifest。
 
 ## 2026-08-29 v0.2.2 签名候选状态

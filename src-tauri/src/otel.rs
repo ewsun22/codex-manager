@@ -1780,7 +1780,10 @@ mod tests {
 
         let store = Store::open(&database).unwrap();
         let page = store
-            .page_activity(&codex_storage::ActivityFilter::default())
+            .page_activity(&codex_storage::ActivityFilter {
+                view: Some("modelCalls".into()),
+                ..Default::default()
+            })
             .unwrap();
         assert_eq!(page.total, 2);
     }
@@ -1922,7 +1925,10 @@ mod tests {
         assert_eq!(persist(&database, vec![event]), StatusCode::OK);
         let page = Store::open(&database)
             .unwrap()
-            .page_activity(&codex_storage::ActivityFilter::default())
+            .page_activity(&codex_storage::ActivityFilter {
+                view: Some("modelCalls".into()),
+                ..Default::default()
+            })
             .unwrap();
         assert_eq!(page.total, 1);
         assert!(!serde_json::to_string(&page.items).unwrap().contains(canary));

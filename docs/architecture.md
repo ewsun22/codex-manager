@@ -65,6 +65,7 @@ OAuth 与认证 App Server 不继承任意父进程环境，只保留 HOME、用
 ## 规范化与指标口径
 
 - 一个 `token_count` 快照不天然等于一个新网络请求。
+- 查询层明确区分 `turn` 任务汇总与 model-call 交互事件：前者承载任务终态、首个可见输出和总耗时，后者只承载已观测 token 事件并引用所属任务状态；没有可靠终态的任务为 `unobserved`，不得继续显示为 `running`。
 - 去重键组合 session、ordinal、事件类型与累计 token 向量。累计向量不变表示重复快照；同一 turn 内非单调回退隔离为诊断。
 - 新 turn 的首个累计向量回退可作为计数器重置。显式 last usage 只在与累计向量或可验证差值一致时接受；矛盾、溢出或不可能的 token 桶会进入诊断并标记 `unavailable`，不使用未验证数值。
 - 单次 model call 的每个 token 字段上限为 10,000,000；累计快照字段上限为 1,000,000,000,000，两层都校验非负、`cached + cache-write <= input`、`reasoning <= output` 和 `total = input + output`。
@@ -72,7 +73,9 @@ OAuth 与认证 App Server 不继承任意父进程环境，只保留 HOME、用
 - 长上下文倍率按单次 model call 判断，不按汇总后的跨请求 token 判断。
 - 每个展示字段携带 source/confidence；缺失值是 `unavailable`，不是 0。
 - rollout 的 `time_to_first_token_ms` 是 Codex-reported first visible output，不宣称为代理层网络 TTFB。
-- API 等价价格使用带生效日期的内置目录；未知模型或桶不完整时整项不可用。
+- API 等价价格使用带生效日期的内置目录；未知模型或桶不完整的调用单独计入未覆盖，不参与金额。
+- 总览按 canonical model call 逐调用计价，同时返回 priced calls/tokens 与 observed calls/tokens 覆盖率；部分不可计价数据不会使整张估算卡变成不可用，也不会按零值或默认模型补算。
+- 项目 `lastConversationAt` 由该项目已观测 turn 的最后更新时间聚合，独立于项目重新发现时间；空值明确为 `unavailable`。
 
 ## 存储与并发
 
