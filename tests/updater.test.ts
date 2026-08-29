@@ -60,6 +60,8 @@ test("发布工作流隔离构建、签名与草稿权限，并远端复验完�
   assert.equal(workflow.match(/gh api --paginate --slurp "repos\/\$REPOSITORY\/releases\?per_page=100"/g)?.length, 5);
   assert.match(workflow, /gh api --method POST "repos\/\$REPOSITORY\/releases" --input -/);
   assert.equal(workflow.match(/length == 1 and \.\[0\]\.id == \$releaseId/g)?.length, 2);
+  assert.match(workflow, /for attempt in 1 2 3 4 5 6 7 8 9 10; do/);
+  assert.match(workflow, /if \[ "\$match_count" -eq 0 \]; then[\s\S]+sleep 2[\s\S]+continue/);
   assert.equal(
     workflow.match(/gh api --method POST -H "Content-Type: application\/octet-stream"[\s\S]+?--input "\$asset" "\$upload_base\?name=\$encoded_name"/g)?.length,
     2,

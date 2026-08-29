@@ -618,13 +618,26 @@ jobs:
             --arg tag "v$VERSION" --arg sourceSha "$SOURCE_SHA" \
             '.draft == true and .prerelease == false and .tag_name == $tag and .target_commitish == $sourceSha and (.assets | length) == 0' >/dev/null
           release_id="$(printf '%s' "$release_json" | jq -er .id)"
-          matching_releases="$(
-            gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" |
-              jq -c --arg tag "v$VERSION" '[.[][] | select(.tag_name == $tag) | {id, draft, prerelease, target_commitish}]'
-          )"
-          printf '%s' "$matching_releases" | jq -e \
-            --argjson releaseId "$release_id" --arg sourceSha "$SOURCE_SHA" \
-            'length == 1 and .[0].id == $releaseId and .[0].draft == true and .[0].prerelease == false and .[0].target_commitish == $sourceSha' >/dev/null
+          matching_releases='[]'
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            matching_releases="$(
+              gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" |
+                jq -c --arg tag "v$VERSION" '[.[][] | select(.tag_name == $tag) | {id, draft, prerelease, target_commitish}]'
+            )"
+            match_count="$(printf '%s' "$matching_releases" | jq -er length)"
+            if [ "$match_count" -eq 0 ]; then
+              if [ "$attempt" -eq 10 ]; then
+                echo "Created draft v$VERSION did not become list-visible within the bounded retry window." >&2
+                exit 1
+              fi
+              sleep 2
+              continue
+            fi
+            printf '%s' "$matching_releases" | jq -e \
+              --argjson releaseId "$release_id" --arg sourceSha "$SOURCE_SHA" \
+              'length == 1 and .[0].id == $releaseId and .[0].draft == true and .[0].prerelease == false and .[0].target_commitish == $sourceSha' >/dev/null
+            break
+          done
           printf 'id=%s\n' "$release_id" >> "$GITHUB_OUTPUT"
 
       - name: Upload signed core assets to the unique draft
