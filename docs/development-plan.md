@@ -40,7 +40,7 @@
 - [x] SHA/mtime 冲突、同目录原子替换、fsync、两阶段 revision 与崩溃恢复
 - [x] 每文件最多 20 个本地 revision，支持带当前 SHA 的恢复
 
-## Phase 4：macOS beta 工程 — signed stable channel released; v0.2.2 update acceptance pending
+## Phase 4：macOS beta 工程 — signed stable channel released; v0.3.0 release pending
 
 - [x] 隐私、路径安全、CSP 与显式 Tauri command capability
 - [x] 原创应用图标与 macOS 13+ bundle 配置
@@ -59,7 +59,9 @@
 - [x] 精确复核并删除旧 No-Go draft `378845893`；只对 `606a927c4f536b0f15a22a8ec850b6c99a97a117` dispatch 一次并完成人工 sign 审批，app/DMG sign/notary/staple/Gatekeeper、本地全链和 credential cleanup 通过
 - [x] `v0.2.1` exact source `fbe42de828f4f64549d9a4b36bc506fd15b11aa2` 完成 draft 全链、人工 Publish 和匿名 post-publish 回下载复验；release run `33240800663`、published verify run `33241992763` 均成功
 - [x] 本机 `/Applications/Codex Manager.app` 的 `v0.2.1` 通过 strict codesign、Notarized Developer ID Gatekeeper 与 stapler 验证，可作为可信更新起点
-- [ ] `v0.2.2` 从最终 `main` exact SHA 完成 fresh signed release、公开复验，以及从 `v0.2.1` 下载、验签、安装、重启的首个 updater E2E
+- [x] `v0.2.2` exact source `a2359e20eda9423f509a6a76f59d3e4c61a10ddc` 完成签名发布与公开复验；release run `33245641061`、published verify run `33246307716` 均成功，九项资产和 Release ID `378939150` 已核对
+- [ ] 尚未取得从已安装 `v0.2.1` 到 `v0.2.2` 的真实 updater E2E 证据；不得把签名发布与公开复验外推成客户端更新验收
+- [ ] `v0.3.0` 从最终 `main` exact SHA 完成 fresh signed release、公开复验，以及从已安装 `v0.2.2` 下载、验签、安装、重启的 updater E2E
 
 ## 后续阶段
 
