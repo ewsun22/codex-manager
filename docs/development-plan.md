@@ -69,7 +69,7 @@
 - [ ] 尚未取得从已安装旧签名版本到 `v0.4.0` 的真实检查、下载、验签、安装、重启 updater E2E 证据
 - [x] `v0.5.0` 已从 exact source `fdc96c38de8d6d6cacc46a9b7fc70157d39439ee` 完成签名发布与公开复验；CI run `33284042848`、release run `33284510727`、published verification run `33285144491` 均成功，Release ID `379147257` 与九项资产已核对
 - [ ] 尚未取得从已安装的可信旧签名版本到 `v0.5.0` 的真实检查、下载、验签、安装、重启 updater E2E 证据
-- [x] `v0.5.1` 版本、双语 README、脱敏截图、正式 release note 与用户可见面同步门禁已在同一发布源定版；线上状态仍须由最终 exact source SHA 的 CI、签名、公证、草稿与公开复验决定
+- [x] `v0.5.1` 已从 exact source `b933401353de46e39b1ea8e3f6ef1fb8065552b9` 完成签名发布与公开复验；CI run `33293059226`、release run `33293480453`、published verification run `33294184588` 均成功，Release ID `379187149` 与九项资产已核对
 - [ ] 尚未取得从已安装的可信旧签名版本到 `v0.5.1` 的真实检查、下载、验签、安装、重启 updater E2E 证据
 
 ## 后续阶段
@@ -85,7 +85,7 @@
 - [x] 原生确认后只显示手动配置片段；本版不自动改写 `config.toml` 或 `auth.json`
 - [x] `v0.5.0-beta.1` 已从 exact source `dd370070ae58c3e70d61e95f3ad7b38278080a50`、CI run `33282176058` 发布为 `Unsigned Community Build` GitHub Pre-release；Release ID `379137424`，四项公开资产已回下载复验且稳定 updater 仍为 `v0.4.0`
 - [x] `v0.5.0` 版本、正式 release note、适用文档和 main-only CI push 触发边界已定版，并从最终 exact source `fdc96c38de8d6d6cacc46a9b7fc70157d39439ee` 完成单次主线 CI、受保护签名/双公证、九资产草稿复验、人工 Publish 与 published-mode 公开复验
-- [x] `v0.5.1` 配置页紧凑卡片/弹窗、响应式布局、双语开源展示与稳定下载入口已定版；本条不预先代表已签名或已公开
+- [x] `v0.5.1` 配置页紧凑卡片/弹窗、响应式布局、双语开源展示与稳定下载入口已发布，并完成签名、公证、stapling、草稿与公开后复验
 - [ ] 用用户授权的真实 API-key 上游完成 Codex CLI Responses E2E、费用确认与恢复直连验收
 - [ ] 从已安装的可信签名旧版本真实检查、下载、验签、安装、重启到最新稳定版本，完成 updater E2E 验收
 - [ ] 为运行中配置漂移、退出前恢复、崩溃恢复设计受管 config state machine；在此之前网关不会自动接管 Codex

@@ -44,11 +44,12 @@ Release note 采用 `docs/release-notes/v<VERSION>.md` 的固定章节。CI 通�
 - 该状态可报告为 `published publicly verified`，但不等于真实供应商或 updater 已经业务验收。真实 API-key Codex CLI Responses E2E、费用确认、手动配置往返/恢复直连，以及从可信旧签名版本完成检查、下载、验签、安装、重启到 `v0.5.0` 的 updater E2E 仍保持 `accepted=false`。
 - `v0.5.0-beta.1` 仍是隔离的 unsigned community Pre-release；不得覆盖、晋升或复用它的 tag 与四项资产。
 
-## 2026-08-30 v0.5.1 定版与发布边界
+## 2026-08-30 v0.5.1 已发布事实
 
 - `v0.5.1` 定版 Codex 配置管理页的紧凑卡片/新增编辑弹窗、桌面五列与窄屏响应式布局，并同步英文主 README、简体中文 README、五张脱敏截图、稳定 `releases/latest` 下载入口和上线前用户可见面同步门禁。
 - 本版本不改变 SQLite schema、rollout/OTel/App Server 字段口径、OAuth/Keychain、网关协议、网络监听或权限边界；`docs/architecture.md`、`PRIVACY.md`、`docs/supply-chain.md` 与 `LICENSE` 因此记录为 `no change`。GitHub Description 已同步产品定位，Topics 已覆盖当前分类并记录为 `no change`。
-- 本段随 tag source 定版，不预先宣称已签名或已公开。必须在最终 exact source SHA 上完成单次主线 CI、受保护签名与双公证、九资产草稿回下载复验、人工 Publish 和 published-mode 公开复验，才能提升为 `published publicly verified`。
+- `v0.5.1` 已从 exact source `b933401353de46e39b1ea8e3f6ef1fb8065552b9` 完成签名稳定发布。主线 CI run `33293059226`、受保护签名 release run `33293480453` 与公开后只读复验 run `33294184588` 均成功；GitHub Release ID 为 `379187149`，`draft=false`、`prerelease=false`，tag、Release、`releases/latest` 与 `latest.json` 已绑定同一 source。
+- 九项正式资产已按 draft asset ID 和公开 tag URL 回下载，完成 SHA-256、updater 签名、Developer ID、Hardened Runtime、secure timestamp、app/DMG 双 notary `Accepted`、stapling、Gatekeeper、provenance 与 attestation 复验。签名 job 在上传前已删除临时证书和 Keychain；该状态可报告为 `published publicly verified`。
 - 真实 API-key 供应商 E2E、费用确认、手动配置往返/恢复直连，以及从可信旧签名版本安装更新到 `v0.5.1` 均不在本次授权范围内，继续保持 `accepted=false`。
 
 ## Unsigned Community Build 发布
