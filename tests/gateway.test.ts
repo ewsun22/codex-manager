@@ -117,3 +117,15 @@ test("Codex 配置页保持保存、应用和官方订阅边界可见", () => {
   assert.match(shell, /codexHome=\{payload\.settings\.codexHomes\[0\]\}/);
   assert.match(shell, /onOpenOfficialSubscription=\{\(\) => setView\("oauth"\)\}/);
 });
+
+test("首页代理快捷控制仅复制 endpoint，支持可访问的启停状态", () => {
+  const source = readFileSync(new URL("../src/app/codex-gateway.tsx", import.meta.url), "utf8");
+  const quickControl = source.slice(source.indexOf("export function CodexGatewayQuickControl"), source.indexOf("export function CodexGatewayView"));
+
+  assert.match(quickControl, /仅 OpenAI Responses；不提供 Claude 或 Gemini transformer/);
+  assert.match(quickControl, /navigator\.clipboard\.writeText\(endpoint\)/);
+  assert.doesNotMatch(quickControl, /clipboard\.writeText\(.*(?:bearer|apiKey|configSnippet)/i);
+  assert.match(quickControl, /aria-busy=\{busy !== null\}/);
+  assert.match(quickControl, /aria-live="polite"/);
+  assert.doesNotMatch(source, /全局提示词|插件与市场|会话管理/);
+});

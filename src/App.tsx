@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { invokeBackend, isDesktopRuntime } from "./app/client.ts";
 import { preferredAgentsFile } from "./app/agents.ts";
-import { CodexGatewayView } from "./app/codex-gateway.tsx";
+import { CodexGatewayQuickControl, CodexGatewayView } from "./app/codex-gateway.tsx";
 import {
   MAX_UPDATE_CHECK_INTERVAL_HOURS,
   MIN_UPDATE_CHECK_INTERVAL_HOURS,
@@ -11,6 +11,7 @@ import {
 } from "./app/update-scheduler.ts";
 import {
   formatCount,
+  formatBuildTime,
   formatDate,
   formatMetric,
   formatMs,
@@ -67,6 +68,7 @@ function statusLabel(state: SourceHealth["state"]): string {
     degraded: "需关注",
     disabled: "未启用",
     unavailable: "不可用",
+    unchecked: "未检查",
   }[state];
 }
 
@@ -189,10 +191,12 @@ function SourceHealthCards({ sources }: { sources: SourceHealth[] }) {
         {sources.map((source) => (
           <article key={source.id} className="source-item">
             <div className="source-topline">
-              <strong>{source.label}</strong>
+              <strong>{source.kind === "app-server" ? "CLI Schema 兼容性" : source.label}</strong>
               <span className={`state-pill state-${source.state}`}>{statusLabel(source.state)}</span>
             </div>
-            <p>{source.message ?? "暂无额外说明。"}</p>
+            <p>{source.kind === "app-server"
+              ? source.message ?? "仅检查 Codex CLI 是否支持 schema 命令；不读取账户、不会附着 Desktop 私有 stdio，也不影响本地采集或网关。"
+              : source.message ?? "暂无额外说明。"}</p>
             <div className="source-meta">
               <span>最后观测：{formatDate(source.lastObservedAt)}</span>
               <span>滞后：{formatMs(source.lagMs)}</span>
@@ -235,7 +239,7 @@ function Overview({ payload, onNavigate }: { payload: BootstrapPayload; onNaviga
       <section className="metric-grid" aria-label="核心指标">
         <MetricCard label="任务记录" value={formatCount(summary?.records)} detail={summary ? `${formatCount(summary.modelCalls)} 次模型交互 · ${formatCount(summary.successful)} 成功 · ${formatCount(summary.failed)} 失败` : "启动后在后台汇总"} />
         <MetricCard label="缓存命中" value={formatRatio(cacheRatio)} detail={summary ? `${formatCount(summary.cachedInputTokens, true)} read · ${formatCount(summary.cacheWriteInputTokens, true)} write` : "启动后在后台汇总"} tone="accent" />
-        <MetricCard label="API 等价估算" value={formatUsd(summary?.equivalentCostUsd)} detail={summary ? `已覆盖 ${costCoverage}${summary.unpricedCalls ? ` · ${formatCount(summary.unpricedCalls)} 次未覆盖` : ""}` : "按去重后的单次 model call 计价"} tone="accent" />
+        <MetricCard label="API 等价估算" value={formatUsd(summary?.equivalentCostUsd, 2)} detail={summary ? `已覆盖 ${costCoverage}${summary.unpricedCalls ? ` · ${formatCount(summary.unpricedCalls)} 次未覆盖` : ""}` : "按去重后的单次 model call 计价"} tone="accent" />
         <MetricCard label="终态任务成功率" value={formatRatio(successRate)} detail={summary ? "仅已观测成功/失败终态；进行中与未观测结束不猜测" : "启动后在后台汇总"} tone={summary?.failed ? "warn" : "default"} />
       </section>
 
@@ -251,7 +255,7 @@ function Overview({ payload, onNavigate }: { payload: BootstrapPayload; onNaviga
             </button>
           </div>
           <div className="compact-list">
-            {payload.activity.items.slice(0, 4).map((record) => (
+            {payload.activity.items.slice(0, 1).map((record) => (
               <button key={record.id} type="button" className="compact-row" onClick={() => onNavigate("activity")}>
                 <span className={`result-dot result-${record.result}`} aria-label={resultLabel(record.result)} />
                 <span className="compact-row-main">
@@ -262,8 +266,11 @@ function Overview({ payload, onNavigate }: { payload: BootstrapPayload; onNaviga
                 <time dateTime={record.occurredAt}>{formatDate(record.occurredAt)}</time>
               </button>
             ))}
+            {!payload.activity.items.length ? <EmptyState title="暂时没有最近活动" detail="本地采集完成后，最新任务会显示在这里。" action={<button type="button" className="button button-secondary" onClick={() => onNavigate("activity")}>查看活动记录</button>} /> : null}
           </div>
         </section>
+
+        <CodexGatewayQuickControl onOpenGateway={() => onNavigate("gateway")} />
 
         <section className="panel collection-panel" aria-labelledby="collection-heading">
           <div className="panel-title-row">
@@ -1137,6 +1144,17 @@ function accountStateLabel(snapshot: CodexAccountSnapshot): string {
   }[snapshot.state];
 }
 
+function accountCacheLabel(snapshot: CodexAccountSnapshot): string {
+  if (snapshot.stale || snapshot.source === "stale") return "上次确认数据（可能已过期）";
+  if (snapshot.source === "cache") return "本地缓存";
+  if (snapshot.source === "live") return "刚刚确认";
+  return "状态来源 unavailable";
+}
+
+function accountCachedAt(snapshot: CodexAccountSnapshot): string | null {
+  return snapshot.cachedAt;
+}
+
 function quotaWindowLabel(window: CodexRateLimitWindow): string {
   if (window.windowDurationMins === null) return "额度窗口";
   if (window.windowDurationMins % 10_080 === 0) return `${window.windowDurationMins / 10_080} 周窗口`;
@@ -1255,12 +1273,12 @@ function OAuthView({ showNotice }: { showNotice: (notice: Notice) => void }) {
   const refreshInFlight = useRef(false);
   const profilesAutoRequested = useRef(false);
 
-  const refresh = useCallback(async (silent = false) => {
+  const refresh = useCallback(async (force = false, silent = false) => {
     if (refreshInFlight.current) return null;
     refreshInFlight.current = true;
     if (!silent) setBusy("refresh");
     try {
-      const next = await invokeBackend<CodexAccountSnapshot>(COMMANDS.getCodexAccount);
+      const next = await invokeBackend<CodexAccountSnapshot>(COMMANDS.getCodexAccount, { refresh: force });
       setSnapshot(next);
       setError(null);
       return next;
@@ -1276,12 +1294,12 @@ function OAuthView({ showNotice }: { showNotice: (notice: Notice) => void }) {
   }, []);
 
   useEffect(() => {
-    void refresh(true);
+    void refresh(false, true);
   }, [refresh]);
 
   useEffect(() => {
     if (!snapshot?.loginInProgress) return;
-    const timer = window.setInterval(() => void refresh(true), 2_000);
+    const timer = window.setInterval(() => void refresh(true, true), 2_000);
     return () => window.clearInterval(timer);
   }, [refresh, snapshot?.loginInProgress]);
 
@@ -1309,7 +1327,7 @@ function OAuthView({ showNotice }: { showNotice: (notice: Notice) => void }) {
     showNotice({ tone: result.changed ? "success" : "info", message: result.message });
     if (result.changed) {
       await refreshProfiles();
-      await refresh(true);
+      await refresh(true, true);
     }
   };
 
@@ -1378,7 +1396,7 @@ function OAuthView({ showNotice }: { showNotice: (notice: Notice) => void }) {
           ? "已启动官方 Codex 登录流程，请在系统浏览器中完成授权。"
           : "已有 Codex 登录流程正在等待浏览器授权。",
       });
-      await refresh(true);
+      await refresh(true, true);
     } catch (nextError: unknown) {
       showNotice({ tone: "error", message: `登录流程未启动：${appError(nextError)}` });
     } finally {
@@ -1406,11 +1424,12 @@ function OAuthView({ showNotice }: { showNotice: (notice: Notice) => void }) {
         subtitle={activeTab === "credentials"
           ? "导入的认证秘密只保存在应用专用 macOS Keychain；token、文件路径与原始 JSON 不会返回 WebView、SQLite 或日志。"
           : "由官方 Codex CLI 与 App Server 完成认证和额度读取；OAuth token 不会返回 WebView、SQLite 或日志。"}
-        action={<button type="button" className="button button-secondary" onClick={() => void refresh()} disabled={busy !== null}>{busy === "refresh" ? "刷新中…" : "刷新状态"}</button>}
+        action={<button type="button" className="button button-secondary" onClick={() => void refresh(true)} disabled={busy !== null}>{busy === "refresh" ? "刷新中…" : "刷新状态"}</button>}
       />
 
       {loading && !snapshot ? <LoadingState label="正在读取 Codex 账户状态…" /> : null}
-      {error && !snapshot ? <EmptyState title="账户状态暂不可用" detail={error} action={<button type="button" className="button button-primary" onClick={() => void refresh()}>重试</button>} /> : null}
+      {error && !snapshot ? <EmptyState title="账户状态暂不可用" detail={error} action={<button type="button" className="button button-primary" onClick={() => void refresh(true)}>重试</button>} /> : null}
+      {error && snapshot ? <p className="oauth-cache-notice" role="status">刷新失败：{error}；当前仍显示{accountCacheLabel(snapshot)}。</p> : null}
 
       {snapshot && activeTab === "login" ? (
         <section className="panel oauth-login-card" aria-labelledby="codex-oauth-heading">
@@ -1424,6 +1443,8 @@ function OAuthView({ showNotice }: { showNotice: (notice: Notice) => void }) {
             <div><dt>账号</dt><dd>{snapshot.email ?? "unavailable"}</dd></div>
             <div><dt>套餐</dt><dd>{snapshot.planType ?? "unavailable"}</dd></div>
             <div><dt>状态采集时间</dt><dd>{formatDate(snapshot.checkedAt)}</dd></div>
+            <div><dt>本地记录</dt><dd>{accountCacheLabel(snapshot)}</dd></div>
+            <div><dt>上次确认</dt><dd>{formatDate(accountCachedAt(snapshot) ?? snapshot.checkedAt)}</dd></div>
           </dl>
           <p className="capability-message">{snapshot.message}</p>
           <button type="button" className="button button-primary oauth-login-button" onClick={() => void startLogin()} disabled={busy !== null || snapshot.loginInProgress}>
@@ -1523,8 +1544,8 @@ function SettingsView({
         </form>
         <div className="settings-side-stack">
           <section className="panel capability-panel" aria-labelledby="capability-heading">
-            <div className="panel-title-row"><div><h2 id="capability-heading">Codex capability</h2><p>仅探测 CLI schema，不会接管私有 app-server 进程。</p></div><button type="button" className="button button-secondary" onClick={onProbe} disabled={saving}>{saving ? "探测中…" : "重新探测"}</button></div>
-            {capability ? <dl className="capability-list"><div><dt>可用性</dt><dd>{capability.available ? "可用" : "unavailable"}</dd></div><div><dt>版本</dt><dd>{capability.version ?? "unavailable"}</dd></div><div><dt>Schema SHA-256</dt><dd><code>{capability.schemaSha256 ?? "unavailable"}</code></dd></div><div><dt>上次探测</dt><dd>{formatDate(capability.checkedAt)}</dd></div><div><dt>可执行文件</dt><dd><code>{capability.executablePath}</code></dd></div></dl> : <EmptyState title="尚未探测 capability" detail="运行探测前不会将本机 Codex 数据格式描述为稳定 API。" />}
+            <div className="panel-title-row"><div><h2 id="capability-heading">CLI Schema 兼容性</h2><p>用于诊断本机 Codex CLI 能否生成 App Server Schema；它不是采集源，不影响 rollout、账户读取或代理网关。</p></div><button type="button" className="button button-secondary" onClick={onProbe} disabled={saving}>{saving ? "检查中…" : "检查兼容性"}</button></div>
+            {capability ? <dl className="capability-list"><div><dt>可用性</dt><dd>{capability.available ? "可用" : "unavailable"}</dd></div><div><dt>版本</dt><dd>{capability.version ?? "unavailable"}</dd></div><div><dt>Schema SHA-256</dt><dd><code>{capability.schemaSha256 ?? "unavailable"}</code></dd></div><div><dt>上次探测</dt><dd>{formatDate(capability.checkedAt)}</dd></div><div><dt>可执行文件</dt><dd><code>{capability.executablePath}</code></dd></div></dl> : <EmptyState title="尚未检查 CLI Schema" detail="未检查不代表系统故障；需要诊断 CLI 兼容性时再手动检查。" />}
             {capability?.message ? <p className="capability-message">{capability.message}</p> : null}
           </section>
           <section className={`panel update-panel${updateStatus?.available ? " update-panel-available" : ""}`} aria-labelledby="update-heading">
@@ -1778,7 +1799,7 @@ export function App() {
     try {
       const capability = await invokeBackend<BootstrapPayload["capability"]>(COMMANDS.probeCodex);
       setPayload((current) => current ? { ...current, capability } : current);
-      setNotice({ tone: "success", message: "Codex capability 探测完成。" });
+      setNotice({ tone: "success", message: "CLI Schema 兼容性检查完成。" });
     } catch (nextError: unknown) {
       setNotice({ tone: "error", message: `探测未完成：${appError(nextError)}` });
     } finally {
@@ -1787,6 +1808,8 @@ export function App() {
   };
 
   const shellLabel = isDesktopRuntime() ? "本地桌面模式" : "浏览器演示模式";
+  const buildInfo = payload?.buildInfo ?? null;
+  const buildLabel = buildInfo ? `v${buildInfo.version} · 构建 ${formatBuildTime(buildInfo.buildTime)}` : "版本 unavailable";
   const projects = payload?.projects ?? [];
   const current = useMemo(() => {
     if (!payload) return null;
@@ -1808,10 +1831,10 @@ export function App() {
         <nav className="side-nav" aria-label="主导航">
           {navItems.map((item) => <button type="button" key={item.id} className={view === item.id ? "is-active" : ""} onClick={() => setView(item.id)}><span>{item.label}{item.id === "settings" && updateStatus?.available ? <><span className="update-nav-dot" aria-hidden="true" /><span className="sr-only">，有新版本可用</span></> : null}</span><small>{item.helper}</small></button>)}
         </nav>
-        <div className="sidebar-foot"><span className="runtime-mark" aria-hidden="true" />{shellLabel}<small>网关默认停止；不自动修改 Codex 配置。</small></div>
+        <div className="sidebar-foot"><span className="runtime-mark" aria-hidden="true" /><span>{shellLabel}</span><small>{buildLabel}</small><small>网关默认停止；不自动修改 Codex 配置。</small></div>
       </aside>
       <main className="main-area">
-        <header className="topbar"><div><span className="topbar-crumb">工作台</span><span className="topbar-separator">/</span><span>{navItems.find((item) => item.id === view)?.label}</span></div><button type="button" className="button button-secondary" onClick={() => void refreshLocalData()} disabled={loading}>{loading ? "刷新中…" : "刷新本地数据"}</button></header>
+        <header className="topbar"><div><span className="topbar-crumb">工作台</span><span className="topbar-separator">/</span><span className="topbar-view">{navItems.find((item) => item.id === view)?.label}</span><small className="topbar-build">{shellLabel} · {buildLabel}</small></div><button type="button" className="button button-secondary" onClick={() => void refreshLocalData()} disabled={loading}>{loading ? "刷新中…" : "刷新本地数据"}</button></header>
         {notice ? <InlineNotice notice={notice} onClose={() => setNotice(null)} /> : null}
         {loading && !payload ? <LoadingState /> : null}
         {error && !payload ? <div className="fatal-error"><EmptyState title="无法连接本地管理服务" detail={error} action={<button type="button" className="button button-primary" onClick={() => void refreshBootstrap()}>重试</button>} /></div> : null}

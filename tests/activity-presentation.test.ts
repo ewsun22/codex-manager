@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { invokeDemo } from "../src/app/demo.ts";
-import { metricProvenanceLabel } from "../src/app/format.ts";
+import { formatUsd, metricProvenanceLabel } from "../src/app/format.ts";
 import { COMMANDS, type ActivityPage } from "../src/shared/contracts.ts";
 
 test("演示活动按任务和模型交互语义分别返回", async () => {
@@ -22,6 +22,19 @@ test("演示活动按任务和模型交互语义分别返回", async () => {
 test("字段来源以人话形式保留在详情中", () => {
   assert.equal(metricProvenanceLabel({ source: "rollout", confidence: "high" }), "Codex 本地记录 · 高可信");
   assert.equal(metricProvenanceLabel({ source: "unavailable", confidence: "unavailable" }), "此来源未提供 · 无法评估");
+});
+
+test("首页等价估算固定显示两位小数，明细格式仍允许四位小数", async () => {
+  assert.equal(formatUsd(10418.2603, 2), "US$10,418.26");
+  assert.equal(formatUsd(0.0001), "US$0.0001");
+
+  const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const gatewaySource = await readFile(new URL("../src/app/codex-gateway.tsx", import.meta.url), "utf8");
+  assert.match(appSource, /formatUsd\(summary\?\.equivalentCostUsd, 2\)/);
+  assert.match(appSource, /payload\.activity\.items\.slice\(0, 1\)/);
+  assert.match(gatewaySource, /代理 API 接入/);
+  assert.match(appSource, /CLI Schema 兼容性/);
+  assert.match(appSource, /buildInfo/);
 });
 
 test("活动界面具备语义切换、说明与上下两处分页控件", async () => {

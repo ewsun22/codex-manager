@@ -17,6 +17,7 @@ test("OAuth 账户摘要只暴露展示所需的白名单字段", async () => {
     "authMethod",
     "authenticated",
     "availableResetCredits",
+    "cachedAt",
     "checkedAt",
     "email",
     "loginInProgress",
@@ -25,6 +26,8 @@ test("OAuth 账户摘要只暴露展示所需的白名单字段", async () => {
     "rateLimits",
     "rateLimitsAvailable",
     "requiresOpenaiAuth",
+    "source",
+    "stale",
     "state",
   ]);
   assert.doesNotMatch(
@@ -150,4 +153,15 @@ test("认证档案首次读取失败后不会由 effect 无限重试", () => {
     appSource,
     /activeTab === "credentials" && !profiles && !profilesLoading.*refreshProfiles\(\)/,
   );
+});
+
+test("官方订阅首次读取缓存，只有显式刷新和账户变更才强制读取", () => {
+  const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+
+  assert.match(appSource, /getCodexAccount, \{ refresh: force \}/);
+  assert.match(appSource, /void refresh\(false, true\)/);
+  assert.match(appSource, /onClick=\{\(\) => void refresh\(true\)\}/);
+  assert.match(appSource, /await refresh\(true, true\)/);
+  assert.match(appSource, /上次确认数据（可能已过期）/);
+  assert.match(appSource, /刷新失败：/);
 });

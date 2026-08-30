@@ -6,7 +6,7 @@
 //! responses, tokens and authorization URLs are never returned to the WebView.
 
 use crate::{auth_profiles, platform};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -32,6 +32,10 @@ const MAX_APP_SERVER_MESSAGES: usize = 128;
 const MAX_RATE_LIMIT_BUCKETS: usize = 16;
 const LOGIN_SUPERVISOR_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_AUTH_FILE_BYTES: u64 = 128 * 1024;
+const ACCOUNT_CACHE_KEYCHAIN_SERVICE: &str = "cc.codex.manager.account-snapshot.v1";
+const ACCOUNT_CACHE_KEYCHAIN_ACCOUNT: &str = "active";
+const MAX_ACCOUNT_CACHE_BYTES: usize = 64 * 1024;
+const ACCOUNT_CACHE_FRESH_HOURS: i64 = 6;
 
 pub struct ValidatedAuthMaterial {
     pub bytes: Zeroizing<Vec<u8>>,
@@ -109,24 +113,29 @@ pub struct LoginStartResult {
     login_in_progress: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountSnapshot {
-    state: &'static str,
-    authenticated: bool,
-    auth_method: Option<String>,
-    email: Option<String>,
-    plan_type: Option<String>,
-    requires_openai_auth: Option<bool>,
-    login_in_progress: bool,
-    rate_limits_available: bool,
-    rate_limits: Vec<RateLimitBucket>,
-    available_reset_credits: Option<i64>,
-    checked_at: String,
-    message: String,
+    pub state: String,
+    pub authenticated: bool,
+    pub auth_method: Option<String>,
+    pub email: Option<String>,
+    pub plan_type: Option<String>,
+    pub requires_openai_auth: Option<bool>,
+    pub login_in_progress: bool,
+    pub rate_limits_available: bool,
+    pub rate_limits: Vec<RateLimitBucket>,
+    pub available_reset_credits: Option<i64>,
+    pub checked_at: String,
+    /// `live`, `cache`, `stale`, or `unavailable`. Never derived from an
+    /// App Server response; this is local provenance only.
+    pub source: String,
+    pub stale: bool,
+    pub cached_at: Option<String>,
+    pub message: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RateLimitBucket {
     limit_id: String,
@@ -136,7 +145,7 @@ pub struct RateLimitBucket {
     secondary: Option<RateLimitWindow>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RateLimitWindow {
     used_percent: f64,
@@ -183,31 +192,109 @@ where
     })
 }
 
-pub fn read_account(executable: Option<&Path>, login_in_progress: bool) -> AccountSnapshot {
-    let Some(executable) = executable else {
-        return unavailable_snapshot(
-            login_in_progress,
-            "未找到通过 OpenAI Developer ID 验证的 Codex 可执行文件；OAuth 功能已安全停用。",
-        );
-    };
-    if let Ok((account_response, rate_limits_response)) =
-        app_server_snapshot(executable, None, None, false, true, false)
-    {
-        return parse_snapshot(
-            &account_response,
-            rate_limits_response.as_ref(),
-            login_in_progress,
-        );
-    }
-    unavailable_snapshot(
+pub fn read_account(
+    executable: Option<&Path>,
+    login_in_progress: bool,
+    refresh: bool,
+) -> AccountSnapshot {
+    let cache = system_account_cache();
+    read_account_with_cache(executable, login_in_progress, refresh, cache.as_ref())
+}
+
+/// Read the sanitized Keychain snapshot without locating or launching Codex.
+/// This keeps the subscription page available when the trusted CLI is
+/// temporarily missing or cannot be revalidated.
+pub fn read_cached_account(login_in_progress: bool) -> Option<AccountSnapshot> {
+    let cache = system_account_cache();
+    cache
+        .read()
+        .ok()
+        .flatten()
+        .and_then(parse_cached_snapshot)
+        .map(|snapshot| cached_snapshot(&snapshot, false, login_in_progress))
+}
+
+/// Cache-first account read. The cache contains only a sanitized DTO and is
+/// intentionally independent from Codex credentials. On unsupported systems
+/// cache operations fail closed, while the trusted live read remains usable.
+fn read_account_with_cache(
+    executable: Option<&Path>,
+    login_in_progress: bool,
+    refresh: bool,
+    cache: &dyn AccountSnapshotCache,
+) -> AccountSnapshot {
+    read_account_with_cache_and_live(
+        executable,
         login_in_progress,
-        "无法通过官方 Codex App Server 读取账户状态；未读取或回退解析 auth.json。",
+        refresh,
+        cache,
+        read_live_account,
     )
+}
+
+fn read_account_with_cache_and_live<F>(
+    executable: Option<&Path>,
+    login_in_progress: bool,
+    refresh: bool,
+    cache: &dyn AccountSnapshotCache,
+    live_read: F,
+) -> AccountSnapshot
+where
+    F: FnOnce(Option<&Path>, bool) -> Result<AccountSnapshot, String>,
+{
+    let cached = cache.read().ok().flatten().and_then(parse_cached_snapshot);
+    if !refresh {
+        if let Some(snapshot) = cached.as_ref() {
+            return cached_snapshot(snapshot, false, login_in_progress);
+        }
+    }
+
+    match live_read(executable, login_in_progress) {
+        Ok(mut snapshot) => {
+            if snapshot.state != "unavailable" {
+                let cached_at = Utc::now().to_rfc3339();
+                snapshot.cached_at = Some(cached_at);
+                if let Ok(serialized) = serde_json::to_vec(&snapshot)
+                    && serialized.len() <= MAX_ACCOUNT_CACHE_BYTES
+                    && cache.write(&serialized).is_err()
+                {
+                    // The live response is still trustworthy, but never
+                    // claim a persisted cache timestamp when Keychain write
+                    // failed or is unsupported.
+                    snapshot.cached_at = None;
+                }
+            }
+            snapshot
+        }
+        Err(_) if cached.is_some() => {
+            cached_snapshot(cached.as_ref().expect("checked"), true, login_in_progress)
+        }
+        Err(_) => unavailable_snapshot(
+            login_in_progress,
+            "无法通过官方 Codex App Server 读取账户状态；未读取或回退解析 auth.json。",
+        ),
+    }
+}
+
+fn read_live_account(
+    executable: Option<&Path>,
+    login_in_progress: bool,
+) -> Result<AccountSnapshot, String> {
+    let executable = executable.ok_or_else(|| {
+        "未找到通过 OpenAI Developer ID 验证的 Codex 可执行文件；OAuth 功能已安全停用。".to_string()
+    })?;
+    let (account_response, rate_limits_response) =
+        app_server_snapshot(executable, None, None, false, true, false)?;
+    Ok(parse_snapshot(
+        &account_response,
+        rate_limits_response.as_ref(),
+        login_in_progress,
+    ))
 }
 
 fn unavailable_snapshot(login_in_progress: bool, message: &str) -> AccountSnapshot {
     AccountSnapshot {
-        state: "unavailable",
+        state: "unavailable".into(),
         authenticated: false,
         auth_method: None,
         email: None,
@@ -218,8 +305,176 @@ fn unavailable_snapshot(login_in_progress: bool, message: &str) -> AccountSnapsh
         rate_limits: Vec::new(),
         available_reset_credits: None,
         checked_at: Utc::now().to_rfc3339(),
+        source: "unavailable".into(),
+        stale: false,
+        cached_at: None,
         message: message.into(),
     }
+}
+
+trait AccountSnapshotCache: Send + Sync {
+    fn read(&self) -> Result<Option<Zeroizing<Vec<u8>>>, ()>;
+    fn write(&self, value: &[u8]) -> Result<(), ()>;
+}
+
+#[cfg(target_os = "macos")]
+struct MacAccountSnapshotCache;
+
+#[cfg(target_os = "macos")]
+impl AccountSnapshotCache for MacAccountSnapshotCache {
+    fn read(&self) -> Result<Option<Zeroizing<Vec<u8>>>, ()> {
+        match security_framework::passwords::get_generic_password(
+            ACCOUNT_CACHE_KEYCHAIN_SERVICE,
+            ACCOUNT_CACHE_KEYCHAIN_ACCOUNT,
+        ) {
+            Ok(value) => Ok(Some(Zeroizing::new(value))),
+            Err(error) if error.code() == -25300 => Ok(None),
+            Err(_) => Err(()),
+        }
+    }
+
+    fn write(&self, value: &[u8]) -> Result<(), ()> {
+        security_framework::passwords::set_generic_password(
+            ACCOUNT_CACHE_KEYCHAIN_SERVICE,
+            ACCOUNT_CACHE_KEYCHAIN_ACCOUNT,
+            value,
+        )
+        .map_err(|_| ())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+struct UnsupportedAccountSnapshotCache;
+
+#[cfg(not(target_os = "macos"))]
+impl AccountSnapshotCache for UnsupportedAccountSnapshotCache {
+    fn read(&self) -> Result<Option<Zeroizing<Vec<u8>>>, ()> {
+        Err(())
+    }
+
+    fn write(&self, _: &[u8]) -> Result<(), ()> {
+        Err(())
+    }
+}
+
+fn system_account_cache() -> Box<dyn AccountSnapshotCache> {
+    #[cfg(target_os = "macos")]
+    {
+        Box::new(MacAccountSnapshotCache)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Box::new(UnsupportedAccountSnapshotCache)
+    }
+}
+
+fn parse_cached_snapshot(bytes: Zeroizing<Vec<u8>>) -> Option<AccountSnapshot> {
+    if bytes.len() > MAX_ACCOUNT_CACHE_BYTES {
+        return None;
+    }
+    let snapshot = serde_json::from_slice::<AccountSnapshot>(&bytes).ok()?;
+    validate_cached_snapshot(snapshot)
+}
+
+fn validate_cached_snapshot(mut snapshot: AccountSnapshot) -> Option<AccountSnapshot> {
+    if !matches!(snapshot.state.as_str(), "authenticated" | "signed-out")
+        || snapshot.rate_limits.len() > MAX_RATE_LIMIT_BUCKETS
+        || DateTime::parse_from_rfc3339(&snapshot.checked_at).is_err()
+        || snapshot
+            .cached_at
+            .as_deref()
+            .is_none_or(|value| DateTime::parse_from_rfc3339(value).is_err())
+    {
+        return None;
+    }
+    snapshot.auth_method = snapshot
+        .auth_method
+        .as_deref()
+        .and_then(|value| sanitize_identifier(value, 64));
+    snapshot.email = snapshot
+        .email
+        .as_deref()
+        .and_then(|value| sanitize_display(value, 320));
+    snapshot.plan_type = snapshot
+        .plan_type
+        .as_deref()
+        .and_then(|value| sanitize_identifier(value, 64));
+    if snapshot.authenticated && snapshot.auth_method.is_none() {
+        return None;
+    }
+    if snapshot.message.chars().count() > 512 || snapshot.message.chars().any(char::is_control) {
+        return None;
+    }
+    for bucket in &snapshot.rate_limits {
+        if sanitize_identifier(&bucket.limit_id, 80).is_none()
+            || bucket
+                .limit_name
+                .as_deref()
+                .is_some_and(|value| sanitize_display(value, 100).is_none())
+            || bucket
+                .plan_type
+                .as_deref()
+                .is_some_and(|value| sanitize_identifier(value, 64).is_none())
+            || !valid_window(bucket.primary.as_ref())
+            || !valid_window(bucket.secondary.as_ref())
+        {
+            return None;
+        }
+    }
+    snapshot.source = "cache".into();
+    snapshot.stale = false;
+    Some(snapshot)
+}
+
+fn valid_window(window: Option<&RateLimitWindow>) -> bool {
+    window.is_none_or(|window| {
+        window.used_percent.is_finite()
+            && (0.0..=10_000.0).contains(&window.used_percent)
+            && window
+                .window_duration_mins
+                .is_none_or(|duration| (1..=525_600).contains(&duration))
+            && window
+                .resets_at
+                .as_deref()
+                .is_none_or(|value| DateTime::parse_from_rfc3339(value).is_ok())
+    })
+}
+
+fn cached_snapshot(
+    snapshot: &AccountSnapshot,
+    refresh_failed: bool,
+    login_in_progress: bool,
+) -> AccountSnapshot {
+    let mut snapshot = snapshot.clone();
+    let expired = account_cache_is_expired(&snapshot);
+    let stale = refresh_failed || expired;
+    snapshot.source = if stale { "stale" } else { "cache" }.into();
+    snapshot.stale = stale;
+    snapshot.login_in_progress = login_in_progress;
+    snapshot.message = if refresh_failed {
+        "实时读取失败；显示上次确认的本地账户与额度快照。"
+    } else if expired {
+        "本地账户与额度快照已超过 6 小时；请使用“刷新状态”重新确认。"
+    } else {
+        "显示本地保存的上次确认账户与额度快照；使用“刷新状态”获取实时数据。"
+    }
+    .into();
+    snapshot
+}
+
+fn account_cache_is_expired(snapshot: &AccountSnapshot) -> bool {
+    let timestamp = DateTime::parse_from_rfc3339(
+        snapshot
+            .cached_at
+            .as_deref()
+            .unwrap_or(&snapshot.checked_at),
+    )
+    .ok();
+    let Some(timestamp) = timestamp else {
+        return true;
+    };
+    let age = Utc::now().signed_duration_since(timestamp.with_timezone(&Utc));
+    age < TimeDelta::zero() || age > TimeDelta::hours(ACCOUNT_CACHE_FRESH_HOURS)
 }
 
 fn supervise_login_process(
@@ -604,7 +859,7 @@ fn parse_snapshot(
     let checked_at = Utc::now().to_rfc3339();
     let Some(result) = account_response.get("result") else {
         return AccountSnapshot {
-            state: "unavailable",
+            state: "unavailable".into(),
             authenticated: false,
             auth_method: None,
             email: None,
@@ -615,6 +870,9 @@ fn parse_snapshot(
             rate_limits: Vec::new(),
             available_reset_credits: None,
             checked_at,
+            source: "live".into(),
+            stale: false,
+            cached_at: None,
             message: "Codex App Server 未返回可识别的账户状态。".into(),
         };
     };
@@ -653,7 +911,7 @@ fn parse_snapshot(
     }
     .to_string();
     AccountSnapshot {
-        state,
+        state: state.into(),
         authenticated,
         auth_method,
         email,
@@ -664,6 +922,9 @@ fn parse_snapshot(
         rate_limits,
         available_reset_credits,
         checked_at,
+        source: "live".into(),
+        stale: false,
+        cached_at: None,
         message,
     }
 }
@@ -773,10 +1034,136 @@ fn validated_secret_component(value: &str, max_chars: usize) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::{
+        io::Cursor,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     #[cfg(unix)]
     use std::{fs, os::unix::fs::PermissionsExt};
+
+    #[derive(Default)]
+    struct MemoryAccountCache {
+        value: Mutex<Option<Vec<u8>>>,
+    }
+
+    impl MemoryAccountCache {
+        fn with(snapshot: &AccountSnapshot) -> Self {
+            Self {
+                value: Mutex::new(Some(serde_json::to_vec(snapshot).unwrap())),
+            }
+        }
+
+        fn snapshot(&self) -> AccountSnapshot {
+            let value = self.value.lock().unwrap().clone().unwrap();
+            parse_cached_snapshot(Zeroizing::new(value)).unwrap()
+        }
+    }
+
+    impl AccountSnapshotCache for MemoryAccountCache {
+        fn read(&self) -> Result<Option<Zeroizing<Vec<u8>>>, ()> {
+            Ok(self.value.lock().unwrap().clone().map(Zeroizing::new))
+        }
+
+        fn write(&self, value: &[u8]) -> Result<(), ()> {
+            *self.value.lock().unwrap() = Some(value.to_vec());
+            Ok(())
+        }
+    }
+
+    fn cached_fixture(email: &str) -> AccountSnapshot {
+        let now = Utc::now().to_rfc3339();
+        AccountSnapshot {
+            state: "authenticated".into(),
+            authenticated: true,
+            auth_method: Some("chatgpt".into()),
+            email: Some(email.into()),
+            plan_type: Some("pro".into()),
+            requires_openai_auth: Some(true),
+            login_in_progress: false,
+            rate_limits_available: true,
+            rate_limits: Vec::new(),
+            available_reset_credits: Some(1),
+            checked_at: now.clone(),
+            source: "live".into(),
+            stale: false,
+            cached_at: Some(now),
+            message: "账户已确认。".into(),
+        }
+    }
+
+    #[test]
+    fn cache_hit_does_not_trigger_live_account_read() {
+        let cache = MemoryAccountCache::with(&cached_fixture("cached@example.test"));
+        let calls = AtomicUsize::new(0);
+        let snapshot = read_account_with_cache_and_live(None, false, false, &cache, |_, _| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err("must not be called".into())
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(snapshot.source, "cache");
+        assert!(!snapshot.stale);
+        assert_eq!(snapshot.email.as_deref(), Some("cached@example.test"));
+    }
+
+    #[test]
+    fn cache_hit_preserves_active_login_polling_state() {
+        let cache = MemoryAccountCache::with(&cached_fixture("cached@example.test"));
+        let snapshot = read_account_with_cache_and_live(None, true, false, &cache, |_, _| {
+            Err("must not be called".into())
+        });
+        assert!(snapshot.login_in_progress);
+        assert_eq!(snapshot.source, "cache");
+    }
+
+    #[test]
+    fn forced_refresh_replaces_account_cache() {
+        let cache = MemoryAccountCache::with(&cached_fixture("old@example.test"));
+        let calls = AtomicUsize::new(0);
+        let snapshot = read_account_with_cache_and_live(None, false, true, &cache, |_, _| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(cached_fixture("fresh@example.test"))
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(snapshot.source, "live");
+        assert!(!snapshot.stale);
+        assert_eq!(
+            cache.snapshot().email.as_deref(),
+            Some("fresh@example.test")
+        );
+    }
+
+    #[test]
+    fn forced_refresh_failure_returns_stale_cache_without_error_body() {
+        let cache = MemoryAccountCache::with(&cached_fixture("cached@example.test"));
+        let snapshot = read_account_with_cache_and_live(None, false, true, &cache, |_, _| {
+            Err("upstream token=secret should not escape".into())
+        });
+        let serialized = serde_json::to_string(&snapshot).unwrap();
+        assert_eq!(snapshot.source, "stale");
+        assert!(snapshot.stale);
+        assert!(snapshot.cached_at.is_some());
+        assert!(!serialized.contains("token=secret"));
+    }
+
+    #[test]
+    fn expired_cache_is_explicitly_marked_stale_without_live_read() {
+        let mut fixture = cached_fixture("cached@example.test");
+        fixture.checked_at = "2025-08-30T00:00:00Z".into();
+        fixture.cached_at = Some("2025-08-30T00:00:00Z".into());
+        let cache = MemoryAccountCache::with(&fixture);
+        let calls = AtomicUsize::new(0);
+        let snapshot = read_account_with_cache_and_live(None, false, false, &cache, |_, _| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err("must not be called".into())
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(snapshot.source, "stale");
+        assert!(snapshot.stale);
+    }
 
     #[test]
     fn account_snapshot_only_exposes_allowlisted_identity_fields() {

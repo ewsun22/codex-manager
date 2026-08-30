@@ -100,7 +100,7 @@ export interface SourceHealth {
   id: string;
   kind: "rollout" | "app-server" | "otel";
   label: string;
-  state: "healthy" | "degraded" | "disabled" | "unavailable";
+  state: "healthy" | "degraded" | "disabled" | "unavailable" | "unchecked";
   lastObservedAt: string | null;
   lagMs: number | null;
   codexVersion: string | null;
@@ -238,6 +238,7 @@ export interface UpdateInstallResult {
 }
 
 export type CodexAccountState = "authenticated" | "signed-out" | "unavailable";
+export type CodexAccountSource = "live" | "cache" | "stale" | "unavailable";
 
 export interface CodexRateLimitWindow {
   usedPercent: number;
@@ -265,6 +266,12 @@ export interface CodexAccountSnapshot {
   rateLimits: CodexRateLimitBucket[];
   availableResetCredits: number | null;
   checkedAt: string;
+  /** Local provenance only; never derived from an OAuth response. */
+  source: CodexAccountSource;
+  /** True when a forced refresh failed or the saved snapshot is older than six hours. */
+  stale: boolean;
+  /** RFC 3339 time at which the sanitized Keychain cache was last written. */
+  cachedAt: string | null;
   message: string;
 }
 
@@ -352,6 +359,15 @@ export interface BootstrapPayload {
   capability: CodexCapability | null;
   updateStatus: AppUpdateStatus | null;
   updateCheckLastAttemptAt: string | null;
+  buildInfo: BuildInfo;
+}
+
+export interface BuildInfo {
+  version: string;
+  /** Compile-time UTC build timestamp, not the process start time. */
+  buildTime: string;
+  /** Optional, sanitized short commit SHA supplied by the build environment. */
+  commitSha: string | null;
 }
 
 export const COMMANDS = {

@@ -1,6 +1,6 @@
 # 能力矩阵
 
-| 能力 | Rollout adapter | OTel logs | OTel metrics | App Server | 当前 UI 结论 |
+| 能力 | Rollout adapter | OTel logs | OTel metrics | CLI Schema / App Server | 当前 UI 结论 |
 |---|---|---|---|---|---|
 | 历史 session/turn/item 顺序 | observed | 不负责 | 不负责 | 仅 schema probe | rollout 元数据可用 |
 | 消息正文 | 禁止持久化 | body 不读取 | 不适用 | 未连接 | 不提供 |
@@ -21,13 +21,15 @@
 | 多账户切换 | 不负责 | 不负责 | 不负责 | `config/read` 证明 file 模式，切换前后 `account/read` 复核 | 用户确认后 CAS + 原子替换；keyring/auto 拒绝 |
 | 认证档案删除/恢复 | 不负责 | 不负责 | 不负责 | 不负责 | 活动/最后档案不可删；软删除 30 天可恢复 |
 | 应用在线更新 | 不负责 | 不负责 | 不负责 | 不负责 | 桌面端启动后按需检查，默认每 12 小时自动检查（可配置 1–168 小时）；固定 GitHub Releases `latest.json` + Tauri 签名 + macOS 原生确认；新版本在侧栏和应用更新卡片提醒 |
+| CLI Schema 兼容性 | 不负责 | 不负责 | 不负责 | 短生命周期 Schema probe；最近版本、状态和指纹持久化 | 非采集源；不附着 Desktop 内部 App Server，不影响 rollout 主采集 |
+| 官方订阅缓存 | 不负责 | 不负责 | 不负责 | 账户/套餐/额度读取后白名单摘要 | cache-first；仅 macOS Keychain，作为白名单 DTO供当前页面读取；cache miss/手动刷新才解析可信 CLI；超过 6 小时或刷新失败显式 stale |
 
 ## v0.5.0 Codex 供应商与本地网关
 
 | 能力 | 数据/运行来源 | 当前结论 |
 |---|---|---|
 | Responses 供应商 | SQLite 非秘密元数据 + 应用专用 Keychain API Key | macOS；名称、HTTPS/loopback Base URL、模型和 reasoning effort 可管理；普通 DTO 只有 `hasApiKey` |
-| 配置管理界面 | React 卡片列表 + 新增/编辑弹窗 | “应用”表示启动所选 loopback 网关；配置预览仍需原生确认；“测试说明”明确模型测试未开放且不会发送请求，通用配置和自动接管设置保持禁用，不伪装为已生效 |
+| 配置管理界面 | React 卡片列表 + 新增/编辑弹窗 | “应用”表示启动所选 loopback 网关；总览增加非秘密快捷状态与显式启停；首页不展示 bearer/API Key；配置预览仍需原生确认；未开放占位模块已移除 |
 | 本地监听 | Rust 原生进程内 listener | 默认停止；固定 IPv4 loopback 与用户选定端口；停止会等待 listener task 结束；不会安装系统代理或后台 helper |
 | 客户端认证 | 随机本机 bearer | 原生确认后才临时显示配置片段；状态、数据库与日志不包含 bearer |
 | 上游转发 | OpenAI Responses identity passthrough | 只支持 `/v1/responses` 与 `/v1/responses/compact`；响应头/流 idle 有界超时；无 Chat/Anthropic/Gemini 转换、重试池或故障转移 |

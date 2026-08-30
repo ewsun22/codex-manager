@@ -231,6 +231,20 @@ pub struct AppUpdateCheckAttemptRow {
     pub current_version: String,
 }
 
+/// Bounded, non-secret result of `codex app-server generate-json-schema`.
+/// This is compatibility metadata only; it must never be treated as an
+/// activity-ingestion source.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CliSchemaCapabilityRow {
+    pub executable_path: String,
+    pub version: Option<String>,
+    pub schema_sha256: Option<String>,
+    pub checked_at: String,
+    pub available: bool,
+    pub message: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RevisionRow {
@@ -330,6 +344,10 @@ impl Store {
             include_str!("../migrations/0010_update_check_state.sql"),
         )?;
         self.apply_migration(11, include_str!("../migrations/0011_codex_gateway.sql"))?;
+        self.apply_migration(
+            12,
+            include_str!("../migrations/0012_cli_schema_capability.sql"),
+        )?;
         self.backfill_logical_fingerprints()?;
         Ok(())
     }
@@ -408,6 +426,49 @@ impl Store {
             )?;
             tx.commit()?;
         }
+        Ok(())
+    }
+
+    pub fn cli_schema_capability(&self) -> Result<Option<CliSchemaCapabilityRow>> {
+        self.conn
+            .query_row(
+                "SELECT executable_path,version,schema_sha256,checked_at,available,message FROM cli_schema_capability WHERE singleton=1",
+                [],
+                |row| {
+                    Ok(CliSchemaCapabilityRow {
+                        executable_path: row.get(0)?,
+                        version: row.get(1)?,
+                        schema_sha256: row.get(2)?,
+                        checked_at: row.get(3)?,
+                        available: row.get::<_, i64>(4)? != 0,
+                        message: row.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .context("读取 CLI Schema 兼容性状态失败")
+    }
+
+    pub fn save_cli_schema_capability(&self, row: &CliSchemaCapabilityRow) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO cli_schema_capability(singleton,executable_path,version,schema_sha256,checked_at,available,message)
+             VALUES(1,?1,?2,?3,?4,?5,?6)
+             ON CONFLICT(singleton) DO UPDATE SET
+               executable_path=excluded.executable_path,
+               version=excluded.version,
+               schema_sha256=excluded.schema_sha256,
+               checked_at=excluded.checked_at,
+               available=excluded.available,
+               message=excluded.message",
+            params![
+                row.executable_path,
+                row.version,
+                row.schema_sha256,
+                row.checked_at,
+                i64::from(row.available),
+                row.message,
+            ],
+        )?;
         Ok(())
     }
     pub fn checkpoint(&self, path: &str) -> Result<i64> {
@@ -1579,6 +1640,18 @@ mod tests {
         assert_eq!(stored.notes, status.notes);
         s.set_checkpoint("a", "rollout", 9, None, None).unwrap();
         assert_eq!(s.checkpoint("a").unwrap(), 9);
+
+        assert!(s.cli_schema_capability().unwrap().is_none());
+        let capability = CliSchemaCapabilityRow {
+            executable_path: "/opt/homebrew/bin/codex".into(),
+            version: Some("codex-cli 0.148.0".into()),
+            schema_sha256: Some("a".repeat(64)),
+            checked_at: "2026-08-30T00:00:00Z".into(),
+            available: true,
+            message: Some("已验证。".into()),
+        };
+        s.save_cli_schema_capability(&capability).unwrap();
+        assert_eq!(s.cli_schema_capability().unwrap(), Some(capability));
     }
 
     #[test]

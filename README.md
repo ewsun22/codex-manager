@@ -34,6 +34,7 @@ Codex Manager brings those views into a single local desktop control center. Obs
 - Inspect input, output, cached read/write, and reasoning output tokens with source/provenance.
 - Filter and cursor-page activity; open detail views without persisting message or reasoning text.
 - Estimate API-equivalent cost from a versioned pricing catalog. This is not ChatGPT subscription billing or a provider invoice.
+- The overview uses a compact layout with one recent-activity row; the homepage API-equivalent estimate is rounded to two decimal places while coverage semantics remain unchanged.
 
 ### Manage
 
@@ -41,6 +42,7 @@ Codex Manager brings those views into a single local desktop control center. Obs
 - Discover observed projects, Git roots, worktrees, and the effective `AGENTS.md` chain.
 - Create, edit, save, restore, and review project `AGENTS.md` revisions only inside an explicitly authorized root.
 - Use the official Codex login/App Server boundary for account, plan, quota windows, and reset times; macOS beta supports multiple imported OAuth profiles with explicit switching.
+- Official subscription data is cache-first after the first successful read; a manual Refresh action forces a live read and the UI labels cache age and last-confirmed state.
 - Save custom Responses-compatible provider metadata and use an explicit local gateway when needed.
 
 ### Local-first
@@ -56,7 +58,7 @@ Codex Manager brings those views into a single local desktop control center. Obs
 2. Install and launch **Codex Manager**.
 3. On first launch, it discovers available local Codex data under the configured Codex home (normally `~/.codex`).
 4. Open the activity view to inspect observed sessions and model usage.
-5. To edit an `AGENTS.md`, first authorize the project root in Settings. To use a provider gateway, save a provider and explicitly start the loopback listener.
+5. To edit an `AGENTS.md`, first authorize the project root in Settings. To use a provider gateway, save a provider and explicitly start the loopback listener; the overview exposes explicit start/stop controls for the existing Responses gateway.
 
 The desktop app does not automatically change `config.toml` or `auth.json`. The signed release includes Developer ID signing, Apple notarization, and stapling; account switching and provider use still require explicit user actions.
 
@@ -86,7 +88,8 @@ Codex Manager uses adapters rather than exposing private source formats directly
 
 - **Rollout adapter:** incrementally reads local `sessions` and `archived_sessions` JSONL. It records metadata, not message bodies. Token snapshots are deduplicated by session, ordinal, event type, and cumulative vector; they are not blindly summed.
 - **OTel adapter:** optional authenticated OTLP/HTTP on local TLS loopback. It can provide request status, duration, and bounded classifications. Current Codex metrics do not reliably identify a conversation, so the app does not invent request-to-session joins.
-- **Official App Server adapter:** short-lived, bounded reads for account, plan, and ChatGPT Codex quota. It does not attach to Codex Desktop's private stdio or read historical data.
+- **CLI Schema compatibility:** a short-lived probe verifies whether the local CLI supports the App Server Schema. It is not a collection source, does not attach to Codex Desktop's private stdio, and does not affect rollout collection; the latest probe is persisted.
+- **Official App Server adapter:** separate short-lived, bounded reads provide account, plan, and ChatGPT Codex quota data. It does not attach to Codex Desktop's private stdio or read historical data.
 - **Filesystem and AGENTS adapter:** discovers observed cwd and explicitly authorized roots, resolves the effective chain, and uses canonical-path, no-follow, conflict-check, and atomic replacement protections for writes.
 
 ## Observability and data boundaries
@@ -105,13 +108,18 @@ Official Codex subscription access remains in the trusted `codex login`, App Ser
 
 Imported-profile switching is explicit and is supported only when Codex resolves `cli_auth_credentials_store` to `file`; `keyring` and `auto` modes fail closed. Because the CLI and IDE extension share the active credential file, finish running Codex tasks before switching accounts.
 
-The optional gateway is a Codex-only OpenAI Responses identity pass-through:
+The optional gateway is a Codex-only OpenAI Responses identity pass-through. The overview provides its current status and explicit start/stop controls:
 
 - Stopped by default; it binds only to `127.0.0.1` after an explicit start.
 - Supports `/v1/models`, `/v1/responses`, and `/v1/responses/compact`; it does not translate Chat Completions, Anthropic, or Gemini protocols.
 - Remote upstreams must be HTTPS public origins; loopback HTTP is allowed only for explicit local development. Redirects, private/link-local addresses, userinfo, query, and fragment are rejected.
 - The client bearer is not forwarded upstream. API keys are injected only in the native layer; request/response bodies, headers, queries, and full upstream errors are not persisted.
+- The overview never displays the bearer or provider API key.
 - The app shows a provider configuration snippet only after native confirmation and does not automatically edit `config.toml` or restore direct mode. Restore direct configuration before stopping the gateway.
+
+Official subscription views are cache-first: after the first successful read, a whitelist-only account summary, plan, quota windows, and timestamps are kept in the separate macOS Keychain cache. Later visits read that cache before resolving the trusted CLI; Refresh is the explicit live-read action. Snapshots older than six hours, failed-refresh fallbacks, and unavailable states remain explicit, while an existing safe snapshot can still be shown if the CLI is temporarily missing. Tokens, raw JSON, authorization URLs, and error bodies are not cached.
+
+The Codex configuration page focuses on providers, the gateway, and configuration previews; the unopened “Global prompts”, “Plugins and marketplace”, and “Session management” placeholder modules have been removed. The sidebar’s local desktop mode shows the application version and build time (optionally a short SHA), sourced from build metadata rather than launch time.
 
 ## Security and privacy
 

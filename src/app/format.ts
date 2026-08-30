@@ -12,18 +12,27 @@ const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
   minute: "2-digit",
   hour12: false,
 });
+const buildTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
 
 export function formatCount(value: number | null | undefined, compact = false): string {
   if (value === null || value === undefined) return "unavailable";
   return (compact ? compactNumberFormatter : numberFormatter).format(value);
 }
 
-export function formatUsd(value: number | null | undefined): string {
+export function formatUsd(value: number | null | undefined, maximumFractionDigits = 4): string {
   if (value === null || value === undefined) return "unavailable";
   return new Intl.NumberFormat("zh-CN", {
     style: "currency",
     currency: "USD",
-    maximumFractionDigits: 4,
+    maximumFractionDigits,
+    minimumFractionDigits: 2,
   }).format(value);
 }
 
@@ -42,6 +51,12 @@ export function formatDate(value: string | null | undefined): string {
   if (!value) return "unavailable";
   const parsed = new Date(value);
   return Number.isNaN(parsed.valueOf()) ? "unavailable" : dateFormatter.format(parsed);
+}
+
+export function formatBuildTime(value: string | null | undefined): string {
+  if (!value) return "unavailable";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.valueOf()) ? "unavailable" : buildTimeFormatter.format(parsed);
 }
 
 export function formatMetric<T>(metric: MetricValue<T>, render: (value: T) => string = String): string {

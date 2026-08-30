@@ -54,9 +54,9 @@ JSONL 是兼容适配源，不被描述为稳定公开 API。新的事件源必�
 - endpoint 在落盘前只保留固定 provider/origin 分类和已知 route 枚举；原始 host、租户子域、path、username、password、query 与 fragment 均不保留。
 - 活动列表只把 `logs/codex.api_request` 作为请求级记录。聚合 metrics 不展开成虚假的逐请求行；`codex.sse_event` token 也不在缺少可靠关联键时猜测合并。
 
-### App Server capability
+### CLI Schema 兼容性（非采集源）
 
-应用从 Desktop bundle、显式环境变量或 PATH 寻找受信任的 Codex 可执行文件，使用有超时、无 stdin 的子进程在应用私有临时目录生成 JSON Schema，并对有数量、单文件与总大小上限的产物做 SHA-256 指纹。它只证明本机 CLI 支持对应命令，不代表已经连接或订阅 Codex Desktop 内部 app-server。
+应用从 Desktop bundle、显式环境变量或 PATH 寻找受信任的 Codex 可执行文件，使用有超时、无 stdin 的子进程在应用私有临时目录生成 JSON Schema，并对有数量、单文件与总大小上限的产物做 SHA-256 指纹。它只证明本机 CLI 支持对应命令，不代表已经连接或订阅 Codex Desktop 内部 app-server。最近探测的版本、状态和 Schema 指纹会持久化；原始 Schema 正文不持久化。该探测不是采集源，不影响 rollout 主采集。
 
 OAuth 不复用宽松的 capability 候选信任边界。macOS beta 只读取固定 ChatGPT bundle 的 Codex 源，将其复制到随机 `0700` 临时目录后再用系统 `codesign` 同时要求 identifier `codex` 与 OpenAI Developer ID Team ID `2DC432GLL2`；执行的是复制后验签的稳定副本，并在应用生命周期内复用。每次启动前复验路径；App Server 使用 `POSIX_SPAWN_START_SUSPENDED` 在用户代码执行前暂停，再以 `+PID` 动态验证实际进程，验签通过后才 `SIGCONT`。待导入 token 只会在进程恢复后以 zeroizing 内存请求通过 stdio 交给该 PID，因此 PATH shim、脚本、环境覆盖和验签后路径替换不能读取待导入 token。非 macOS 当前返回 `unavailable`。后端为该二进制启动独立、短生命周期的 App Server stdio 进程，依次完成 `initialize`、按需的 `account/login/start` `chatgptAuthTokens`、`account/read`、`config/read` 与 `account/rateLimits/read`；仅导入验证在 `initialize` 中显式选择 `capabilities.experimentalApi=true`，协议不兼容时 fail closed。App Server JSON-RPC 阶段预算为 15 秒，限制 128 条消息、每行 256 KiB 和最多 16 个额度桶，只把有界白名单 DTO 返回 WebView。RAII process guard 覆盖早退路径，stdout reader 的回收等待另有 1 秒上限。原始 JSON、token、授权/回调 URL 与错误响应正文不会返回或持久化。用户点击登录时只启动精确的 `codex login` 子命令；独立于页面轮询的后端 supervisor 会在 10 分钟内等待退出或强制 kill/wait，不自行实现 PKCE、回调监听、授权码交换或凭据存储。
 
@@ -70,11 +70,17 @@ OAuth 与认证 App Server 不继承任意父进程环境，只保留 HOME、用
 
 `codex_providers` 只保存随机 id、名称、规范化 Base URL、模型、reasoning effort 与时间；供应商 API Key 保存在独立 Keychain service。保存命令把 API Key 视为 write-only input，普通 list/save DTO 只返回 `hasApiKey`。删除供应商时同时删除其 Keychain item；正在被网关使用的供应商不可删除。
 
+总览只显示网关的非秘密快捷状态、端口/Endpoint、有限运行计数和显式启停动作，不展示 bearer 或 API Key。网关能力只标记为 Codex OpenAI Responses passthrough；不宣称 Claude、Gemini 或 Chat transformer。
+
 网关由用户显式选择供应商后启动，固定绑定 `127.0.0.1:<persisted-port>`，应用退出或用户停止时释放 listener。启动、停止、改端口、保存和删除 provider 共用一个 transition gate，低层 IPC 也不能在停止等待期间抢跑。停止命令最多等待 graceful shutdown 3 秒，必要时中止 task，只有确认 task 已结束后才返回 stopped。每次安装的本机 bearer 位于 Keychain/原生运行时；除显式 reveal command 生成的完整 provider snippet 外，状态 DTO、SQLite 和日志均不包含它。reveal 先显示 macOS 原生确认；应用不会自动读写 `config.toml` 或 `auth.json`，因此本切片也不声称提供崩溃后配置恢复。
 
 路由 allowlist 只含 `/v1/responses`、`/v1/responses/compact` 和受保护的本机辅助端点。Host/Origin/constant-time bearer 在 body 前校验；body 上限 4 MiB，并发上限 4，上游响应头等待上限 20 秒，流式响应 idle 上限 30 秒。超时释放并发槽并只返回通用失败，不泄露上游正文。客户端 Authorization 不会出站，Rust 只在发送到固定上游 origin 时注入 Keychain API Key；响应只透传 status、Content-Type、Cache-Control、x-request-id 与字节流。请求/响应 body、header、query 和原始上游错误不落盘。
 
 Base URL 只接受无 userinfo/query/fragment 的 `/v1` origin。远程上游必须使用 HTTPS，并在保存/启动时拒绝任何解析到 loopback、私网、link-local、unique-local、unspecified 或 multicast 的地址；HTTP 只允许显式 localhost/loopback 开发上游。HTTP client 禁用 redirect，并把已验证 DNS 结果固定给该 client，避免将供应商 API Key 带到另一 origin。当前是 Responses identity passthrough，不实现 Chat/Anthropic/Gemini transformer、重试/故障转移、请求体日志或官方 OAuth token proxy。
+
+官方订阅页面采用 cache-first。首次成功的账户读取或用户点击刷新后，后端仅将白名单账户摘要（可含 email）、套餐、额度窗口和确认/更新时间保存到独立 macOS Keychain，并作为不含 token/原始响应的白名单 DTO 提供当前 OAuth 页面读取；后续页面访问先读取该缓存，cache miss 或刷新按钮才解析并验签可信 CLI、触发实时读取，因此 CLI 暂时缺失时仍能显示已有安全快照。快照超过 6 小时或强制刷新失败时标记为 stale，并保留上次确认时间。token、原始 App Server JSON、授权 URL 和错误正文永不进入缓存。
+
+总览布局为紧凑工作台：最近活动只呈现一条，API 等价估算在首页显示两位小数，底层金额和覆盖口径不变。侧栏本地桌面模式显示构建元数据中的应用版本和构建时间（可选短 SHA），不使用启动时间冒充构建时间。Codex 配置页不再渲染全局提示词、插件与市场、会话管理三个未开放占位模块。
 
 ## 规范化与指标口径
 

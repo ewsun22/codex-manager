@@ -9,7 +9,7 @@ Codex Manager 是本地优先应用。默认不上传数据，也不提供产品
 - Codex home 的 `config.toml` 中与 AGENTS 解析相关的 `project_doc_max_bytes` 和 `project_doc_fallback_filenames`；配置文件仅在内存解析，不写入数据库。
 - 用户显式开启 receiver 后，发往当前 `https://localhost:<persisted-random-port>/v1/logs` 或 `/v1/metrics` 的已认证 OTLP/HTTP 请求。
 - 用户主动运行 capability probe 时，本机 Codex 可执行文件的版本和生成的 App Server Schema。
-- 打开 OAuth 页面或主动刷新时，官方 App Server 返回的认证方式、email、套餐和 ChatGPT Codex 额度窗口；这些字段只用于当前界面，不写入数据库。
+- 首次打开 OAuth 页面或用户主动刷新时，官方 App Server 返回的认证方式、email、套餐和 ChatGPT Codex 额度窗口；成功后白名单摘要与时间可进入独立的 macOS Keychain 缓存，供后续 cache-first 展示。
 - 用户点击导入后，由 Rust 原生文件选择器读取的一个本地 ChatGPT OAuth JSON；路径与原始内容不会交给 WebView，文件须为当前用户拥有、权限不宽于 `0600`、单硬链接且不超过 128 KiB 的普通文件，读取前后会复核文件身份与时间。
 - 导入验证不创建临时 `auth.json`。实际 App Server PID 通过动态验签后，后端仅在 zeroizing 内存请求中向短生命官方进程提交 access token 和工作区 ID；refresh token 不交给在线探测。
 - 用户在“供应商与反代”保存的供应商名称、Base URL、模型、reasoning effort 和 write-only API Key；API Key 只由原生后端接收，不会从读取命令返回 WebView。
@@ -25,6 +25,7 @@ Codex Manager 是本地优先应用。默认不上传数据，也不提供产品
 - 用户通过应用创建、保存或恢复 AGENTS 文件时的 revision。revision 包含保存前后的 AGENTS 文本，每个文件最多保留 20 版。
 - 用户明确导入的认证档案秘密与内部索引，保存在应用专用 macOS Keychain 服务 `cc.codex.manager.auth-profiles.v1`。界面可见的档案元数据只有随机 id、本地名称、活动/删除状态与创建/更新时间；不含 email、文件路径、文件名、token 或账户指纹，也不写入 SQLite。
 - Codex provider 的随机 id、名称、规范化 Base URL、模型、reasoning effort、创建/更新时间，以及用户选择的本机端口。供应商 API Key 与随机本机 bearer 分别保存在应用专用 macOS Keychain item，不进入 SQLite。
+- 官方订阅 cache-first 快照仅允许账户摘要（可含 email）、套餐、额度窗口和确认/更新时间进入独立 Keychain，并作为不含 token/原始响应的白名单 DTO供当前 OAuth 页面读取；不进入 SQLite。
 
 数据库位于操作系统为 `cc.codex.manager` 分配的本机应用数据目录。Unix 系统上应用会把数据目录与数据库权限分别收紧为 `0700` 和 `0600`。
 
@@ -33,9 +34,10 @@ Codex Manager 是本地优先应用。默认不上传数据，也不提供产品
 - Codex 用户消息、助手消息、reasoning 文本、tool arguments 或 tool output 正文。
 - OTel log body、prompt、error message、未知属性或未受控的 event/provider 自由文本。
 - Authorization、Cookie、API Key、OAuth code、完整环境变量、请求 header、请求 query 或 URL fragment。
-- OAuth access token、refresh token、完整授权/回调 URL、`auth.json` 内容、原始 App Server JSON 和 OAuth 页账户/额度快照不会进入 SQLite、WebView、应用日志或崩溃消息。用户明确导入的原始凭据仅在原生后端受限内存中验证，并在通过后保存到应用专用 Keychain。
+- OAuth access token、refresh token、完整授权/回调 URL、`auth.json` 内容、原始 App Server JSON 和未筛选的 OAuth 页账户/额度响应不会进入 SQLite、WebView、应用日志或崩溃消息。cache-first 只保存明确白名单摘要、套餐、额度窗口及时间；用户明确导入的原始凭据仅在原生后端受限内存中验证，并在通过后保存到应用专用 Keychain。
 - 供应商 API Key、本机网关 bearer、网关请求/响应 body、header、query、完整上游错误正文和用户内容不会进入 SQLite、普通 WebView DTO、应用日志或备份。敏感 bearer 只在用户通过原生确认后生成的临时配置片段中进入 WebView。
 - Codex Schema 生成目录；capability probe 完成后临时目录自动清理，只保存版本与 SHA-256。
+- CLI Schema 兼容性探测只保存最近探测的版本、状态与 Schema 指纹；它是非采集源，不保存原始 Schema 正文，也不代表连接 Codex Desktop 内部 App Server。
 
 timeline 中只保存消息正文的 UTF-8 byte 长度。解析器和 OTel receiver 的测试数据均为人工构造 fixture，不包含真实会话。
 
@@ -47,6 +49,7 @@ timeline 中只保存消息正文的 UTF-8 byte 长度。解析器和 OTel recei
 - 只有用户点击 OAuth 登录按钮时，应用才启动官方 `codex login`。系统浏览器到 OpenAI 的认证、回调、凭据刷新与存储由官方 Codex 负责；该操作可能改变 CLI 与 IDE 扩展共享的当前账户。Codex Manager 不启动自有回调监听器，也不接收授权码或 token。
 - 认证档案导入、切换、删除和恢复也只在用户点击后运行。切换只支持权限受限的 file 模式 `auth.json`，由后端以冲突检查和原子替换完成；不按请求自动轮换，不提供 token 代理或云同步。
 - Codex Responses 网关同样默认停止，只有用户选择 API-key 供应商并点击启动后才绑定 `127.0.0.1`。它只转发用户发往该 loopback 端点的请求到所选供应商；所选供应商会按自身隐私条款看到请求内容与常规网络元数据。应用不记录 body/header/query，不把官方 OAuth token 交给网关，不自动修改 Codex 配置，也不安装 CA、系统代理、服务或 root helper。
+- 首页提供该 Responses loopback 网关的状态和显式开启/关闭控制；首页不展示 bearer 或 API Key。网关不提供 Claude、Gemini 或 Chat transformer。
 - 桌面版启动后按需检查更新，并默认每 12 小时自动检查一次（设置可配置 1–168 小时）；Rust 后端只访问固定的 `https://github.com/ewsun22/codex-manager/releases/latest/download/latest.json`。自动检查仅取得并持久化最近检查尝试时间，以及最近成功检查的当前/可用版本、发布日期和截断后的 notes，不保存 URL、签名对象、下载句柄、错误详情或凭据；成功或失败都从最近尝试起遵守配置间隔，失败保留上次成功状态且不打断使用。下载、签名校验、安装和重启仍需用户显式操作；浏览器 demo 不自动联网。不会上传 Codex 消息、项目、AGENTS 或本地设置；GitHub 作为下载服务会常规看到网络请求元数据。
 - 本项目没有内置云同步、远程分析或自动上传。构建和依赖安装阶段访问包仓库不属于运行时数据上传。
 

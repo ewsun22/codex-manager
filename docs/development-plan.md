@@ -83,6 +83,11 @@
 - [x] 只支持 `/v1/responses` 与 `/v1/responses/compact`；不把官方 OAuth token 放入反代池
 - [x] 远程 HTTPS 公网和显式 loopback HTTP 两类上游；拒绝 userinfo、query、fragment、私网/link-local 等地址
 - [x] 原生确认后只显示手动配置片段；本版不自动改写 `config.toml` 或 `auth.json`
+- [x] `v0.6.0` 总览紧凑化：最近活动仅显示一条，首页 API 等价估算显示两位小数（数据口径不变）
+- [x] `v0.6.0` 总览增加现有 Codex Responses loopback 网关的非秘密快捷状态与显式开启/关闭；不展示 bearer/API Key，不增加 Claude/Gemini/Chat transformer
+- [x] `v0.6.0` 官方订阅改为 cache-first：白名单账户摘要/套餐/额度/时间进入独立 macOS Keychain，cache miss/手动刷新才解析可信 CLI；超过 6 小时或刷新失败显式 stale
+- [x] `v0.6.0` 将 App Server capability 重命名为“CLI Schema 兼容性（非采集源）”，持久化最近探测结果，不影响 rollout 主采集
+- [x] `v0.6.0` 侧栏本地桌面模式显示版本、构建时间（可选短 SHA）；Codex 配置移除三个未开放占位模块
 - [x] `v0.5.0-beta.1` 已从 exact source `dd370070ae58c3e70d61e95f3ad7b38278080a50`、CI run `33282176058` 发布为 `Unsigned Community Build` GitHub Pre-release；Release ID `379137424`，四项公开资产已回下载复验且稳定 updater 仍为 `v0.4.0`
 - [x] `v0.5.0` 版本、正式 release note、适用文档和 main-only CI push 触发边界已定版，并从最终 exact source `fdc96c38de8d6d6cacc46a9b7fc70157d39439ee` 完成单次主线 CI、受保护签名/双公证、九资产草稿复验、人工 Publish 与 published-mode 公开复验
 - [x] `v0.5.1` 配置页紧凑卡片/弹窗、响应式布局、双语开源展示与稳定下载入口已发布，并完成签名、公证、stapling、草稿与公开后复验

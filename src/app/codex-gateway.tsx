@@ -58,6 +58,113 @@ function nonSensitivePreview(draft: SaveCodexProviderInput): string {
   ].join("\n");
 }
 
+/** A deliberately small dashboard control. It only exposes the loopback endpoint,
+ * never the bearer or a provider API key. */
+export function CodexGatewayQuickControl({ onOpenGateway }: { onOpenGateway: () => void }) {
+  const [providers, setProviders] = useState<CodexProviderProfile[]>([]);
+  const [status, setStatus] = useState<CodexGatewayStatus | null>(null);
+  const [selectedId, setSelectedId] = useState<string>("");
+  const [busy, setBusy] = useState<"start" | "stop" | null>(null);
+  const [message, setMessage] = useState("正在读取本机代理状态…");
+
+  const refresh = useCallback(async () => {
+    try {
+      const [nextProviders, nextStatus] = await Promise.all([
+        invokeBackend<CodexProviderProfile[]>(COMMANDS.listCodexProviders),
+        invokeBackend<CodexGatewayStatus>(COMMANDS.getCodexGatewayStatus),
+      ]);
+      setProviders(nextProviders);
+      setStatus(nextStatus);
+      setSelectedId((current) => current && nextProviders.some((provider) => provider.id === current && provider.hasApiKey)
+        ? current
+        : nextStatus.providerId ?? nextProviders.find((provider) => provider.hasApiKey)?.id ?? "");
+      setMessage("");
+    } catch (error) {
+      setMessage(`代理状态不可用：${errorMessage(error)}`);
+    }
+  }, []);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const availableProviders = providers.filter((provider) => provider.hasApiKey);
+  const selected = availableProviders.find((provider) => provider.id === selectedId) ?? null;
+  const running = status?.state === "running";
+  const runningProvider = providers.find((provider) => provider.id === status?.providerId) ?? null;
+  const endpoint = status ? status.endpoint ?? `http://127.0.0.1:${status.port}/v1` : null;
+  const runGateway = async () => {
+    if (!selected || !selected.hasApiKey || busy) return;
+    setBusy("start");
+    setMessage("");
+    try {
+      const next = await invokeBackend<CodexGatewayStatus>(COMMANDS.startCodexGateway, { providerId: selected.id });
+      setStatus(next);
+      setMessage(`代理已开启，上游为“${selected.name}”。`);
+    } catch (error) {
+      setMessage(`代理未开启：${errorMessage(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const stopGateway = async () => {
+    if (busy) return;
+    setBusy("stop");
+    setMessage("");
+    try {
+      const next = await invokeBackend<CodexGatewayStatus>(COMMANDS.stopCodexGateway);
+      setStatus(next);
+      setMessage("代理已关闭。已手动应用配置时，请恢复直连配置。");
+    } catch (error) {
+      setMessage(`代理未关闭：${errorMessage(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const copyEndpoint = async () => {
+    if (!endpoint) {
+      setMessage("代理状态尚未就绪，暂时不能复制 endpoint。");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(endpoint);
+      setMessage("OpenAI Responses endpoint 已复制。");
+    } catch {
+      setMessage("系统拒绝写入剪贴板，请手动复制 endpoint。");
+    }
+  };
+
+  return (
+    <section className={`panel gateway-quick-panel${running ? " is-running" : ""}`} aria-labelledby="gateway-quick-heading" aria-busy={busy !== null}>
+      <div className="panel-title-row gateway-quick-heading">
+        <div>
+          <p className="gateway-section-kicker">LOOPBACK ONLY</p>
+          <h2 id="gateway-quick-heading">代理 API 接入</h2>
+          <p>仅 OpenAI Responses；不提供 Claude 或 Gemini transformer。</p>
+        </div>
+        <span className={`state-pill state-${running ? "healthy" : status?.state === "error" ? "degraded" : "disabled"}`}>{stateLabel(status)}</span>
+      </div>
+      <div className="gateway-quick-endpoint">
+        <span>OpenAI Responses</span>
+        <code title={endpoint ?? undefined}>{endpoint ?? "unavailable"}</code>
+        <button type="button" className="button button-secondary" onClick={() => void copyEndpoint()} disabled={!endpoint || busy !== null}>复制 endpoint</button>
+      </div>
+      <dl className="gateway-quick-meta">
+        <div><dt>上游 / 模型</dt><dd>{status?.providerName ?? selected?.name ?? "未选择"}{(running ? runningProvider : selected)?.model ? ` · ${(running ? runningProvider : selected)?.model}` : ""}</dd></div>
+        <div><dt>请求 / 失败</dt><dd>{status ? `${status.requests} / ${status.failed}` : "—"}</dd></div>
+        <div><dt>处理中</dt><dd>{status?.inFlight ?? "—"}</dd></div>
+      </dl>
+      {!running ? (
+        <div className="gateway-quick-actions">
+          {availableProviders.length ? <label><span>可用上游</span><select value={selectedId} onChange={(event) => setSelectedId(event.target.value)} disabled={busy !== null}>{availableProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label> : null}
+          {availableProviders.length ? <button type="button" className="button button-primary" onClick={() => void runGateway()} disabled={!selected || busy !== null}>{busy === "start" ? "开启中…" : "开启代理"}</button> : <button type="button" className="button button-primary" onClick={onOpenGateway}>配置供应商</button>}
+          <button type="button" className="button button-secondary" onClick={onOpenGateway} disabled={busy !== null}>{availableProviders.length ? "管理配置" : "查看说明"}</button>
+        </div>
+      ) : <div className="gateway-quick-actions"><button type="button" className="button button-danger" onClick={() => void stopGateway()} disabled={busy !== null}>{busy === "stop" ? "关闭中…" : "关闭代理"}</button><button type="button" className="button button-secondary" onClick={onOpenGateway} disabled={busy !== null}>管理配置</button></div>}
+      {status?.lastError ? <p className="gateway-quick-error" role="alert">最近错误：{status.lastError}</p> : null}
+      <p className="gateway-quick-message" aria-live="polite">{message}</p>
+    </section>
+  );
+}
+
 export function CodexGatewayView({
   onNotice,
   onOpenOfficialSubscription,
@@ -381,18 +488,6 @@ export function CodexGatewayView({
         <details className="gateway-capability">
           <summary><span>官方订阅</span><small>入口说明</small></summary>
           <div><p>官方订阅、账户切换与额度只在“官方订阅”工作台管理。本页不会读取、复制或代理官方 OAuth token，也不会展示未经观测的额度。</p></div>
-        </details>
-        <details className="gateway-capability">
-          <summary><span>全局提示词</span><small>尚未在此页开放</small></summary>
-          <div><p>全局提示词与 `AGENTS.md` 的安全编辑属于“项目与 AGENTS”工作台；本页没有文件写入能力。</p></div>
-        </details>
-        <details className="gateway-capability">
-          <summary><span>插件与市场</span><small>尚未开放</small></summary>
-          <div><p>插件安装、权限审计和市场发现尚未接入。这里不会扫描、安装或启用任何插件。</p></div>
-        </details>
-        <details className="gateway-capability">
-          <summary><span>会话管理</span><small>只读入口待接入</small></summary>
-          <div><p>会话元数据仍在“活动记录”中以只读方式展示；本页不读取消息正文，也不清理本地会话。</p></div>
         </details>
       </section>
 

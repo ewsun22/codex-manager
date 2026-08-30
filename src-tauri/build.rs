@@ -1,4 +1,35 @@
+use chrono::{TimeZone, Utc};
+use std::env;
+
 fn main() {
+    println!("cargo:rerun-if-env-changed=CODEX_MANAGER_BUILD_TIME");
+    println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
+    println!("cargo:rerun-if-env-changed=CODEX_MANAGER_COMMIT_SHA");
+    let build_time = env::var("CODEX_MANAGER_BUILD_TIME")
+        .ok()
+        .filter(|value| chrono::DateTime::parse_from_rfc3339(value).is_ok())
+        .or_else(|| {
+            env::var("SOURCE_DATE_EPOCH")
+                .ok()
+                .and_then(|value| value.parse::<i64>().ok())
+                .and_then(|seconds| Utc.timestamp_opt(seconds, 0).single())
+                .map(|value| value.to_rfc3339())
+        })
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
+    println!("cargo:rustc-env=CODEX_MANAGER_BUILD_TIME={build_time}");
+    if let Some(commit) = env::var("CODEX_MANAGER_COMMIT_SHA")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| {
+            (7..=40).contains(&value.len())
+                && value.chars().all(|character| character.is_ascii_hexdigit())
+        })
+    {
+        println!(
+            "cargo:rustc-env=CODEX_MANAGER_COMMIT_SHA={}",
+            &commit[..commit.len().min(12)]
+        );
+    }
     const COMMANDS: &[&str] = &[
         "bootstrap",
         "get_dashboard",

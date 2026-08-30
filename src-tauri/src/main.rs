@@ -15,8 +15,9 @@ use anyhow::{Context, anyhow};
 use chrono::{Duration as ChronoDuration, Utc};
 use codex_core::{ResumeState, RolloutNormalizer, TokenUsage};
 use codex_storage::{
-    ActivityFilter, ActivityRow, AppUpdateCheckAttemptRow, AppUpdateStatusRow, CommitIngest,
-    ProjectRow, RevisionDraft, RevisionRow, SettingsRow, Store,
+    ActivityFilter, ActivityRow, AppUpdateCheckAttemptRow, AppUpdateStatusRow,
+    CliSchemaCapabilityRow, CommitIngest, ProjectRow, RevisionDraft, RevisionRow, SettingsRow,
+    Store,
 };
 use directories_next::{BaseDirs, ProjectDirs};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -405,6 +406,14 @@ struct Capability {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct BuildInfo {
+    version: String,
+    build_time: String,
+    commit_sha: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AppUpdateStatus {
     checked_at: String,
     current_version: String,
@@ -433,6 +442,7 @@ struct Bootstrap {
     capability: Option<Capability>,
     update_status: Option<AppUpdateStatus>,
     update_check_last_attempt_at: Option<String>,
+    build_info: BuildInfo,
 }
 
 #[tauri::command]
@@ -463,6 +473,7 @@ fn bootstrap(app: AppHandle, state: State<'_, AppState>) -> Result<Bootstrap, St
             &state,
             &app.package_info().version.to_string(),
         )?,
+        build_info: build_info(&app),
     })
 }
 
@@ -592,6 +603,12 @@ fn rescan(state: State<'_, AppState>) -> Result<Vec<SourceHealth>, String> {
 #[tauri::command]
 fn probe_codex(state: State<'_, AppState>) -> Result<Capability, String> {
     let capability = probe_codex_inner(&state)?;
+    state
+        .store
+        .lock()
+        .map_err(lock_err)?
+        .save_cli_schema_capability(&capability_row(&capability))
+        .map_err(display_error)?;
     *state.capability.lock().map_err(lock_err)? = Some(capability.clone());
     Ok(capability)
 }
@@ -717,7 +734,10 @@ async fn install_pending_update(
 }
 
 #[tauri::command]
-async fn get_codex_account(state: State<'_, AppState>) -> Result<account::AccountSnapshot, String> {
+async fn get_codex_account(
+    state: State<'_, AppState>,
+    refresh: Option<bool>,
+) -> Result<account::AccountSnapshot, String> {
     let _credential_guard = state
         .credential_mutation_gate
         .try_lock()
@@ -726,13 +746,32 @@ async fn get_codex_account(state: State<'_, AppState>) -> Result<account::Accoun
         .account_gate
         .try_lock()
         .map_err(|_| "Codex 账户状态正在刷新，请稍后重试。".to_string())?;
+    let refresh = refresh.unwrap_or(false);
     let login_in_progress = state.login.lock().map_err(lock_err)?.in_progress();
-    let executable = trusted_auth_executable(&state).await?;
+    if !refresh {
+        let cached = tauri::async_runtime::spawn_blocking(move || {
+            account::read_cached_account(login_in_progress)
+        })
+        .await
+        .map_err(|_| "本地账户快照读取任务异常结束。".to_string())?;
+        if let Some(cached) = cached {
+            return Ok(cached);
+        }
+    }
+    // Account reads are cache-backed. A transient CLI discovery or signature
+    // verification failure must not bypass the sanitized stale-cache fallback.
+    // Mutating OAuth operations still fail closed through `?` at their call
+    // sites and therefore never use an untrusted executable.
+    let executable = account_read_executable(trusted_auth_executable(&state).await);
     tauri::async_runtime::spawn_blocking(move || {
-        account::read_account(executable.as_deref(), login_in_progress)
+        account::read_account(executable.as_deref(), login_in_progress, refresh)
     })
     .await
     .map_err(|_| "Codex 账户状态读取任务异常结束。".to_string())
+}
+
+fn account_read_executable(trusted_executable: Result<Option<PathBuf>, String>) -> Option<PathBuf> {
+    trusted_executable.ok().flatten()
 }
 
 #[tauri::command]
@@ -2870,21 +2909,24 @@ fn list_sources_inner(state: &AppState) -> Result<Vec<SourceHealth>, String> {
         SourceHealth {
             id: "app-server-capability".into(),
             kind: "app-server".into(),
-            label: "App Server capability".into(),
-            state: "unavailable".into(),
+            label: "CLI Schema 兼容性（非采集源）".into(),
+            state: "unchecked".into(),
             last_observed_at: None,
             lag_ms: None,
             codex_version: None,
             schema_sha256: None,
             unparsed_events: 0,
-            message: Some("尚未运行本地 CLI schema 探测；不会附着 Desktop 私有 stdio。".into()),
+            message: Some(
+                "尚未检查本地 CLI schema；不会附着 Desktop 私有 stdio，也不影响本地 rollout 采集。"
+                    .into(),
+            ),
         },
         |capability| SourceHealth {
             id: "app-server-capability".into(),
             kind: "app-server".into(),
-            label: "App Server capability".into(),
+            label: "CLI Schema 兼容性（非采集源）".into(),
             state: if capability.available {
-                "degraded"
+                "healthy"
             } else {
                 "unavailable"
             }
@@ -2893,7 +2935,7 @@ fn list_sources_inner(state: &AppState) -> Result<Vec<SourceHealth>, String> {
             lag_ms: None,
             codex_version: capability.version.clone(),
             schema_sha256: capability.schema_sha256.clone(),
-            unparsed_events: i64::from(!capability.available),
+            unparsed_events: 0,
             message: capability.message.clone(),
         },
     );
@@ -3003,7 +3045,7 @@ fn probe_codex_inner(state: &AppState) -> Result<Capability, String> {
                     checked_at,
                     available: true,
                     message: Some(
-                        "已生成与该 CLI 对应的 schema 指纹；仅做能力探测，未连接 Desktop 内部 stdio。"
+                        "已验证本地 CLI Schema 兼容性；仅做能力探测，未连接 Desktop 内部 stdio。"
                             .into(),
                     ),
                 });
@@ -3020,7 +3062,7 @@ fn probe_codex_inner(state: &AppState) -> Result<Capability, String> {
         checked_at,
         available: false,
         message: Some(format!(
-            "Codex CLI 可执行，但 capability probe 未通过：{reason}"
+            "Codex CLI 可执行，但 Schema 兼容性检查未通过：{reason}"
         )),
     })
 }
@@ -3135,6 +3177,36 @@ fn path_id(path: &str) -> String {
     hex::encode(digest.finalize())
 }
 
+fn build_info(app: &AppHandle) -> BuildInfo {
+    BuildInfo {
+        version: app.package_info().version.to_string(),
+        build_time: env!("CODEX_MANAGER_BUILD_TIME").into(),
+        commit_sha: option_env!("CODEX_MANAGER_COMMIT_SHA").map(str::to_owned),
+    }
+}
+
+fn capability_from_row(row: CliSchemaCapabilityRow) -> Capability {
+    Capability {
+        executable_path: row.executable_path,
+        version: row.version,
+        schema_sha256: row.schema_sha256,
+        checked_at: row.checked_at,
+        available: row.available,
+        message: row.message,
+    }
+}
+
+fn capability_row(capability: &Capability) -> CliSchemaCapabilityRow {
+    CliSchemaCapabilityRow {
+        executable_path: capability.executable_path.clone(),
+        version: capability.version.clone(),
+        schema_sha256: capability.schema_sha256.clone(),
+        checked_at: capability.checked_at.clone(),
+        available: capability.available,
+        message: capability.message.clone(),
+    }
+}
+
 fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty())
 }
@@ -3173,6 +3245,7 @@ fn main() {
             let store = Store::open(&database_path)?;
             initialize_settings(&store).map_err(anyhow::Error::msg)?;
             let settings = store.settings()?;
+            let persisted_capability = store.cli_schema_capability()?.map(capability_from_row);
             let state = AppState {
                 store: Mutex::new(store),
                 database_path,
@@ -3181,7 +3254,7 @@ fn main() {
                 otel: Mutex::new(None),
                 otel_error: Mutex::new(None),
                 watcher: Mutex::new(None),
-                capability: Mutex::new(None),
+                capability: Mutex::new(persisted_capability),
                 scan_warning: Mutex::new(None),
                 project_warning: Mutex::new(None),
                 update_gate: tokio::sync::Mutex::new(()),
@@ -3266,6 +3339,54 @@ fn main() {
 mod tests {
     use super::*;
     use std::io::{Cursor, Write};
+
+    #[test]
+    fn account_read_uses_cache_fallback_when_trusted_cli_resolution_fails() {
+        assert_eq!(
+            account_read_executable(Err("transient verification failure".into())),
+            None
+        );
+        assert_eq!(account_read_executable(Ok(None)), None);
+        assert_eq!(
+            account_read_executable(Ok(Some(PathBuf::from("/trusted/codex")))),
+            Some(PathBuf::from("/trusted/codex"))
+        );
+    }
+
+    #[test]
+    fn build_info_timestamp_is_compile_time_rfc3339_metadata() {
+        assert!(chrono::DateTime::parse_from_rfc3339(env!("CODEX_MANAGER_BUILD_TIME")).is_ok());
+        if let Some(commit) = option_env!("CODEX_MANAGER_COMMIT_SHA") {
+            assert!((7..=12).contains(&commit.len()));
+            assert!(
+                commit
+                    .chars()
+                    .all(|character| character.is_ascii_hexdigit())
+            );
+        }
+        let dto = serde_json::to_value(BuildInfo {
+            version: "0.6.0".into(),
+            build_time: env!("CODEX_MANAGER_BUILD_TIME").into(),
+            commit_sha: option_env!("CODEX_MANAGER_COMMIT_SHA").map(str::to_owned),
+        })
+        .unwrap();
+        assert_eq!(dto["version"], "0.6.0");
+        assert_eq!(dto["buildTime"], env!("CODEX_MANAGER_BUILD_TIME"));
+        assert!(dto.get("commitSha").is_some());
+    }
+
+    #[test]
+    fn persisted_capability_converts_without_losing_status() {
+        let row = CliSchemaCapabilityRow {
+            executable_path: "/opt/homebrew/bin/codex".into(),
+            version: Some("codex-cli 0.148.0".into()),
+            schema_sha256: Some("b".repeat(64)),
+            checked_at: "2026-08-30T00:00:00Z".into(),
+            available: true,
+            message: Some("已验证。".into()),
+        };
+        assert_eq!(capability_row(&capability_from_row(row.clone())), row);
+    }
 
     #[test]
     fn update_notes_are_plain_text_trimmed_and_bounded() {

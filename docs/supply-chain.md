@@ -15,6 +15,8 @@
 
 实现基于 OpenAI 官方 Responses、Codex config reference 与 App Server 契约 clean-room 编写。若未来直接复用上游任何代码或测试数据，必须先逐文件确认 provenance/许可证，更新 `THIRD_PARTY_NOTICES.md`、SBOM 与许可证清单，并重新运行依赖与供应链审计；AI Toolbox 根 MIT 不构成其嵌套来源的自动许可结论。
 
+`v0.6.0` 首页 API 接入卡只把本机已安装 EasyCLIProxyAPI 的公开可见界面用作信息层级参考；未读取、反编译、复制或运行其源码、资源、样式、图标、品牌、协议转换或生命周期实现。Codex Manager 仍复用自身既有的 Responses-only loopback 网关、安全模型和组件系统，因此 EasyCLIProxyAPI 不是构建依赖、运行依赖或派生代码来源。
+
 `verify-release.sh` 不只检查 `.app`/`.dmg`；它还强制要求 npm 与三个 Rust package 的 SBOM、内层 SBOM 哈希、Cargo/npm 许可证 JSON 和 notices，并解析 JSON、验证内层 manifest。任一文件缺失或出现 `*-unavailable.txt` 都必须失败。`main` push 的 CI 在上传 unsigned artifact 前安装固定版本工具、生成这些清单，再执行验证。
 
 每个 beta 必须在 `BUILD-INPUT.json` 和 `BUILD-PROVENANCE.json` 中记录源码、workflow/run/attempt、build/sign runner image、macOS/Xcode、Node/npm/Rust/Cargo/Tauri/GitHub CLI/notarytool、Release ID、每个 core asset 的 ID/name/size/API SHA-256 digest/正式 tag URL、notary ID/status、app/DMG CDHash、Team/authority/leaf certificate hash 和 updater key hash。CI artifact 只证明构建完成，不等同于签名、notarized、草稿远端复验或公开发布。

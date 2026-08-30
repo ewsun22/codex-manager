@@ -268,14 +268,14 @@ let sources: SourceHealth[] = [
   {
     id: "app-server",
     kind: "app-server",
-    label: "App Server capability",
-    state: "degraded",
+    label: "CLI Schema 兼容性（非采集源）",
+    state: "healthy",
     lastObservedAt: "2026-08-27T10:00:00.000Z",
     lagMs: null,
     codexVersion: "0.150.0-alpha.8",
     schemaSha256: "cc0e…a4f2",
-    unparsedEvents: 3,
-    message: "只执行 schema 探测，未附着到正在运行的私有进程。",
+    unparsedEvents: 0,
+    message: "已验证本地 CLI Schema 兼容性；未附着到正在运行的私有进程，也不影响 rollout 主采集。",
   },
   {
     id: "otel-local",
@@ -381,6 +381,9 @@ const account: CodexAccountSnapshot = {
     },
   ],
   availableResetCredits: 1,
+  source: "cache",
+  stale: false,
+  cachedAt: observedAt,
   checkedAt: observedAt,
   message: "演示数据：账户与额度来自官方 Codex App Server，凭据不会进入界面。",
 };
@@ -544,6 +547,11 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
         pricingRules,
         settings,
         capability,
+        buildInfo: {
+          version: "0.6.0",
+          buildTime: observedAt,
+          commitSha: null,
+        },
         updateStatus: null,
         updateCheckLastAttemptAt: null,
       } satisfies BootstrapPayload as T;
@@ -653,7 +661,17 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
       if (args.expectedVersion !== "0.2.1") throw new Error("更新版本已变化，请重新检查后再安装。");
       return { accepted: true } satisfies UpdateInstallResult as T;
     case COMMANDS.getCodexAccount:
-      return { ...account, checkedAt: new Date().toISOString() } as T;
+      if (args.refresh === true) {
+        const refreshedAt = new Date().toISOString();
+        return {
+          ...account,
+          source: "live",
+          stale: false,
+          cachedAt: refreshedAt,
+          checkedAt: refreshedAt,
+        } as T;
+      }
+      return structuredClone(account) as T;
     case COMMANDS.startCodexLogin:
       return { started: true, loginInProgress: true } satisfies CodexLoginStartResult as T;
     case COMMANDS.listAuthProfiles:
