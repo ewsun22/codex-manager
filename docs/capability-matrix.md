@@ -22,7 +22,7 @@
 | 认证档案删除/恢复 | 不负责 | 不负责 | 不负责 | 不负责 | 活动/最后档案不可删；软删除 30 天可恢复 |
 | 应用在线更新 | 不负责 | 不负责 | 不负责 | 不负责 | 桌面端启动后按需检查，默认每 12 小时自动检查（可配置 1–168 小时）；固定 GitHub Releases `latest.json` + Tauri 签名 + macOS 原生确认；新版本在侧栏和应用更新卡片提醒 |
 
-## v0.5.0-beta.1 Codex 供应商与本地网关
+## v0.5.0 Codex 供应商与本地网关
 
 | 能力 | 数据/运行来源 | 当前结论 |
 |---|---|---|
@@ -48,7 +48,7 @@
 
 - 默认“活动记录总数”是 canonical `turn` 任务数；“模型交互”视图是 canonical model-call 与已观测 OTel request 行数。两者都不是供应商账单请求数。
 - rollout JSONL 是私有兼容源；版本变化可能造成 source health 降级。
-- 未经过 `v0.5.0-beta.1` 网关的请求不能精确取得完整请求 URL、真实网络 TTFB、wire bytes 或供应商账单；网关首版也不会持久化这些字段。
+- 未经过 `v0.5.0` 网关的请求不能精确取得完整请求 URL、真实网络 TTFB、wire bytes 或供应商账单；网关首版也不会持久化这些字段。
 - App Server 不附着 Codex Desktop 内部进程，也不读取历史。除 Schema probe 外，OAuth 页只创建短生命周期进程读取官方账户与额度 DTO。
 - 不提供认证文件导出/编辑、请求级自动轮换或 token 代理；显式“轮换到下一个”是共享活动账户切换，不迁移正在运行的会话。不把 ChatGPT Codex 额度宣称为 OpenAI Platform API 费率、API 等价成本或供应商账单。
 - OAuth 认证边界当前只在 macOS 启用，只执行从固定 ChatGPT bundle 复制到随机私有目录并在复制后通过 OpenAI identifier/Team ID 验证的 Codex；其他平台显示 `unavailable`，等待等价的发布者身份验证。

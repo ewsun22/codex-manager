@@ -14,7 +14,7 @@
 
 Release note 采用 `docs/release-notes/v<VERSION>.md` 的固定章节。CI 通过 `npm run docs:check` 校验章节和状态词；Release 正文直接使用完整 note，`scripts/release-notes.mjs` 从其中的“概览”和“主要变化”生成 `latest.json.notes` 短摘要。两者必须来自同一文件，摘要不包含凭据或隐私数据。
 
-`ci.yml` 默认只做 unsigned artifact，可用于人工创建上述 community prerelease。`release.yml` 只服务签名稳定通道：只能手动运行，并且只允许 `main` 当前远端 SHA；它使用受保护的 GitHub `release` Environment，凭据不齐时必须失败。没有证书、Team ID 和 notarization 凭据时，禁止模拟签名成功、绕过门禁或向 community prerelease 添加 updater manifest。
+`ci.yml` 的 push 触发只接受 `main`，避免创建版本 tag 时对同一 SHA 重复运行高成本验证；它默认只做 unsigned artifact，可用于人工创建上述 community prerelease。`release.yml` 只服务签名稳定通道：只能手动运行，并且只允许 `main` 当前远端 SHA；它使用受保护的 GitHub `release` Environment，凭据不齐时必须失败。没有证书、Team ID 和 notarization 凭据时，禁止模拟签名成功、绕过门禁或向 community prerelease 添加 updater manifest。
 
 ## 2026-08-29 v0.3.0 已发布事实
 
@@ -30,12 +30,19 @@ Release note 采用 `docs/release-notes/v<VERSION>.md` 的固定章节。CI 通�
 - 该版本增加桌面端自动更新检查、最近尝试与成功状态的受限持久化、默认 12 小时且可配置 1–168 小时的检查间隔，以及设置侧栏/应用更新卡片视觉提醒；SQLite schema 升至 v10。
 - 尚未从已安装的可信签名旧版本实际执行到 `v0.4.0` 的检查更新、下载验签、确认安装、重启与版本/活动页验证；`published publicly verified` 不能外推为 `updater E2E accepted`。
 
-## 2026-08-30 v0.5.0-beta.1 community Pre-release 候选
+## 2026-08-30 v0.5.0-beta.1 community Pre-release 已发布事实
 
-- 本版本定版 Codex-only 自定义 Responses 供应商、本地 loopback 网关和“官方订阅”信息架构；SQLite schema 升至 v11。真实供应商、费用、手动配置往返和原生安装仍未 accepted。
-- 用户明确授权将最终 `main` exact SHA 发布为 GitHub Pre-release。依照本手册的既有隔离通道，本次只使用该 SHA 单次成功 `CI` 的 `codex-manager-macos-unsigned` artifact，不触发只允许 `prerelease=false` 的 signed stable workflow。
-- 允许的公开资产只有版本化 unsigned DMG、SBOM ZIP、许可证 ZIP 和重新生成的扁平 SHA-256 清单；标题与正文必须包含 `Unsigned Community Build`，并明确无 Developer ID、notarization、stapling、稳定 updater 或无警告安装保证。
-- 发布后必须匿名回下载四项资产，复验 tag/source、DMG、ZIP 和 SHA-256，并确认 `releases/latest` 仍指向 `v0.4.0`、固定 `latest.json` alias 没有被 Pre-release 污染。
+- 本版本从 exact source `dd370070ae58c3e70d61e95f3ad7b38278080a50` 和成功 CI run `33282176058` 发布，GitHub Release ID 为 `379137424`；它定版 Codex-only 自定义 Responses 供应商、本地 loopback 网关和“官方订阅”信息架构，SQLite schema 升至 v11。
+- Release 明确标记为 `Unsigned Community Build` Pre-release，只包含版本化 unsigned DMG、SBOM ZIP、许可证 ZIP 和扁平 SHA-256 清单四项资产；没有 Developer ID、notarization、stapling、updater bundle 或 `latest.json`。
+- 四项资产已经公开回下载并复验 tag/source、DMG、ZIP 和 SHA-256；稳定 `releases/latest` 与 updater alias 仍指向 `v0.4.0`。创建 tag 曾额外触发同 SHA 的 CI run `33282746660`，因此 `ci.yml` 从 `v0.5.0` 起将 push 限制到 `main`。
+- 真实供应商、费用、手动配置往返、恢复直连和原生安装仍未 `accepted`；该 Pre-release 不得晋升、覆盖或复用为稳定版资产。
+
+## 2026-08-30 v0.5.0 签名稳定版定版边界
+
+- `v0.5.0` 使用独立的 final `main` exact SHA、完整 release note 和受保护签名工作流；不得修改或复用 `v0.5.0-beta.1` 的 tag 与四项 unsigned 资产。
+- 只有 final SHA 的单次成功主线 CI、Developer ID/Hardened Runtime/secure timestamp、app 与 DMG 双 notary `Accepted`、stapling、Gatekeeper、updater 签名、九项资产、provenance、attestation 和草稿全量回下载全部通过，才允许人工 Publish。
+- Publish 后还必须用 `Verify existing macOS Release` 的 `published` 模式匿名复验正式 tag URL、`releases/latest`、`latest.json` alias 与全部九项资产。完成前不得报告 `published publicly verified`。
+- 即使公开复验成功，真实 API-key 供应商链和从可信旧签名版本升级安装到 `v0.5.0` 仍分别保持 `accepted=false`，需要独立授权与证据。
 
 ## Unsigned Community Build 发布
 

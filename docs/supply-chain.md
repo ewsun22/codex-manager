@@ -11,7 +11,7 @@
 
 ## AI Toolbox 参考边界
 
-`v0.5.0-beta.1` Codex provider/gateway 切片只审阅 [AI Toolbox](https://github.com/coulsontl/ai-toolbox) 固定 commit `3f2faef5b7a453169d4325d89fab290154233723` 的行为、信息架构与失败模式；没有把上游作为构建依赖，也没有运行其 lifecycle script。上游根许可证是 MIT，但其 transformer 测试目录含从 AxonHub `llm` 同步的 LGPL-3.0 fixture，因此本项目明确不复制上游源码、transformer、fixture、样式、图标或品牌。
+`v0.5.0` Codex provider/gateway 切片只审阅 [AI Toolbox](https://github.com/coulsontl/ai-toolbox) 固定 commit `3f2faef5b7a453169d4325d89fab290154233723` 的行为、信息架构与失败模式；没有把上游作为构建依赖，也没有运行其 lifecycle script。上游根许可证是 MIT，但其 transformer 测试目录含从 AxonHub `llm` 同步的 LGPL-3.0 fixture，因此本项目明确不复制上游源码、transformer、fixture、样式、图标或品牌。
 
 实现基于 OpenAI 官方 Responses、Codex config reference 与 App Server 契约 clean-room 编写。若未来直接复用上游任何代码或测试数据，必须先逐文件确认 provenance/许可证，更新 `THIRD_PARTY_NOTICES.md`、SBOM 与许可证清单，并重新运行依赖与供应链审计；AI Toolbox 根 MIT 不构成其嵌套来源的自动许可结论。
 

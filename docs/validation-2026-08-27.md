@@ -3,7 +3,7 @@
 日期：2026-08-27
 状态：implemented、verified locally、unsigned packaged、GitHub updater infrastructure configured；未 signed、未 notarized、未 draft/released
 
-> 状态更新（2026-08-30）：上面一行及下方 `v0.2.1` 候选审计是历史快照。`v0.2.1` 后续已从 exact source `fbe42de828f4f64549d9a4b36bc506fd15b11aa2` 完成签名、公证、stapling、公开发布和匿名回下载复验；对应 release run 为 `33240800663`，published verify run 为 `33241992763`。`v0.2.2`、`v0.3.0` 与 `v0.4.0` 也已分别完成签名发布和公开复验。当前发布边界以 [发布运行手册](release.md) 和对应版本 release note 为准；`v0.5.0-beta.1` 是隔离于稳定 updater 的 unsigned community Pre-release 候选。
+> 状态更新（2026-08-30）：上面一行及下方 `v0.2.1` 候选审计是历史快照。`v0.2.1` 后续已从 exact source `fbe42de828f4f64549d9a4b36bc506fd15b11aa2` 完成签名、公证、stapling、公开发布和匿名回下载复验；对应 release run 为 `33240800663`，published verify run 为 `33241992763`。`v0.2.2`、`v0.3.0` 与 `v0.4.0` 也已分别完成签名发布和公开复验。`v0.5.0-beta.1` 已作为隔离于稳定 updater 的 unsigned community Pre-release 发布；当前发布边界以 [发布运行手册](release.md) 和对应版本 release note 为准，`v0.5.0` 正在进入独立的 exact-SHA 签名稳定发布链。
 
 ## 环境
 

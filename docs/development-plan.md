@@ -70,7 +70,7 @@
 
 ## 后续阶段
 
-### Phase 5：Codex 供应商与 Responses 网关 — v0.5.0-beta.1 candidate; real-provider acceptance pending
+### Phase 5：Codex 供应商与 Responses 网关 — v0.5.0 stable source finalized; real-provider acceptance pending
 
 - [x] 供应商非秘密元数据使用统一 SQLite store；API Key 使用应用专用 macOS Keychain，WebView DTO 只返回 `hasApiKey`
 - [x] 新增表格优先的“供应商与反代”界面，并把既有 OAuth/认证档案/额度入口明确命名为“官方订阅”
@@ -78,8 +78,11 @@
 - [x] 只支持 `/v1/responses` 与 `/v1/responses/compact`；不把官方 OAuth token 放入反代池
 - [x] 远程 HTTPS 公网和显式 loopback HTTP 两类上游；拒绝 userinfo、query、fragment、私网/link-local 等地址
 - [x] 原生确认后只显示手动配置片段；本版不自动改写 `config.toml` 或 `auth.json`
-- [ ] `v0.5.0-beta.1` 从最终 exact SHA 的单次成功 CI artifact 发布为 `Unsigned Community Build` GitHub Pre-release，并完成公开资产回下载复验
+- [x] `v0.5.0-beta.1` 已从 exact source `dd370070ae58c3e70d61e95f3ad7b38278080a50`、CI run `33282176058` 发布为 `Unsigned Community Build` GitHub Pre-release；Release ID `379137424`，四项公开资产已回下载复验且稳定 updater 仍为 `v0.4.0`
+- [x] `v0.5.0` 版本、正式 release note、适用文档和 main-only CI push 触发边界已定版；源码定版不预先声明签名 Release 已发布
+- [ ] `v0.5.0` 必须从最终 exact SHA 完成单次主线 CI、受保护签名/双公证、九资产草稿复验、人工 Publish 与 published-mode 公开复验；实际状态以 GitHub Release 和 Actions evidence 为准
 - [ ] 用用户授权的真实 API-key 上游完成 Codex CLI Responses E2E、费用确认与恢复直连验收
+- [ ] 从已安装的可信签名旧版本真实检查、下载、验签、安装、重启到 `v0.5.0`，完成 updater E2E 验收
 - [ ] 为运行中配置漂移、退出前恢复、崩溃恢复设计受管 config state machine；在此之前网关不会自动接管 Codex
 
 首版明确不做 Chat/Anthropic/Gemini 转换、provider failover/retry pool、远程 provider catalog、自定义 header DSL、请求正文日志、官方订阅代理或后台自动换号。

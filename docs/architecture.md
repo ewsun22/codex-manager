@@ -2,7 +2,7 @@
 
 ## 产品边界
 
-Codex Manager 是独立的 Tauri 2 桌面应用，不是 Codex 插件、系统代理或通用 API 网关。`v0.5.0-beta.1` 增加一个默认停止、Codex-only、IPv4 loopback 的 OpenAI Responses 透明网关；官方订阅仍是独立的受信任 CLI/App Server/Keychain 边界。macOS 是首发平台；规范化、存储、价格、项目发现和 AGENTS 解析放在 Rust/SQLite 边界内，为后续 Windows 适配保留平台接口。
+Codex Manager 是独立的 Tauri 2 桌面应用，不是 Codex 插件、系统代理或通用 API 网关。`v0.5.0` 增加一个默认停止、Codex-only、IPv4 loopback 的 OpenAI Responses 透明网关；官方订阅仍是独立的受信任 CLI/App Server/Keychain 边界。macOS 是首发平台；规范化、存储、价格、项目发现和 AGENTS 解析放在 Rust/SQLite 边界内，为后续 Windows 适配保留平台接口。
 
 ```text
 Codex Desktop / CLI
@@ -103,7 +103,7 @@ SQLite 位于平台应用数据目录，启用 WAL、foreign keys、busy timeout
 - `projects`：canonical 项目路径、来源、Git/worktree 状态。
 - `agents_revisions`：两阶段 pending/applied revision，用于崩溃恢复、冲突保护和回滚。
 - `settings`：Codex homes、授权根目录、保留期、OTel 开关、价格目录版本和更新检查间隔（1–168 小时，默认 12 小时）。更新检查状态只保存最近检查尝试时间，以及最近成功检查的受限展示元数据：当前/可用版本、发布日期和截断后的 notes。
-- `codex_providers`：`v0.5.0-beta.1` 网关的非秘密供应商元数据；API Key 与本机 bearer 不进入 SQLite。
+- `codex_providers`：`v0.5.0` 网关的非秘密供应商元数据；API Key 与本机 bearer 不进入 SQLite。
 
 保留期会清理旧 turn/session 与 OTel 记录；OTel 硬删除只依据本机 `received_at`，不信任客户端时间。AGENTS revision 不受该保留期影响，而是每个文件最多保留 20 版。
 
