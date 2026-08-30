@@ -12,8 +12,8 @@
 
 ## 安全基线
 
-- local-first、metadata-only、OTel opt-in；可选 Codex Responses 网关默认停止且只监听 IPv4 loopback，不提供系统代理、LAN listener 或 root helper。
-- 不持久化 Codex 消息正文、Authorization、Cookie、OAuth code、完整环境变量或请求 query。供应商 API Key 与本机网关 bearer 只进入应用专用 Keychain/原生运行时，不进入 SQLite、普通 WebView DTO、日志、备份或错误详情。
+- local-first、metadata-only、OTel opt-in；可选 CLIProxyAPI sidecar 默认停止，生成配置强制 IPv4 loopback，不提供系统代理、LAN listener 或 root helper。
+- 不持久化 Codex 消息正文、Authorization、Cookie、OAuth code、完整环境变量或请求 query。API Key 与 CLIProxyAPI OAuth 秘密静态保存在各自隔离的 Keychain；sidecar 运行时才写入应用私有 `0700` 目录中的 `0600` 文件，并在 checkpoint 后删除。它们不得进入 SQLite、普通 WebView DTO、日志、备份或错误详情。
 - OTel 只监听 IPv4 loopback 的首次随机、后续持久化端口，使用 localhost TLS 身份和 body 解码前专用 header 认证；持久化端口被占用时 fail closed。请求体上限 128 KiB，连接 10 秒无读写进展即超时，并限制连接/请求并发、频率、处理时间、解码基数与属性 allowlist；日志 body 不被读取。
 - OTel event/provider 仅保存固定枚举，未知 model/thread/turn 仅保存带类型的 SHA-256 截断伪名，endpoint 仅保存 provider/origin/route 分类，避免将攻击者控制的高基数字符串持久化。
 - Tauri WebView 使用严格 CSP，IPC 只暴露显式 command，不授予通用 shell、任意文件、HTTP、process、dialog 或 updater 插件 API。
@@ -28,9 +28,10 @@
 - OAuth/App Server 子进程使用固定环境白名单与系统 PATH；只保留 HOME、用户、临时目录、语言环境和受控 `CODEX_HOME`。refresh/revoke endpoint、login client、proxy、CA、API key 和 access token 等环境覆盖不会继承到凭据边界。
 - 认证档案导入完全位于原生后端：文件选择器不把路径或 bytes 返回 WebView；普通文件/当前 uid/权限不宽于 `0600`/单硬链接/128 KiB/读取前后 fstat/JSON 重复键/深度与字段数均受限。实际 App Server PID 动态验签并恢复后，后端才以 zeroizing 请求通过官方 `chatgptAuthTokens` 流程提交 access token 和工作区 ID，refresh token 不交给在线探测，也不创建临时 `auth.json`。验证后的秘密以 zeroizing buffer 处理并存入应用专用 Keychain，IPC 只返回白名单元数据。
 - 活动账户切换只支持安全的 file 模式 `auth.json`。App Server `config/read` 必须证明最终生效的 `cli_auth_credentials_store` 明确为 `file`；同进程异步门闩、Codex Manager 实例间非阻塞锁、opaque revision、SHA/mtime/文件身份 CAS、`0600` 同目录原子替换、切换后官方账户复核与条件回滚共同防止并发覆盖。活动账户读取如触发官方凭据刷新，后端必须在文件稳定后重新取得 bytes 和文件戳，再用于 Keychain 更新或回滚。官方登录子进程的整个生命周期也持有 Manager 进程锁。keyring/auto、配置缺失、外部改写、身份不符、活动/最后档案删除均 fail closed；删除提交前再次读取活动文件，软删除保留 30 天后才清理。CLI/IDE 不遵守 Manager 的锁，用户仍须结束正在运行的 Codex 任务。
-- 官方 OAuth access/refresh token 不得进入 provider/gateway。网关只允许带独立 API Key 的 Responses provider，普通 DTO 只有非秘密元数据和 `hasApiKey`；API Key 写 IPC 不回显。reveal 本机 provider 片段前必须原生确认，其他状态接口不得包含 bearer。
-- 网关固定 `127.0.0.1`，先校验 exact Host、受限 Origin 与 constant-time bearer 再读取 body；body 最大 4 MiB、并发最大 4、响应头等待最大 20 秒、流 idle 最大 30 秒。超时会释放并发槽并只记录通用错误。客户端 Authorization/header 不透传，上游只接收原生层注入的 API Key、Content-Type 与 Accept；响应 header 使用 allowlist，body/SSE 直接流式返回且不落盘。
-- 远程 Base URL 只允许无 userinfo/query/fragment 的 HTTPS `/v1` origin，保存和启动时解析 DNS，并拒绝任一 loopback、私网、link-local、unique-local、unspecified 或 multicast 地址；HTTP 仅允许显式 loopback。HTTP client 禁止 redirect 并 pin 已验证解析结果，避免 API Key 越过 origin。
+- 三个信任域严格隔离：官方 OAuth access/refresh token 不得进入 CLIProxyAPI；CLIProxyAPI OAuth 只来自原生文件选择器，存入独立 Keychain service `cc.codex.manager.cliproxy-auth.v1`。普通 DTO 不含账户、路径、token 或 fingerprint；Management API、OAuth callback、原始配置、认证文件、`api-call` 与动态插件不得通过 WebView 开放。
+- CLIProxyAPI 配置固定 `host: 127.0.0.1` 和非空随机 client key；同时强制 `commercial-mode:true`、`request-log:false`、`debug:false`、`logging-to-file:false`、`usage-statistics-enabled:false`、remote management/control panel/plugins disabled。启动验收必须检查受管 PID 与 `/healthz`，端口占用不得终止无关进程。
+- 内核下载只允许官方 `router-for-me/CLIProxyAPI` 非 draft、非 prerelease Release，选择精确平台/架构资产并强制 GitHub asset digest 与 `checksums.txt` 双 SHA-256 一致；下载与解压有上限，拒绝绝对路径、`..`、symlink/hardlink，经私有 staging 安装，失败保留旧内核。检查和安装只能由用户显式触发。
+- 远程 Base URL 只允许无 userinfo/query/fragment 的 HTTPS `/v1` origin；HTTP 仅允许显式 loopback。供应商实际出站、协议转换和响应处理由 CLIProxyAPI 执行，因此其行为与安全边界必须按独立内核版本重新验收，不能继承旧 Rust 网关的 header/body/redirect 结论。当前上游 `openai-compatibility` 没有可禁止 redirect 或锁定已验证 DNS/IP 的配置；一次运行观测无法证明任意自定义 Base URL 不会经 DNS rebinding 或 3xx 把请求正文转向其他 origin。在上游提供等价强制项，或引入能强制该出站规则的受信任架构层前，支持任意 OpenAI-compatible Base URL 的本功能属于明确的发布 No-Go。
 - SQLite 在 Unix 上使用私有目录/文件权限、WAL、foreign keys、busy timeout 和全库页数硬上限；OTel 另有总行数配额与单事务批量上限。
 - CI action 以完整 commit SHA 固定；发布流程包含 lockfile、fail-closed 审计、无 `rg` 依赖且未完整扫描即失败的 secret scan、SBOM、许可证清单与 artifact SHA-256。
 
@@ -43,7 +44,10 @@
 - 账户白名单快照虽然不含 credential，仍可能包含 email 和额度信息；它与认证档案 secret 使用不同的 Keychain service/account，删除应用数据或退出官方账户不会自动等价于删除该快照，后续应提供用户可见的显式清理入口。
 - 官方 Codex 可能按用户自己的 `cli_auth_credentials_store` 设置把活动凭据保存在 OS credential store 或 `~/.codex/auth.json`。多档案切换不会改写该设置，只支持 file 模式；keyring/auto 会拒绝切换。切换活动文件会影响共享该缓存的 CLI 与 IDE 扩展。
 - 当前轮换是用户确认后的整账户显式切换，不是请求级调度；不会检测限额后后台自动换号，也不会迁移正在运行的会话。
-- 网关不自动改写、接管或恢复 `config.toml`/`auth.json`；它也不是常驻 helper。用户手动使用配置片段后，停止应用或 listener 会使 Codex 请求失败，因此必须先恢复直连。真实 API-key 供应商 E2E 与崩溃恢复尚未 `accepted`。
+- Codex 配置页面只管理 `model`、`model_provider` 和一个 provider table，使用 `model_providers.<id>.auth.command` 调用当前 app binary 的 allowlisted opaque secret ref；私有 journal 支持 CAS/原子应用与恢复，文件漂移拒绝覆盖。`verified` 只代表写后文件复核，不代表 Codex 成功请求上游。真实 OAuth/API-key 上游 E2E、异常请求无正文落盘、实际 socket 仅 loopback、崩溃恢复与旧内核回滚尚未 `accepted`。
+- 每次 sidecar 使用随机 runtime session；正常停止会 kill/wait 自己持有的 child 并删除整个 session，下次 stopped 状态会清理崩溃遗留配置，启动前的端口独占检查会拒绝把旧 `/healthz` 误认成新 child。但 macOS 在应用被 `SIGKILL` 时没有可靠 parent-death signal，旧 CLIProxyAPI 仍可能存活；在持久化 ownership/PID/启动时间并可安全回收前，本应用只 fail closed，不按进程名广泛 kill。
+- CLIProxyAPI `v7.2.145` 上游 Release 没有 Developer ID、公证、detached signature、SBOM 或可复现 provenance，asset digest 与 `checksums.txt` 仍属于同一 GitHub 信任域；其构建会拉取 mutable model catalog。主应用签名不能被描述为覆盖下载后的第三方 sidecar。正式发布前必须决定独立审核 manifest/固定版本策略；当前直接跟随上游 latest 只属于技术原型。即使建立 manifest，也不会解决上述不可配置的 redirect/DNS/IP 出站约束缺失；两个发布门必须分别关闭。
+- 预编译 CLIProxyAPI 的 OAuth callback 可能绑定全网卡，且存在无法由当前配置关闭的 Antigravity 外部版本请求。因此本应用不开放其 Management API/OAuth callback；导入的 OAuth 文件仅由原生层投影到私有 auth-dir，并须用运行时网络观测证明普通反代模式没有超出披露范围的监听和正文落盘；完成前不得发布或写成 `accepted`。
 - 当前没有远程撤回机制。桌面版会在启动后按需检查并按配置间隔自动检查更新；自动检查不下载、不安装、不重启。在线更新会将完整更新包读入内存后验签；严格下载字节上限是后续加固项。
 - 签名发布已拆成 secret-free build、无 Release 写权限的受保护 sign、无 Apple/updater secret 的 draft 三个 job；sign/draft 不执行 build artifact 携带的 signer 或 verifier。sign 先下载固定版本 Tauri signer并核对 SHA-512，updater 私钥只在紧邻签名命令的独立 step 注入并在命令后 unset；验签使用 exact checkout 中仅依赖 Node 标准密码库的 Minisign/Ed25519 verifier，transfer 只携带公开 updater key。临时证书/Keychain 在任何上传前清理。draft 只允许 exact source/Release/asset digest 调和，所有资产按 ID 回下载复验；人工发布后另由只读 workflow 匿名验证正式 tag URL 和 latest alias。发布人员已报告 updater 私钥存在独立离线备份，首次发布前仍须复核实际恢复介质。
 

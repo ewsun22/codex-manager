@@ -76,20 +76,25 @@
 
 ## 后续阶段
 
-### Phase 5：Codex 供应商与 Responses 网关 — stable channel active; real-provider acceptance pending
+### Phase 5：Codex 供应商与 CLIProxyAPI sidecar — stable baseline + unreleased migration
 
 - [x] 供应商非秘密元数据使用统一 SQLite store；API Key 使用应用专用 macOS Keychain，WebView DTO 只返回 `hasApiKey`
 - [x] 新增表格优先的“供应商与反代”界面，并把既有 OAuth/认证档案/额度入口明确命名为“官方订阅”
 - [x] `v0.5.1` 将供应商工作流重组为“Codex 配置管理”卡片与弹窗；保留 Keychain-only、显式启动和原生确认边界，模型测试只给出不发送请求的说明，通用配置或自动接管开关保持禁用
-- [x] 显式启动/停止固定 IPv4 loopback 的 Responses identity gateway；随机本机 bearer、body/并发限制、受限响应 header 与 redirect disabled
+- [x] 显式启动/停止固定 IPv4 loopback 的 CLIProxyAPI 本地代理；运行配置与 OAuth auth-dir 使用随机私有目录和受限文件权限
 - [x] 只支持 `/v1/responses` 与 `/v1/responses/compact`；不把官方 OAuth token 放入反代池
 - [x] 远程 HTTPS 公网和显式 loopback HTTP 两类上游；拒绝 userinfo、query、fragment、私网/link-local 等地址
-- [x] 原生确认后只显示手动配置片段；本版不自动改写 `config.toml` 或 `auth.json`
+- [x] Codex 配置使用 `auth.command`、CAS/原子事务和私有 journal 应用/恢复；不改写 `auth.json`
 - [x] `v0.6.0` 总览紧凑化：最近活动仅显示一条，首页 API 等价估算显示两位小数（数据口径不变）
-- [x] `v0.6.0` 总览增加现有 Codex Responses loopback 网关的非秘密快捷状态与显式开启/关闭；不展示 bearer/API Key，不增加 Claude/Gemini/Chat transformer
+- [x] `v0.6.0` 总览增加本地代理的非秘密快捷状态与显式开启/关闭；不展示 API Key/OAuth token
 - [x] `v0.6.0` 官方订阅改为 cache-first：白名单账户摘要/套餐/额度/时间进入独立 macOS Keychain，cache miss/手动刷新才解析可信 CLI；超过 6 小时或刷新失败显式 stale
 - [x] `v0.6.0` 将 App Server capability 重命名为“CLI Schema 兼容性（非采集源）”，持久化最近探测结果，不影响 rollout 主采集
 - [x] `v0.6.0` 侧栏本地桌面模式显示版本、构建时间（可选短 SHA）；Codex 配置移除三个未开放占位模块
+- [x] 未发布：删除旧 Rust 进程内 Responses 转发路径，改由 `router-for-me/CLIProxyAPI` 官方预编译 sidecar 承担反代；主体与内核独立版本，本机不编译 Go
+- [x] 未发布：首页增加显式反代开关、OpenAI/Claude/Gemini 兼容 URL、内核版本和 PID；反代页提供检查/安装/更新入口
+- [x] 未发布：安装器只选择官方非 draft/prerelease 精确平台资产，要求 GitHub asset digest 与 `checksums.txt` 双 SHA-256 一致，限制下载/解压并使用私有 staging；安装事务标记恢复中途强制终止，新内核健康前保留旧版
+- [x] 未发布：生成配置固定 `127.0.0.1`、`commercial-mode:true`，关闭 remote management/control panel/plugins/request log/file log/usage stats；API Key 只从 Keychain 物化到运行期 `0600` 配置，停止后删除
+- [x] 未发布：CLIProxyAPI OAuth 档案支持原生文件选择器导入、独立 Keychain 保存、启用/禁用、删除/恢复与运行时 checkpoint；Management API/OAuth callback 不向 WebView 开放，官方 OAuth token 不跨域
 - [x] `v0.5.0-beta.1` 已从 exact source `dd370070ae58c3e70d61e95f3ad7b38278080a50`、CI run `33282176058` 发布为 `Unsigned Community Build` GitHub Pre-release；Release ID `379137424`，四项公开资产已回下载复验且稳定 updater 仍为 `v0.4.0`
 - [x] `v0.5.0` 版本、正式 release note、适用文档和 main-only CI push 触发边界已定版，并从最终 exact source `fdc96c38de8d6d6cacc46a9b7fc70157d39439ee` 完成单次主线 CI、受保护签名/双公证、九资产草稿复验、人工 Publish 与 published-mode 公开复验
 - [x] `v0.5.1` 配置页紧凑卡片/弹窗、响应式布局、双语开源展示与稳定下载入口已发布，并完成签名、公证、stapling、草稿与公开后复验
@@ -97,8 +102,12 @@
 - [ ] 用用户授权的真实 API-key 上游完成 Codex CLI Responses E2E、费用确认与恢复直连验收
 - [ ] 从已安装的可信签名旧版本真实检查、下载、验签、安装、重启到最新稳定版本，完成 updater E2E 验收
 - [ ] 为运行中配置漂移、退出前恢复、崩溃恢复设计受管 config state machine；在此之前网关不会自动接管 Codex
+- [x] 增加 pending checkpoint、provider/identity/CAS 校验和 orphan 端口确认；无法证明归属时 fail closed，不盲删或强杀遗留 child
+- [ ] 为 CLIProxyAPI 建立独立审核 manifest/固定版本准入，解决上游无 detached signature/SBOM/provenance 和 mutable model catalog 的信任缺口；在此之前直接跟随 latest 只属于技术原型，不得发布
+- [ ] 关闭任意自定义 Base URL 的网络安全 No-Go：要求上游提供 redirect disabled 与 DNS/IP pinning，或引入能强制该出站规则的受信任层；一次运行观测不能代替该架构约束
+- [ ] 在隔离环境真实运行官方预编译内核，验证 socket 仅 loopback、无认证为 401、4xx/5xx 不落正文、停止清理、旧版回滚，以及不可关闭 Antigravity 后台请求的实际隐私影响
 
-首版明确不做 Chat/Anthropic/Gemini 转换、provider failover/retry pool、远程 provider catalog、自定义 header DSL、请求正文日志、官方订阅代理或后台自动换号。
+当前只开放 OpenAI-compatible API-key 上游配置。CLIProxyAPI 内核虽提供 OpenAI/Claude/Gemini client endpoint，本应用不开放其 OAuth、Management、provider pool、动态插件、自定义 header DSL、请求正文日志、官方订阅代理或后台自动换号；协议可用性仍需真实上游 E2E。
 
 ### Windows beta
 
@@ -108,4 +117,4 @@
 
 ### 可选精确网络观测
 
-Phase 5 的网关只完成默认关闭的 Codex Responses 透明转发和进程内状态，不把完整 URL、TTFB、wire bytes 或上游账单写入活动库。若后续需要精确网络观测，必须另行设计字段 provenance、留存、流式终态、配置接管/恢复和真实 Codex E2E，不得从“listener 已启动”推导为业务验收。
+Phase 5 的双控制面已完成本地实现和自动化测试边界：Codex 配置使用 `auth.command`、CAS/原子事务与私有 journal；本地代理使用预编译 CLIProxyAPI、独立 OAuth/API-key 凭据和 checkpoint。仍不把完整 URL、TTFB、wire bytes 或上游账单写入活动库；usage statistics 关闭后请求计数为 `unavailable`。真实上游 E2E、安装发布验收、上游 redirect/DNS/IP 约束和最终 `accepted` 仍是发布前工作。

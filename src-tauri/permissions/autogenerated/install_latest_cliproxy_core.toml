@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-install-latest-cliproxy-core"
+description = "Enables the install_latest_cliproxy_core command without any pre-configured scope."
+commands.allow = ["install_latest_cliproxy_core"]
+
+[[permission]]
+identifier = "deny-install-latest-cliproxy-core"
+description = "Denies the install_latest_cliproxy_core command without any pre-configured scope."
+commands.deny = ["install_latest_cliproxy_core"]

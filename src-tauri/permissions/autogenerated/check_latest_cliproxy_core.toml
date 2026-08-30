@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-check-latest-cliproxy-core"
+description = "Enables the check_latest_cliproxy_core command without any pre-configured scope."
+commands.allow = ["check_latest_cliproxy_core"]
+
+[[permission]]
+identifier = "deny-check-latest-cliproxy-core"
+description = "Denies the check_latest_cliproxy_core command without any pre-configured scope."
+commands.deny = ["check_latest_cliproxy_core"]

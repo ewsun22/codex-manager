@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preview-codex-config-profile"
+description = "Enables the preview_codex_config_profile command without any pre-configured scope."
+commands.allow = ["preview_codex_config_profile"]
+
+[[permission]]
+identifier = "deny-preview-codex-config-profile"
+description = "Denies the preview_codex_config_profile command without any pre-configured scope."
+commands.deny = ["preview_codex_config_profile"]

@@ -43,13 +43,14 @@ Codex Manager 将这些视图集中到一个本地桌面控制中心，同时明
 - 只在明确授权根目录内创建、编辑、保存、恢复和查看 `AGENTS.md` revision。
 - 通过官方 Codex login/App Server 边界查看账户、套餐、额度窗口和重置时间；macOS beta 支持多个 OAuth profile 及明确切换。
 - 官方订阅首次成功读取后优先使用本地白名单缓存；用户可点击“刷新”强制重新读取，界面明确标注缓存时间和上次确认状态。
-- 保存 Responses-compatible 自定义供应商，并在需要时显式启动本地网关。
+- 使用独立的“Codex 配置”页面，在官方直连、本地 CLIProxyAPI、已保存的外部 Responses 兼容供应商之间切换，并支持预览、CAS/原子应用和恢复。
+- 使用独立的“本地代理”页面，导入并管理 CLIProxyAPI OAuth 档案或外部 API Key 上游，再把本机 loopback 接入配置给 Codex。
 
 ### 本地优先
 
 - 默认使用本机 SQLite；没有产品遥测或云同步。
-- API Key、OAuth profile secret 和 gateway bearer 只进入应用专用 Keychain 或原生运行时内存。
-- 可选 OTel receiver 和供应商网关在用户开启前均停止，并绑定本地接口。
+- 官方与 CLIProxyAPI OAuth secret 分别保存在隔离的应用专用 Keychain；供应商 API Key 静态保存在 Keychain，仅在内核运行期间写入权限为 `0600` 的应用私有运行文件。
+- 可选 OTel receiver 和 CLIProxyAPI 内核在用户开启前均停止，并只绑定本地接口。
 - 不会静默改写 Codex 配置或后台换号。
 
 ## 快速开始
@@ -58,9 +59,9 @@ Codex Manager 将这些视图集中到一个本地桌面控制中心，同时明
 2. 安装并启动 **Codex Manager**。
 3. 首次启动时，应用会在配置的 Codex home（通常为 `~/.codex`）下发现本地数据。
 4. 打开活动页面查看已观测的 session 和模型使用情况。
-5. 编辑 `AGENTS.md` 前先在设置中授权项目根目录；使用供应商网关前先保存供应商，再明确启动 loopback listener。首页可查看并显式开启/关闭该 Responses 网关。
+5. 编辑 `AGENTS.md` 前先在设置中授权项目根目录；使用反代前先保存供应商，再在首页显式开启。首次开启会下载并校验当前平台的 CLIProxyAPI 官方预编译发行包；Codex Manager 不在本机编译 Go 内核。
 
-桌面应用不会自动修改 `config.toml` 或 `auth.json`。正式签名版本已完成 Developer ID signing、Apple notarization 和 stapling。
+Codex 配置应用需要用户明确确认；不会改写 `auth.json`。正式签名版本已完成 Developer ID signing、Apple notarization 和 stapling。
 
 ## 截图
 
@@ -98,20 +99,28 @@ API 等价价格使用已识别模型调用和版本化本地价格目录；未�
 
 ## 账户、供应商与本地网关
 
-官方订阅继续使用可信的 `codex login`、App Server、官方 credential store 和明确账户切换；OAuth access/refresh token 不会进入网关。首页提供现有 Codex Responses loopback 网关的快捷状态与显式“开启/关闭”按钮；网关默认停止，只绑定 `127.0.0.1`，支持 `/v1/models`、`/v1/responses` 和 `/v1/responses/compact`，不转换 Claude、Gemini 或 Chat 协议。首页不展示 bearer/API Key。远程上游必须是 HTTPS 公网 origin；拒绝 redirect、私网/link-local、userinfo、query 和 fragment。客户端 bearer 不转发，请求/响应 body、header、query 和完整上游错误不持久化。配置片段需原生确认，应用不会自动编辑 `config.toml`；停止前请恢复直连配置。
+官方订阅继续使用可信的 `codex login`、App Server、官方 credential store 和明确账户切换；官方 OAuth token 不会进入 CLIProxyAPI。三个信任域——Codex 配置编排、官方 Codex OAuth、CLIProxyAPI OAuth——只交换不透明档案 ID 和状态。可选反代改为独立版本的 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 预编译 sidecar，Codex Manager 不编译或嵌入其 Go 源码。
+
+CLIProxyAPI 默认停止，生成配置强制绑定 `127.0.0.1`，关闭远程管理、控制面板、动态插件、usage statistics 与请求日志，并启用 `commercial-mode`。本地代理支持用户导入的 CLIProxyAPI OAuth 档案池（`codex`、`claude`、`antigravity`、`kimi`、`xai`）或一个外部 OpenAI-compatible API-key 上游。OAuth 文件只由原生选择器导入并存入独立 Keychain；Management API 与 OAuth callback 不向 WebView 开放。桌面主体与内核版本独立；安装校验和事务恢复规则保持不变。
+
+当前预编译内核无法禁止上游 redirect 或锁定已验证 DNS/IP，因此任意自定义 Base URL 的 SSRF/DNS rebinding 边界不能继承原 Rust 网关。在上游或受信任架构层提供这些强制项前，该反代集成仍是未发布技术原型，不得进入正式发布。
+
+API Key 静态保存在 Keychain；启动 sidecar 时才复制到应用私有运行配置。OAuth 档案投影到随机 `0700` auth-dir 与 `0600` 文件；正常停止前执行 provider/identity/CAS checkpoint 后再清理，崩溃 pending 证据会 fail closed，确认无 orphan 后才恢复。Codex 配置使用官方 `model_providers.<id>.auth.command`，仅保存 app binary path 与 allowlisted opaque secret ref；私有 journal 支持恢复并在文件漂移时拒绝覆盖。`verified` 只表示写后文件复核，不代表 Codex 已成功请求上游。
+
+每次启动使用随机 runtime session，并在启动前确认 loopback 端口未被占用；正常停止会回收自己持有的 child 并删除 session。macOS 强制杀死主应用仍可能留下 sidecar，下一次启动会 fail closed，不会按名称或未验证 PID 广泛终止；跨重启 ownership/PID 安全恢复仍是发布阻断项。
 
 官方订阅页面采用 cache-first：没有缓存时首次读取成功后，在 macOS 独立 Keychain 中保存包含 email 的白名单账户摘要、套餐、额度窗口和时间；后续进入页面先读取本地缓存，只有用户点击“刷新”才强制实时读取。快照超过 6 小时、刷新失败或尚未观测时必须明确显示“陈旧/上次确认/unavailable”，不以旧数据伪装实时状态；即使可信 CLI 暂时缺失，已有安全快照仍可离线显示。不保存 token、原始 JSON、授权 URL 或错误正文。
 
 Codex 配置页面聚焦供应商、网关与配置预览，已移除未开放的“全局提示词”“插件与市场”“会话管理”占位模块。侧栏的“本地桌面模式”同时显示应用版本和构建时间（可选短 SHA）；构建时间来自构建元数据，不代表启动时间。
 
-导入档案的切换必须由用户明确触发，且仅在 Codex 最终解析的 `cli_auth_credentials_store` 为 `file` 时支持；`keyring` 和 `auto` 模式会 fail closed。CLI 与 IDE 扩展共享活动凭据文件，切换前应先结束正在运行的 Codex 任务。
+官方档案切换必须由用户明确触发，且仅在 Codex 最终解析的 `cli_auth_credentials_store` 为 `file` 时支持；`keyring` 和 `auto` 模式会 fail closed。CLI 与 IDE 扩展共享活动凭据文件，切换前应先结束正在运行的 Codex 任务。CLIProxyAPI OAuth 档案属于独立信任域，不参与官方档案切换。
 
 ## 安全与隐私
 
 - 默认本地优先：没有产品遥测、云同步或自动上传。
-- 不持久化消息正文、prompt、reasoning 文本、tool 参数/结果、`Authorization`、Cookie、OAuth code、API Key、gateway bearer、完整环境变量、请求 query 或原始 OAuth/App Server 响应。
+- 不持久化消息正文、prompt、reasoning 文本、tool 参数/结果、`Authorization`、Cookie、OAuth code、access/refresh token、完整环境变量、请求 query 或原始 OAuth/App Server 响应。唯一明确例外是 sidecar 运行期间所需的凭据会存在于 CLIProxyAPI 应用私有 `0600` 运行文件中。
 - OAuth profile secret 在受限原生流程验证并存入应用专用 macOS Keychain；SQLite/WebView DTO 只暴露非秘密元数据。
-- OTel 和网关为可选、认证、有限边界的本地 listener；网关在读取 body 前校验 host/origin/bearer，使用 header allowlist、上限并禁用 redirect。
+- OTel 与 CLIProxyAPI listener 都需要用户显式开启并仅绑定本机；CLIProxyAPI 生成配置 fail closed，Management 与 OAuth 控制面不对本应用开放。
 - AGENTS 写入要求授权根目录、canonical path、符号链接和外部修改检查及原子替换。
 - Release CI 包含固定 action SHA、secret scan、SBOM/许可证、资产哈希和受保护签名流程。
 
@@ -125,7 +134,7 @@ Codex 配置页面聚焦供应商、网关与配置预览，已移除未开放�
 - `tested`：Release/复验 workflow、自动化测试、构建、签名、公证、stapling 和公开资产检查按发布证据通过。
 - `published`：只有非 draft、非 prerelease 且完成 published-mode 复验的 GitHub Release 才属于稳定通道。
 - `observed`：本地 mock/loopback、桌面/浏览器 demo 和公开 Release 复验已有证据。
-- `accepted`：真实 API Key 供应商 E2E、费用确认、手动配置往返/恢复，以及从可信旧签名应用升级安装仍是独立验收工作。
+- `accepted`：真实 OAuth/API Key 上游 E2E、费用确认、事务性配置应用/恢复，以及从可信旧签名应用升级安装仍是独立验收工作。
 - `cleanup`：Release job 会在上传前删除临时签名材料；本地测试凭据/配置仍需操作者清理。
 
 各版本的 source SHA、workflow、资产和验收限制见[发布运行手册](docs/release.md)。版本化 note 保留 tag 时的门禁快照，后续公开复验证据单独记录。早期 `v0.5.0-beta.1` 仍是 unsigned community prerelease，不是稳定下载。

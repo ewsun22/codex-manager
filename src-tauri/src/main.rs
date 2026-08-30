@@ -4,11 +4,13 @@ mod account;
 mod agents;
 mod auth_profiles;
 mod auth_switch;
+mod codex_config;
 mod otel;
 mod platform;
 mod pricing;
 mod projects;
 mod provider_gateway;
+mod proxy_auth;
 mod safe_fs;
 
 use anyhow::{Context, anyhow};
@@ -26,7 +28,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeSet, VecDeque},
     fs::{self, File},
-    io::{BufRead, BufReader, Read, Seek, SeekFrom},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{Mutex, mpsc},
     thread,
@@ -76,10 +78,13 @@ struct AppState {
     login: Mutex<account::LoginRuntime>,
     auth_executable: Mutex<Option<platform::TrustedCodexAuthExecutable>>,
     auth_profiles: std::sync::Arc<auth_profiles::AuthProfileStore>,
+    proxy_auth_profiles: std::sync::Arc<proxy_auth::ProxyAuthStore>,
     auth_profile_revisions: Mutex<VecDeque<AuthProfileRevision>>,
+    codex_config_gate: Mutex<()>,
     gateway_transition_gate: tokio::sync::Mutex<()>,
     gateway: Mutex<Option<provider_gateway::ServerHandle>>,
     gateway_error: Mutex<Option<String>>,
+    gateway_installing: Mutex<bool>,
 }
 
 #[derive(Clone)]
@@ -774,6 +779,230 @@ fn account_read_executable(trusted_executable: Result<Option<PathBuf>, String>) 
     trusted_executable.ok().flatten()
 }
 
+fn managed_codex_home(state: &AppState) -> Result<PathBuf, String> {
+    state
+        .store
+        .lock()
+        .map_err(lock_err)?
+        .settings()
+        .map_err(display_error)?
+        .codex_homes
+        .into_iter()
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| "尚未配置 Codex home，无法管理 config.toml。".into())
+}
+
+fn normalize_codex_config_profile(
+    state: &AppState,
+    mut profile: codex_config::ConfigProfile,
+) -> Result<codex_config::ConfigProfile, String> {
+    let store = state.store.lock().map_err(lock_err)?;
+    match profile.kind {
+        codex_config::ConfigProfileKind::OfficialDirect => {
+            profile.base_url = None;
+            profile.model = None;
+            profile.reasoning_effort = None;
+            profile.secret_ref = None;
+        }
+        codex_config::ConfigProfileKind::LocalCliproxy => {
+            let port = store.codex_gateway_port().map_err(display_error)?;
+            profile.base_url = Some(format!("http://127.0.0.1:{port}/v1"));
+            profile.secret_ref = Some("local-proxy-client".into());
+        }
+        codex_config::ConfigProfileKind::ExternalCompatible => {
+            let provider_id = profile
+                .secret_ref
+                .as_deref()
+                .and_then(|value| value.strip_prefix("external-provider:"))
+                .ok_or_else(|| "请选择已保存的外部供应商。".to_string())?;
+            let provider = store
+                .codex_provider(provider_id)
+                .map_err(display_error)?
+                .ok_or_else(|| "外部供应商不存在。".to_string())?;
+            profile.base_url = Some(provider.base_url);
+            profile.model = Some(provider.model);
+            profile.reasoning_effort = Some(provider.reasoning_effort);
+        }
+    }
+    Ok(profile)
+}
+
+#[tauri::command]
+fn get_codex_config_snapshot(
+    state: State<'_, AppState>,
+) -> Result<codex_config::ConfigSnapshot, String> {
+    let home = managed_codex_home(&state)?;
+    let store = state.store.lock().map_err(lock_err)?;
+    codex_config::snapshot(&store, &home, &state.data_dir)
+}
+
+#[tauri::command]
+fn save_codex_config_profile(
+    state: State<'_, AppState>,
+    profile: codex_config::ConfigProfile,
+) -> Result<codex_config::ConfigProfile, String> {
+    let _guard = state
+        .codex_config_gate
+        .try_lock()
+        .map_err(|_| "Codex 配置正在修改，请稍后重试。".to_string())?;
+    let profile = normalize_codex_config_profile(&state, profile)?;
+    let store = state.store.lock().map_err(lock_err)?;
+    codex_config::save_profile(&store, profile)
+}
+
+#[tauri::command]
+fn delete_codex_config_profile(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<bool, String> {
+    let _guard = state
+        .codex_config_gate
+        .try_lock()
+        .map_err(|_| "Codex 配置正在修改，请稍后重试。".to_string())?;
+    let store = state.store.lock().map_err(lock_err)?;
+    codex_config::delete_profile(&store, &profile_id)
+}
+
+#[tauri::command]
+fn preview_codex_config_profile(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<codex_config::ConfigPreview, String> {
+    let home = managed_codex_home(&state)?;
+    let store = state.store.lock().map_err(lock_err)?;
+    codex_config::preview_profile(&store, &home, &profile_id)
+}
+
+#[tauri::command]
+fn apply_codex_config_profile(
+    state: State<'_, AppState>,
+    profile_id: String,
+    expected_revision: Option<String>,
+) -> Result<codex_config::ConfigApplyResult, String> {
+    let _guard = state
+        .codex_config_gate
+        .try_lock()
+        .map_err(|_| "Codex 配置正在修改，请稍后重试。".to_string())?;
+    let home = managed_codex_home(&state)?;
+    let store = state.store.lock().map_err(lock_err)?;
+    codex_config::apply_profile(
+        &store,
+        &home,
+        &state.data_dir,
+        &profile_id,
+        expected_revision.as_deref(),
+    )
+}
+
+#[tauri::command]
+fn restore_codex_config(
+    state: State<'_, AppState>,
+    expected_revision: Option<String>,
+) -> Result<codex_config::ConfigApplyResult, String> {
+    let _guard = state
+        .codex_config_gate
+        .try_lock()
+        .map_err(|_| "Codex 配置正在修改，请稍后重试。".to_string())?;
+    let home = managed_codex_home(&state)?;
+    let store = state.store.lock().map_err(lock_err)?;
+    codex_config::restore_config(&store, &home, &state.data_dir, expected_revision.as_deref())
+}
+
+#[tauri::command]
+fn list_proxy_auth_profiles(
+    state: State<'_, AppState>,
+    include_deleted: Option<bool>,
+) -> Result<proxy_auth::ProxyAuthProfileList, String> {
+    state
+        .proxy_auth_profiles
+        .list(include_deleted.unwrap_or(false))
+        .map_err(display_error)
+}
+
+#[tauri::command]
+async fn import_proxy_auth_profile(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    label: String,
+) -> Result<Option<proxy_auth::ImportOutcome>, String> {
+    let Some(path) = pick_proxy_auth_file(&app).await? else {
+        return Ok(None);
+    };
+    let _transition_guard = state
+        .gateway_transition_gate
+        .try_lock()
+        .map_err(|_| "本地反代正在启动或停止；请稍后导入。".to_string())?;
+    if state.gateway.lock().map_err(lock_err)?.is_some() {
+        return Err("本地反代运行中不能变更 OAuth 档案；请先停止服务。".into());
+    }
+    let store = std::sync::Arc::clone(&state.proxy_auth_profiles);
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = auth_switch::read_native_import(&path)?;
+        store
+            .import(&source, Some(&label))
+            .map(Some)
+            .map_err(display_error)
+    })
+    .await
+    .map_err(|_| "CLIProxyAPI OAuth 档案导入任务异常结束。".to_string())?
+}
+
+#[tauri::command]
+fn set_proxy_auth_profile_enabled(
+    state: State<'_, AppState>,
+    profile_id: String,
+    enabled: bool,
+) -> Result<proxy_auth::ProxyAuthProfile, String> {
+    let _transition_guard = state
+        .gateway_transition_gate
+        .try_lock()
+        .map_err(|_| "本地反代正在启动或停止；请稍后重试。".to_string())?;
+    if state.gateway.lock().map_err(lock_err)?.is_some() {
+        return Err("本地反代运行中不能变更 OAuth 档案。".into());
+    }
+    state
+        .proxy_auth_profiles
+        .enable(&profile_id, enabled)
+        .map_err(display_error)
+}
+
+#[tauri::command]
+fn delete_proxy_auth_profile(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<proxy_auth::ProxyAuthProfile, String> {
+    let _transition_guard = state
+        .gateway_transition_gate
+        .try_lock()
+        .map_err(|_| "本地反代正在启动或停止；请稍后重试。".to_string())?;
+    if state.gateway.lock().map_err(lock_err)?.is_some() {
+        return Err("本地反代运行中不能删除 OAuth 档案。".into());
+    }
+    state
+        .proxy_auth_profiles
+        .soft_delete(&profile_id)
+        .map_err(display_error)
+}
+
+#[tauri::command]
+fn restore_proxy_auth_profile(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<proxy_auth::ProxyAuthProfile, String> {
+    let _transition_guard = state
+        .gateway_transition_gate
+        .try_lock()
+        .map_err(|_| "本地反代正在启动或停止；请稍后重试。".to_string())?;
+    if state.gateway.lock().map_err(lock_err)?.is_some() {
+        return Err("本地反代运行中不能恢复 OAuth 档案。".into());
+    }
+    state
+        .proxy_auth_profiles
+        .restore(&profile_id)
+        .map_err(display_error)
+}
+
 #[tauri::command]
 fn list_codex_providers(
     state: State<'_, AppState>,
@@ -800,6 +1029,17 @@ fn save_codex_provider(
         return Err("该供应商正在被本地反代使用；请先停止服务后再保存。".into());
     }
     let store = state.store.lock().map_err(lock_err)?;
+    if let Some(provider_id) = input.id.as_deref() {
+        let secret_ref = format!("external-provider:{provider_id}");
+        if store
+            .codex_config_profiles()
+            .map_err(display_error)?
+            .iter()
+            .any(|profile| profile.active && profile.secret_ref.as_deref() == Some(&secret_ref))
+        {
+            return Err("该供应商正被 Codex 活动配置使用；请先切换路由。".into());
+        }
+    }
     provider_gateway::save(&store, input)
 }
 
@@ -821,6 +1061,15 @@ fn delete_codex_provider(
     }
     drop(gateway);
     let store = state.store.lock().map_err(lock_err)?;
+    let secret_ref = format!("external-provider:{provider_id}");
+    if store
+        .codex_config_profiles()
+        .map_err(display_error)?
+        .iter()
+        .any(|profile| profile.secret_ref.as_deref() == Some(&secret_ref))
+    {
+        return Err("该供应商仍被 Codex 配置档案引用；请先删除或改用其他档案。".into());
+    }
     provider_gateway::delete(&store, &provider_id)
 }
 
@@ -828,16 +1077,23 @@ fn delete_codex_provider(
 fn get_codex_gateway_status(
     state: State<'_, AppState>,
 ) -> Result<provider_gateway::GatewayStatus, String> {
+    codex_gateway_status_inner(&state)
+}
+
+fn codex_gateway_status_inner(state: &AppState) -> Result<provider_gateway::GatewayStatus, String> {
     let port = {
         let store = state.store.lock().map_err(lock_err)?;
         store.codex_gateway_port().map_err(display_error)?
     };
     let error = state.gateway_error.lock().map_err(lock_err)?.clone();
     let gateway = state.gateway.lock().map_err(lock_err)?;
+    let installing = *state.gateway_installing.lock().map_err(lock_err)?;
     Ok(gateway
         .as_ref()
         .map(|server| server.status())
-        .unwrap_or_else(|| provider_gateway::stopped_status(port, error)))
+        .unwrap_or_else(|| {
+            provider_gateway::stopped_status_with_core(&state.data_dir, port, error, installing)
+        }))
 }
 
 #[tauri::command]
@@ -858,20 +1114,41 @@ fn update_codex_gateway_port(
             return Err("本地反代正在运行；请先停止服务后再修改端口。".into());
         }
     }
-    state
-        .store
-        .lock()
-        .map_err(lock_err)?
-        .save_codex_gateway_port(port)
-        .map_err(display_error)?;
+    {
+        let store = state.store.lock().map_err(lock_err)?;
+        let previous_port = store.codex_gateway_port().map_err(display_error)?;
+        let mut local_profile = codex_config::get_profile(&store, "local-cliproxy")?;
+        if local_profile
+            .as_ref()
+            .is_some_and(|profile| profile.is_active)
+        {
+            return Err(
+                "当前 Codex 正在使用本地 CLIProxyAPI 档案；请先恢复直连再修改端口。".into(),
+            );
+        }
+        store.save_codex_gateway_port(port).map_err(display_error)?;
+        if let Some(profile) = local_profile.as_mut() {
+            profile.base_url = Some(format!("http://127.0.0.1:{port}/v1"));
+            if let Err(error) = codex_config::save_profile(&store, profile.clone()) {
+                let _ = store.save_codex_gateway_port(previous_port);
+                return Err(error);
+            }
+        }
+    }
     *state.gateway_error.lock().map_err(lock_err)? = None;
-    Ok(provider_gateway::stopped_status(port, None))
+    Ok(provider_gateway::stopped_status_with_core(
+        &state.data_dir,
+        port,
+        None,
+        false,
+    ))
 }
 
 #[tauri::command]
 fn start_codex_gateway(
     state: State<'_, AppState>,
-    provider_id: String,
+    source: String,
+    provider_id: Option<String>,
 ) -> Result<provider_gateway::GatewayStatus, String> {
     let _transition_guard = state
         .gateway_transition_gate
@@ -881,9 +1158,33 @@ fn start_codex_gateway(
     if gateway.is_some() {
         return Err("本地反代已在运行；请先停止后再切换供应商。".into());
     }
-    let store = state.store.lock().map_err(lock_err)?;
-    let port = store.codex_gateway_port().map_err(display_error)?;
-    match tauri::async_runtime::block_on(provider_gateway::start(&store, &provider_id, port)) {
+    let port = state
+        .store
+        .lock()
+        .map_err(lock_err)?
+        .codex_gateway_port()
+        .map_err(display_error)?;
+    let started = match source.as_str() {
+        "oauth-pool" => tauri::async_runtime::block_on(provider_gateway::start_oauth(
+            port,
+            &state.data_dir,
+            std::sync::Arc::clone(&state.proxy_auth_profiles),
+        )),
+        "external-provider" => {
+            let provider_id = provider_id
+                .as_deref()
+                .ok_or_else(|| "请选择一个外部供应商。".to_string())?;
+            let store = state.store.lock().map_err(lock_err)?;
+            tauri::async_runtime::block_on(provider_gateway::start(
+                &store,
+                provider_id,
+                port,
+                &state.data_dir,
+            ))
+        }
+        _ => return Err("本地反代启动来源无效。".into()),
+    };
+    match started {
         Ok(server) => {
             let status = server.status();
             *gateway = Some(server);
@@ -922,24 +1223,51 @@ async fn stop_codex_gateway(
         .codex_gateway_port()
         .map_err(display_error)?;
     *state.gateway_error.lock().map_err(lock_err)? = None;
-    Ok(provider_gateway::stopped_status(port, None))
+    Ok(provider_gateway::stopped_status_with_core(
+        &state.data_dir,
+        port,
+        None,
+        false,
+    ))
 }
 
 #[tauri::command]
-async fn reveal_codex_gateway_setup(
-    app: AppHandle,
+fn check_latest_cliproxy_core(
     state: State<'_, AppState>,
-) -> Result<provider_gateway::GatewaySetup, String> {
-    if !confirm_native(&app, "显示本地反代配置", "此操作会显示仅用于保护本机 loopback 端口的 bearer token。请勿将该配置或 token 分享给他人。", "显示配置").await? {
-        return Err("未显示本地反代配置。".into());
+) -> Result<provider_gateway::GatewayStatus, String> {
+    let _transition_guard = state
+        .gateway_transition_gate
+        .try_lock()
+        .map_err(|_| "本地反代正在启动、停止或更新；请稍后重试。".to_string())?;
+    tauri::async_runtime::block_on(provider_gateway::check_latest_core(&state.data_dir))?;
+    codex_gateway_status_inner(&state)
+}
+
+#[tauri::command]
+fn install_latest_cliproxy_core(
+    state: State<'_, AppState>,
+) -> Result<provider_gateway::GatewayStatus, String> {
+    let _transition_guard = state
+        .gateway_transition_gate
+        .try_lock()
+        .map_err(|_| "本地反代正在启动、停止或更新；请稍后重试。".to_string())?;
+    if state.gateway.lock().map_err(lock_err)?.is_some() {
+        return Err("反代运行中不能更新 CLIProxyAPI 内核；请先关闭反代。".into());
     }
-    state
-        .gateway
-        .lock()
-        .map_err(lock_err)?
-        .as_ref()
-        .map(|server| server.setup())
-        .ok_or_else(|| "本地反代尚未启动。".into())
+    *state.gateway_installing.lock().map_err(lock_err)? = true;
+    let install =
+        tauri::async_runtime::block_on(provider_gateway::install_latest_core(&state.data_dir));
+    *state.gateway_installing.lock().map_err(lock_err)? = false;
+    match install {
+        Ok(()) => {
+            *state.gateway_error.lock().map_err(lock_err)? = None;
+            codex_gateway_status_inner(&state)
+        }
+        Err(error) => {
+            *state.gateway_error.lock().map_err(lock_err)? = Some(error.clone());
+            Err(error)
+        }
+    }
 }
 
 #[tauri::command]
@@ -1452,10 +1780,18 @@ fn resolve_auth_profile_revision(
 }
 
 async fn pick_auth_file(app: &AppHandle) -> Result<Option<PathBuf>, String> {
+    pick_json_file(app, "Codex 认证文件").await
+}
+
+async fn pick_proxy_auth_file(app: &AppHandle) -> Result<Option<PathBuf>, String> {
+    pick_json_file(app, "CLIProxyAPI OAuth 认证文件").await
+}
+
+async fn pick_json_file(app: &AppHandle, label: &str) -> Result<Option<PathBuf>, String> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
-        .add_filter("Codex 认证文件", &["json"])
+        .add_filter(label, &["json"])
         .pick_file(move |selected| {
             let _ = sender.send(selected);
         });
@@ -3137,6 +3473,48 @@ fn initialize_settings(store: &Store) -> Result<(), String> {
     store.save_settings(&settings).map_err(display_error)
 }
 
+fn ensure_default_codex_config_profiles(store: &Store) -> Result<(), String> {
+    let now = Utc::now().to_rfc3339();
+    if codex_config::get_profile(store, "official-direct")?.is_none() {
+        codex_config::save_profile(
+            store,
+            codex_config::ConfigProfile {
+                id: "official-direct".into(),
+                name: "官方直连".into(),
+                kind: codex_config::ConfigProfileKind::OfficialDirect,
+                base_url: None,
+                model: None,
+                reasoning_effort: None,
+                secret_ref: None,
+                is_active: false,
+                is_verified: false,
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            },
+        )?;
+    }
+    if codex_config::get_profile(store, "local-cliproxy")?.is_none() {
+        let port = store.codex_gateway_port().map_err(display_error)?;
+        codex_config::save_profile(
+            store,
+            codex_config::ConfigProfile {
+                id: "local-cliproxy".into(),
+                name: "本地 CLIProxyAPI".into(),
+                kind: codex_config::ConfigProfileKind::LocalCliproxy,
+                base_url: Some(format!("http://127.0.0.1:{port}/v1")),
+                model: Some("gpt-5.6-sol".into()),
+                reasoning_effort: Some("high".into()),
+                secret_ref: Some("local-proxy-client".into()),
+                is_active: false,
+                is_verified: false,
+                created_at: now.clone(),
+                updated_at: now,
+            },
+        )?;
+    }
+    Ok(())
+}
+
 fn default_codex_homes() -> Vec<String> {
     BaseDirs::new()
         .map(|base| base.home_dir().join(".codex"))
@@ -3233,6 +3611,9 @@ fn display_error(error: impl std::fmt::Display) -> String {
 }
 
 fn main() {
+    if let Some(exit_code) = run_credential_helper() {
+        std::process::exit(exit_code);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -3244,7 +3625,9 @@ fn main() {
             let database_path = data_dir.join("codex-manager.db");
             let store = Store::open(&database_path)?;
             initialize_settings(&store).map_err(anyhow::Error::msg)?;
+            ensure_default_codex_config_profiles(&store).map_err(anyhow::Error::msg)?;
             let settings = store.settings()?;
+            let startup_codex_home = settings.codex_homes.first().map(PathBuf::from);
             let persisted_capability = store.cli_schema_capability()?.map(capability_from_row);
             let state = AppState {
                 store: Mutex::new(store),
@@ -3265,14 +3648,24 @@ fn main() {
                 login: Mutex::new(account::LoginRuntime::default()),
                 auth_executable: Mutex::new(None),
                 auth_profiles: std::sync::Arc::new(auth_profiles::AuthProfileStore::load()),
+                proxy_auth_profiles: std::sync::Arc::new(proxy_auth::ProxyAuthStore::load()),
                 auth_profile_revisions: Mutex::new(VecDeque::new()),
+                codex_config_gate: Mutex::new(()),
                 gateway_transition_gate: tokio::sync::Mutex::new(()),
                 gateway: Mutex::new(None),
                 gateway_error: Mutex::new(None),
+                gateway_installing: Mutex::new(false),
             };
             app.manage(state);
             let handle = app.handle().clone();
             recover_pending_revisions(&app.state::<AppState>()).map_err(anyhow::Error::msg)?;
+            if let Some(home) = startup_codex_home {
+                let state = app.state::<AppState>();
+                if let Ok(store) = state.store.lock() {
+                    let _ =
+                        codex_config::recover_pending_transaction(&store, &home, &state.data_dir);
+                }
+            }
             restart_watcher(&handle).map_err(anyhow::Error::msg)?;
             let state = app.state::<AppState>();
             if settings.telemetry_enabled {
@@ -3322,17 +3715,55 @@ fn main() {
             activate_auth_profile,
             delete_auth_profile,
             restore_auth_profile,
+            get_codex_config_snapshot,
+            save_codex_config_profile,
+            delete_codex_config_profile,
+            preview_codex_config_profile,
+            apply_codex_config_profile,
+            restore_codex_config,
+            list_proxy_auth_profiles,
+            import_proxy_auth_profile,
+            set_proxy_auth_profile_enabled,
+            delete_proxy_auth_profile,
+            restore_proxy_auth_profile,
             list_codex_providers,
             save_codex_provider,
             delete_codex_provider,
             get_codex_gateway_status,
             update_codex_gateway_port,
+            check_latest_cliproxy_core,
+            install_latest_cliproxy_core,
             start_codex_gateway,
             stop_codex_gateway,
-            reveal_codex_gateway_setup,
         ])
         .run(tauri::generate_context!())
         .expect("Codex Manager 运行失败");
+}
+
+/// Native-only entrypoint used by Codex `model_providers.<id>.auth.command`.
+/// It accepts exactly one allowlisted opaque reference and never initializes
+/// Tauri, SQLite or the WebView.
+fn run_credential_helper() -> Option<i32> {
+    let mut arguments = std::env::args_os().skip(1);
+    let first = arguments.next()?;
+    if first != "--codex-manager-credential" {
+        return None;
+    }
+    let Some(secret_ref) = arguments.next().and_then(|value| value.into_string().ok()) else {
+        return Some(2);
+    };
+    if arguments.next().is_some() {
+        return Some(2);
+    }
+    let Ok(secret) = provider_gateway::credential_helper_secret(&secret_ref) else {
+        return Some(1);
+    };
+    if std::io::stdout().write_all(secret.as_bytes()).is_err()
+        || std::io::stdout().write_all(b"\n").is_err()
+    {
+        return Some(1);
+    }
+    Some(0)
 }
 
 #[cfg(test)]
@@ -3622,10 +4053,13 @@ mod tests {
             login: Mutex::new(account::LoginRuntime::default()),
             auth_executable: Mutex::new(None),
             auth_profiles: std::sync::Arc::new(auth_profiles::AuthProfileStore::load()),
+            proxy_auth_profiles: std::sync::Arc::new(proxy_auth::ProxyAuthStore::load()),
             auth_profile_revisions: Mutex::new(VecDeque::new()),
+            codex_config_gate: Mutex::new(()),
             gateway_transition_gate: tokio::sync::Mutex::new(()),
             gateway: Mutex::new(None),
             gateway_error: Mutex::new(None),
+            gateway_installing: Mutex::new(false),
         };
         let event = |ordinal: i64, kind: &str, payload: serde_json::Value| {
             serde_json::json!({
@@ -3771,10 +4205,13 @@ mod tests {
             login: Mutex::new(account::LoginRuntime::default()),
             auth_executable: Mutex::new(None),
             auth_profiles: std::sync::Arc::new(auth_profiles::AuthProfileStore::load()),
+            proxy_auth_profiles: std::sync::Arc::new(proxy_auth::ProxyAuthStore::load()),
             auth_profile_revisions: Mutex::new(VecDeque::new()),
+            codex_config_gate: Mutex::new(()),
             gateway_transition_gate: tokio::sync::Mutex::new(()),
             gateway: Mutex::new(None),
             gateway_error: Mutex::new(None),
+            gateway_installing: Mutex::new(false),
         };
 
         let created = create_agents_inner(

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-restore-proxy-auth-profile"
+description = "Enables the restore_proxy_auth_profile command without any pre-configured scope."
+commands.allow = ["restore_proxy_auth_profile"]
+
+[[permission]]
+identifier = "deny-restore-proxy-auth-profile"
+description = "Denies the restore_proxy_auth_profile command without any pre-configured scope."
+commands.deny = ["restore_proxy_auth_profile"]

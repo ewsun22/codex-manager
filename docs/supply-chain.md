@@ -15,7 +15,19 @@
 
 实现基于 OpenAI 官方 Responses、Codex config reference 与 App Server 契约 clean-room 编写。若未来直接复用上游任何代码或测试数据，必须先逐文件确认 provenance/许可证，更新 `THIRD_PARTY_NOTICES.md`、SBOM 与许可证清单，并重新运行依赖与供应链审计；AI Toolbox 根 MIT 不构成其嵌套来源的自动许可结论。
 
-`v0.6.0` 首页 API 接入卡只把本机已安装 EasyCLIProxyAPI 的公开可见界面用作信息层级参考；未读取、反编译、复制或运行其源码、资源、样式、图标、品牌、协议转换或生命周期实现。Codex Manager 仍复用自身既有的 Responses-only loopback 网关、安全模型和组件系统，因此 EasyCLIProxyAPI 不是构建依赖、运行依赖或派生代码来源。
+`v0.6.0` 首页 API 接入卡只把本机已安装 EasyCLIProxyAPI 的公开可见界面用作信息层级参考；该已发布版本没有复制或运行其源码、资源、样式、图标、品牌、协议转换或生命周期实现。后续未发布切片研究了 EasyCLIProxyAPI 固定 commit `79b50b7a2b76607e6ccd01966f4b6d4430a31dcd` 的 sidecar 产品行为，但 clean-room 实现自己的下载、校验、目录、进程和 UI 逻辑；EasyCLIProxyAPI 仍不是构建/运行依赖或派生代码来源。
+
+## CLIProxyAPI 运行时依赖
+
+未发布反代切片把 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 作为用户显式下载的独立预编译运行时，协议与桌面主体分别版本化；本仓库不编译、链接、复制或修改其 Go 源码，也不把二进制打入 Codex Manager 安装包。审计基线为 `v7.2.145`、tag commit `d9cea8904b14fbbebb77ef26e98ef08f6b48a724`，上游使用 MIT License。
+
+运行时检查只接受 `router-for-me/CLIProxyAPI` 官方非 draft、非 prerelease 最新 Release，按 OS/arch 选择精确 `CLIProxyAPI_<version>_<os>_<arch>` 资产；GitHub asset `sha256:` digest 与 `checksums.txt` 必须同时存在并匹配。下载、解压和文件类型有界，安装使用应用私有 staging，失败保留旧 core。检查和安装必须由用户显式触发，不能由后台静默执行。
+
+这不是完整供应链身份保证：上游没有 detached signature、Developer ID、公证、SBOM、Sigstore/SLSA provenance 或可复现构建证明，checksum 与 asset digest 也位于同一 GitHub 信任域；release workflow 还会从 mutable model catalog 拉取数据。主应用的 Developer ID/Tauri updater 签名不覆盖运行时下载的第三方二进制。正式发布前必须建立 Codex Manager 维护的审核 manifest，固定 version/tag commit/asset ID/name/size/SHA-256/平台/兼容版本并处理摘要漂移；在此之前跟随上游 latest 仅属于未发布技术原型。
+
+安全审计还确认 CLIProxyAPI OAuth callback 可绑定全网卡、OAuth token 会写入 auth-dir，Management API 可读取原始配置/认证文件并发起通用请求，且预编译版存在无法由当前配置关闭的后台版本请求。本集成只允许由原生层导入并隔离保存 CLIProxyAPI OAuth 档案，运行时投影到随机私有 auth-dir；Management API 与 OAuth callback 不向 WebView 开放，配置仍强制 loopback、`commercial-mode` 和日志/管理/插件关闭。
+
+这些限制仍不足以达到原 Rust 网关的出站边界：当前上游 `openai-compatibility` 使用的 HTTP client 没有可禁止 redirect 或锁定已验证 DNS/IP 的配置。一次运行观测不能排除任意自定义 Base URL 经 DNS rebinding 或 3xx 将请求正文转发到其他 origin。因此，在上游提供强制禁止 redirect 与 DNS/IP pinning，或本项目引入可强制这些规则的受信任架构层前，“支持任意 OpenAI-compatible Base URL”是当前架构的硬性发布 No-Go，不能用运行观测代替。供应链 manifest 与这一网络安全门是两项独立的发布条件。
 
 `verify-release.sh` 不只检查 `.app`/`.dmg`；它还强制要求 npm 与三个 Rust package 的 SBOM、内层 SBOM 哈希、Cargo/npm 许可证 JSON 和 notices，并解析 JSON、验证内层 manifest。任一文件缺失或出现 `*-unavailable.txt` 都必须失败。`main` push 的 CI 在上传 unsigned artifact 前安装固定版本工具、生成这些清单，再执行验证。
 

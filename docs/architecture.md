@@ -2,7 +2,7 @@
 
 ## 产品边界
 
-Codex Manager 是独立的 Tauri 2 桌面应用，不是 Codex 插件、系统代理或通用 API 网关。`v0.5.0` 增加一个默认停止、Codex-only、IPv4 loopback 的 OpenAI Responses 透明网关；官方订阅仍是独立的受信任 CLI/App Server/Keychain 边界。macOS 是首发平台；规范化、存储、价格、项目发现和 AGENTS 解析放在 Rust/SQLite 边界内，为后续 Windows 适配保留平台接口。
+Codex Manager 是独立的 Tauri 2 桌面应用，不是 Codex 插件、系统代理或通用 API 网关。未发布切片把旧 Rust 进程内 Responses 转发器替换为默认停止、独立版本、IPv4 loopback-only 的 CLIProxyAPI 预编译 sidecar；官方订阅仍是独立的受信任 CLI/App Server/Keychain 边界。macOS 是首发平台；规范化、存储、价格、项目发现和 AGENTS 解析放在 Rust/SQLite 边界内，为后续 Windows 适配保留平台接口。
 
 ```text
 Codex Desktop / CLI
@@ -25,7 +25,8 @@ Native picker ─ bounded JSON ─ isolated official validation ─ app-specific
 User confirm ─ config/read=file ─ revision/CAS/process lock ─ atomic `auth.json` replace ─ official post-switch verification
 
 Provider UI ─ write-only API Key IPC ─ Keychain secret + SQLite metadata
-User start ─ 127.0.0.1 Responses gateway ─ verified API-key upstream
+User install ─ official CLIProxyAPI Release ─ digest + checksums ─ private staging/core
+User start ─ private 0600 runtime config ─ managed CLIProxyAPI sidecar ─ API-key upstream
 Native confirm ─ temporary Codex provider snippet; no automatic config/auth mutation
 ```
 
@@ -66,17 +67,23 @@ OAuth 与认证 App Server 不继承任意父进程环境，只保留 HOME、用
 
 账户切换不实现请求调度，也不进入网关供应商池。Rust 从后端解析 Codex home，只接受当前用户、单硬链接且权限不宽于 `0600` 的 file 模式 `auth.json`；官方 App Server 的 `config/read` 还必须证明最终生效的 `cli_auth_credentials_store` 明确为 `file`，缺失、keyring 或 auto 都 fail closed。写操作经同进程互斥、Manager 实例间 `flock`、用户原生确认和短期 opaque revision；后端复核 SHA-256、mtime、大小、权限与文件身份后，在同目录以强制 `0600` 的临时文件原子替换，并用官方 App Server 验证活动账户。账户复核如触发官方凭据刷新，后端最多重试三次，只有前后文件戳稳定时才使用刷新后的 bytes 更新 Keychain 或回滚。任何外部改写或身份不符均拒绝；后验证或 Keychain 状态提交失败时只在仍能证明文件属于本次切换的条件下回滚。官方 CLI/IDE 不参与该 `flock` 协议，因此删除在提交前额外复核，切换/删除确认也要求先结束正在运行的 Codex 任务。
 
-### Codex provider 与本地 Responses 网关
+### Codex provider 与 CLIProxyAPI sidecar
 
 `codex_providers` 只保存随机 id、名称、规范化 Base URL、模型、reasoning effort 与时间；供应商 API Key 保存在独立 Keychain service。保存命令把 API Key 视为 write-only input，普通 list/save DTO 只返回 `hasApiKey`。删除供应商时同时删除其 Keychain item；正在被网关使用的供应商不可删除。
 
-总览只显示网关的非秘密快捷状态、端口/Endpoint、有限运行计数和显式启停动作，不展示 bearer 或 API Key。网关能力只标记为 Codex OpenAI Responses passthrough；不宣称 Claude、Gemini 或 Chat transformer。
+总览只显示本地代理的非秘密快捷状态、OpenAI/Claude/Gemini 兼容接入地址、内核版本、PID 和显式开关，不展示 bearer 或 API Key。代理可选择 CLIProxyAPI OAuth 池或 API-key `openai-compatibility` 上游；多协议 endpoint 是内核 client 入口，实际可用性取决于所选上游。
 
-网关由用户显式选择供应商后启动，固定绑定 `127.0.0.1:<persisted-port>`，应用退出或用户停止时释放 listener。启动、停止、改端口、保存和删除 provider 共用一个 transition gate，低层 IPC 也不能在停止等待期间抢跑。停止命令最多等待 graceful shutdown 3 秒，必要时中止 task，只有确认 task 已结束后才返回 stopped。每次安装的本机 bearer 位于 Keychain/原生运行时；除显式 reveal command 生成的完整 provider snippet 外，状态 DTO、SQLite 和日志均不包含它。reveal 先显示 macOS 原生确认；应用不会自动读写 `config.toml` 或 `auth.json`，因此本切片也不声称提供崩溃后配置恢复。
+桌面主体与 CLIProxyAPI 使用独立版本。版本检查与安装只能由用户显式触发；Rust 只读取 `router-for-me/CLIProxyAPI` 官方非 draft、非 prerelease 最新 Release，为当前 OS/arch 选择与稳定三段式 tag 完全一致的精确命名资产，并要求 GitHub Release asset `sha256:` digest 与官方 `checksums.txt` 对同一资产给出相同摘要。资产下载上限 128 MiB、解压上限 512 MiB；tar/zip 路径必须相对且无 `..`，链接与额外可执行文件拒绝。解压在应用私有 `0700` staging 中进行，校验完成后才切换 core；安装目录切换与健康失败回滚都会先持久化事务标记，下次读取状态、启动或安装前会恢复中断前最后已提交的目录与匹配元数据。上一版另外保留到新内核真正通过 `/healthz`，启动失败会恢复旧目录与版本元数据。应用不下载或编译 Go 源码。
 
-路由 allowlist 只含 `/v1/responses`、`/v1/responses/compact` 和受保护的本机辅助端点。Host/Origin/constant-time bearer 在 body 前校验；body 上限 4 MiB，并发上限 4，上游响应头等待上限 20 秒，流式响应 idle 上限 30 秒。超时释放并发槽并只返回通用失败，不泄露上游正文。客户端 Authorization 不会出站，Rust 只在发送到固定上游 origin 时注入 Keychain API Key；响应只透传 status、Content-Type、Cache-Control、x-request-id 与字节流。请求/响应 body、header、query 和原始上游错误不落盘。
+用户显式选择 API-key 上游或 OAuth 凭据池后，Rust 从各自隔离的 Keychain service 读取秘密，为每次启动生成随机私有 `0700` runtime session；OAuth 模式再投影随机 `auth-dir` 与 `0600` 文件。配置固定 `host: 127.0.0.1`、`commercial-mode:true`、非空 client key、日志/usage stats/retry 关闭，并禁用 remote management、control panel、plugins。启动前独占验证 loopback 端口，启动成功要求新 child 持续存活且 `/healthz` 返回成功。正常停止先 checkpoint 内核原地 refresh 后的 provider/identity/CAS，再精确删除 runtime；发现 pending 崩溃证据时 fail closed，确认无 orphan 后才恢复。状态 DTO 的 request/failed/in-flight 因 usage stats 关闭而返回 `unavailable`。
 
-Base URL 只接受无 userinfo/query/fragment 的 `/v1` origin。远程上游必须使用 HTTPS，并在保存/启动时拒绝任何解析到 loopback、私网、link-local、unique-local、unspecified 或 multicast 的地址；HTTP 只允许显式 localhost/loopback 开发上游。HTTP client 禁用 redirect，并把已验证 DNS 结果固定给该 client，避免将供应商 API Key 带到另一 origin。当前是 Responses identity passthrough，不实现 Chat/Anthropic/Gemini transformer、重试/故障转移、请求体日志或官方 OAuth token proxy。
+应用被 `SIGKILL` 或系统强制终止时，pending runtime/checkpoint 是恢复证据；下次启动不会盲删或按名称强杀进程，而是先验证端口、ownership 与 checkpoint 状态，无法证明安全归属就 fail closed。
+
+CLIProxyAPI 只能从文件读取运行时凭据，因此 API Key 或 OAuth token 的静态来源分别是隔离 Keychain，运行期间物化到私有配置/auth-dir。这些运行文件不得进入 SQLite、WebView、日志或备份；正常停止前先 checkpoint，再精确清理。Codex 配置由独立编排器使用 `auth.command` 管理，不改写 `auth.json`。
+
+CLIProxyAPI Management API 与 OAuth callback 不向 WebView 开放：OAuth 档案仅通过原生文件选择器导入并存入 `cc.codex.manager.cliproxy-auth.v1`，支持当前已理解的 provider 格式；运行时按需投影，官方 OAuth 永不进入该域。Base URL 仍只接受无 userinfo/query/fragment 的 HTTPS `/v1` origin，HTTP 仅允许显式 loopback 开发上游。
+
+预编译内核不是主应用签名信任链的一部分。上游 Release 缺少 Developer ID、公证、detached signature、SBOM 与可复现 provenance，并存在无法由当前配置关闭的后台版本请求；双 SHA-256 只证明字节与同一 GitHub 信任域发布元数据一致。正式发布前必须补独立审核 manifest/版本策略，并以真实运行观测验证只监听 loopback、未产生错误正文日志和未超出隐私披露的外部连接；当前实现不能仅凭 `/healthz` 标记为 `accepted`。
 
 官方订阅页面采用 cache-first。首次成功的账户读取或用户点击刷新后，后端仅将白名单账户摘要（可含 email）、套餐、额度窗口和确认/更新时间保存到独立 macOS Keychain，并作为不含 token/原始响应的白名单 DTO 提供当前 OAuth 页面读取；后续页面访问先读取该缓存，cache miss 或刷新按钮才解析并验签可信 CLI、触发实时读取，因此 CLI 暂时缺失时仍能显示已有安全快照。快照超过 6 小时或强制刷新失败时标记为 stale，并保留上次确认时间。token、原始 App Server JSON、授权 URL 和错误正文永不进入缓存。
 
@@ -109,7 +116,7 @@ SQLite 位于平台应用数据目录，启用 WAL、foreign keys、busy timeout
 - `projects`：canonical 项目路径、来源、Git/worktree 状态。
 - `agents_revisions`：两阶段 pending/applied revision，用于崩溃恢复、冲突保护和回滚。
 - `settings`：Codex homes、授权根目录、保留期、OTel 开关、价格目录版本和更新检查间隔（1–168 小时，默认 12 小时）。更新检查状态只保存最近检查尝试时间，以及最近成功检查的受限展示元数据：当前/可用版本、发布日期和截断后的 notes。
-- `codex_providers`：`v0.5.0` 网关的非秘密供应商元数据；API Key 与本机 bearer 不进入 SQLite。
+- `codex_providers`：Codex 配置编排器与 API-key 上游的非秘密元数据；API Key、OAuth token 与运行时凭据不进入 SQLite。
 
 保留期会清理旧 turn/session 与 OTel 记录；OTel 硬删除只依据本机 `received_at`，不信任客户端时间。AGENTS revision 不受该保留期影响，而是每个文件最多保留 20 版。
 
@@ -127,7 +134,7 @@ SQLite 位于平台应用数据目录，启用 WAL、foreign keys、busy timeout
 
 ## 前端与 IPC
 
-React 只使用 35 个显式 Tauri commands；其中 OTel 与本机网关凭据只在用户点击显示配置并通过原生确认时返回前端。OAuth/认证档案只获得账户摘要、登录状态、档案白名单 DTO 与变更结果；provider 普通 DTO 只有非秘密字段和 `hasApiKey`。原生导入和确认由 Rust dialog 完成，WebView 没有通用路径、JSON、HTTP、shell、process、dialog 或 updater 插件能力。WebView 使用严格 CSP；浏览器开发模式使用人工构造的 demo adapter，不读取本机 Codex 数据或启动真实 listener。
+React 只使用显式 Tauri commands；CLIProxyAPI 新增的能力仅限检查最新内核、安装最新内核、读取脱敏状态和启停受管进程。OTel 与本机网关凭据只在用户点击显示配置并通过原生确认时返回前端。OAuth/认证档案只获得账户摘要、登录状态、档案白名单 DTO 与变更结果；provider 普通 DTO 只有非秘密字段和 `hasApiKey`。原生导入和确认由 Rust dialog 完成，WebView 没有通用路径、JSON、HTTP、shell、process、dialog 或 updater 插件能力。WebView 使用严格 CSP；浏览器开发模式使用人工构造的 demo adapter，不读取本机 Codex 数据、下载内核或启动真实 listener。
 
 ## 在线更新信任边界
 

@@ -43,13 +43,14 @@ Codex Manager brings those views into a single local desktop control center. Obs
 - Create, edit, save, restore, and review project `AGENTS.md` revisions only inside an explicitly authorized root.
 - Use the official Codex login/App Server boundary for account, plan, quota windows, and reset times; macOS beta supports multiple imported OAuth profiles with explicit switching.
 - Official subscription data is cache-first after the first successful read; a manual Refresh action forces a live read and the UI labels cache age and last-confirmed state.
-- Save custom Responses-compatible provider metadata and use an explicit local gateway when needed.
+- Use the separate **Codex configuration** page to switch among official direct, local CLIProxyAPI, and saved external Responses-compatible providers with preview, CAS/atomic apply, and restore.
+- Use the separate **Local proxy** page to import and manage CLIProxyAPI OAuth profiles or an external API-key upstream, then expose the local loopback endpoint to Codex.
 
 ### Local-first
 
 - Default storage is local SQLite; there is no product telemetry or cloud sync.
-- API keys, OAuth profile secrets, and the local gateway bearer stay in application-specific Keychain storage or native runtime memory.
-- Optional OTel receiver and provider gateway are disabled until the user enables them and are bound to local interfaces.
+- Official and CLIProxyAPI OAuth secrets remain in separate application-specific Keychain domains; API keys stay in Keychain at rest and are materialized only into mode-`0600` private runtime files while the core runs.
+- Optional OTel receiver and CLIProxyAPI core are disabled until the user enables them and bind only to local interfaces.
 - User actions are explicit: the app does not silently rewrite Codex configuration or rotate accounts in the background.
 
 ## Quick Start
@@ -58,9 +59,9 @@ Codex Manager brings those views into a single local desktop control center. Obs
 2. Install and launch **Codex Manager**.
 3. On first launch, it discovers available local Codex data under the configured Codex home (normally `~/.codex`).
 4. Open the activity view to inspect observed sessions and model usage.
-5. To edit an `AGENTS.md`, first authorize the project root in Settings. To use a provider gateway, save a provider and explicitly start the loopback listener; the overview exposes explicit start/stop controls for the existing Responses gateway.
+5. To edit an `AGENTS.md`, first authorize the project root in Settings. To use the reverse proxy, save a provider and explicitly enable it on the overview. The first enable downloads and verifies the official prebuilt CLIProxyAPI release for the current platform; Codex Manager never builds the Go core locally.
 
-The desktop app does not automatically change `config.toml` or `auth.json`. The signed release includes Developer ID signing, Apple notarization, and stapling; account switching and provider use still require explicit user actions.
+Codex configuration changes are explicit and transactional; the app does not edit `auth.json`. The signed release includes Developer ID signing, Apple notarization, and stapling; account switching and proxy use still require explicit user actions.
 
 ## Screenshots
 
@@ -104,29 +105,33 @@ See the [capability matrix](docs/capability-matrix.md) and [architecture](docs/a
 
 ## Accounts, providers, and the local gateway
 
-Official Codex subscription access remains in the trusted `codex login`, App Server, official credential store, and explicit account-switching path. OAuth access/refresh tokens never enter the provider gateway.
+Official Codex subscription access remains in the trusted `codex login`, App Server, official credential store, and explicit account-switching path. Official OAuth access/refresh tokens never enter CLIProxyAPI. The three trust domains—Codex config orchestration, official Codex OAuth, and CLIProxyAPI OAuth—exchange only opaque profile IDs and status.
 
 Imported-profile switching is explicit and is supported only when Codex resolves `cli_auth_credentials_store` to `file`; `keyring` and `auto` modes fail closed. Because the CLI and IDE extension share the active credential file, finish running Codex tasks before switching accounts.
 
-The optional gateway is a Codex-only OpenAI Responses identity pass-through. The overview provides its current status and explicit start/stop controls:
+The optional local proxy is an independently versioned, prebuilt [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) sidecar. Codex Manager does not compile or embed its Go source. The overview provides an explicit switch, OpenAI/Claude/Gemini-compatible endpoint labels, core version, and PID:
 
-- Stopped by default; it binds only to `127.0.0.1` after an explicit start.
-- Supports `/v1/models`, `/v1/responses`, and `/v1/responses/compact`; it does not translate Chat Completions, Anthropic, or Gemini protocols.
-- Remote upstreams must be HTTPS public origins; loopback HTTP is allowed only for explicit local development. Redirects, private/link-local addresses, userinfo, query, and fragment are rejected.
-- The client bearer is not forwarded upstream. API keys are injected only in the native layer; request/response bodies, headers, queries, and full upstream errors are not persisted.
+- Stopped by default; generated configuration forces `127.0.0.1`, disables remote management, the control panel, plugins, usage statistics, and request logging, and enables CLIProxyAPI commercial mode so error middleware does not log request bodies.
+- The desktop app and CLIProxyAPI have independent versions. Version checks and installs occur only after an explicit user action, select the exact official GitHub Release asset for the platform, require both the Release asset SHA-256 digest and matching `checksums.txt`, and extract through a bounded staging directory. Persistent install and health-rollback journals restore the last committed core and matching metadata after an interrupted directory switch, and the previous version remains available until the new core passes its health check.
+- The local proxy supports either a user-imported CLIProxyAPI OAuth credential pool (`codex`, `claude`, `antigravity`, `kimi`, `xai`) or one external OpenAI-compatible API-key upstream. OAuth files are selected only by the native picker and stored in a separate Keychain service; Management API and OAuth callback are not exposed to the WebView.
+- Remote upstreams must be HTTPS public origins; loopback HTTP is allowed only for explicit local development. Userinfo, query, and fragment are rejected.
+- API keys remain in Keychain and are copied into the app-private runtime only while starting the sidecar. OAuth profiles are projected into a random `0700` auth-dir with `0600` files. On normal stop, provider/identity/CAS checkpoint runs before cleanup; pending crash evidence fails closed until orphan ownership is confirmed.
+- Each start uses a random runtime session and rejects an already occupied loopback port. A normal stop reaps the owned child and removes the session; a macOS hard kill can still leave the child alive, so the next launch fails closed instead of killing an unverified PID. Cross-restart ownership recovery remains release-blocking work.
 - The overview never displays the bearer or provider API key.
-- The app shows a provider configuration snippet only after native confirmation and does not automatically edit `config.toml` or restore direct mode. Restore direct configuration before stopping the gateway.
+- The Codex configuration page uses official `model_providers.<id>.auth.command`; config stores only the app binary path and allowlisted opaque secret reference. A private journal enables restore and rejects external file drift. `verified` means post-write file recheck only, not a successful upstream request.
 
-Official subscription views are cache-first: after the first successful read, a whitelist-only account summary, plan, quota windows, and timestamps are kept in the separate macOS Keychain cache. Later visits read that cache before resolving the trusted CLI; Refresh is the explicit live-read action. Snapshots older than six hours, failed-refresh fallbacks, and unavailable states remain explicit, while an existing safe snapshot can still be shown if the CLI is temporarily missing. Tokens, raw JSON, authorization URLs, and error bodies are not cached.
+The current prebuilt core cannot disable upstream redirects or pin a previously validated DNS/IP result. The arbitrary custom Base URL SSRF/DNS-rebinding boundary therefore does not inherit the former Rust gateway guarantees. Until upstream or a trusted enforcement layer supplies those controls, this integration remains an unpublished technical prototype and is a hard release No-Go.
 
-The Codex configuration page focuses on providers, the gateway, and configuration previews; the unopened “Global prompts”, “Plugins and marketplace”, and “Session management” placeholder modules have been removed. The sidebar’s local desktop mode shows the application version and build time (optionally a short SHA), sourced from build metadata rather than launch time.
+Official subscription views are cache-first: after the first successful read, a whitelist-only account summary, plan, quota windows, and timestamps are kept in the separate macOS Keychain cache. Later visits read that cache before resolving the trusted CLI; Refresh is the explicit live-read action. Tokens, raw JSON, authorization URLs, and error bodies are not cached.
+
+The Codex configuration page focuses on provider routes, preview, apply, and restore; the unopened “Global prompts”, “Plugins and marketplace”, and “Session management” placeholder modules have been removed. The sidebar’s local desktop mode shows the application version and build time (optionally a short SHA), sourced from build metadata rather than launch time.
 
 ## Security and privacy
 
 - Local-first by default: no product telemetry, cloud sync, or automatic upload of Codex messages, projects, or settings.
-- Message bodies, prompts, reasoning text, tool arguments/results, `Authorization`, cookies, OAuth codes, API keys, gateway bearer, full environment variables, request queries, and raw OAuth/App Server responses are not persisted.
+- Message bodies, prompts, reasoning text, tool arguments/results, `Authorization`, cookies, OAuth codes, access/refresh tokens, full environment variables, request queries, and raw OAuth/App Server responses are not persisted. The explicit runtime exception is credential material required by CLIProxyAPI in its private mode-`0600` files while the sidecar runs.
 - OAuth profile secrets are verified in bounded native flows and stored in application-specific macOS Keychain; normal SQLite/WebView DTOs expose only non-secret metadata.
-- OTel and gateway listeners are opt-in, authenticated, bounded, and local. The gateway checks host/origin/bearer before body decoding, uses allowlisted headers and bounded body/concurrency/timeouts, and disables redirects.
+- OTel and CLIProxyAPI listeners are opt-in, authenticated, and local. The generated CLIProxyAPI configuration is fail-closed and does not expose its Management or OAuth control plane.
 - AGENTS writes require an authorized root, canonical path and symlink checks, external-change detection, and atomic replacement. Revisions contain user-authored AGENTS text and are retained separately.
 - Release CI includes pinned actions, secret scanning, SBOM/license output, artifact hashes, and a protected signing workflow.
 
@@ -140,7 +145,7 @@ The stable channel points to the latest non-draft, non-prerelease macOS arm64 Re
 - `tested`: release and verification workflows, automated tests, build, signing, notarization, stapling, and published asset checks passed according to release evidence.
 - `published`: only a non-draft, non-prerelease GitHub Release that has passed published-mode verification is treated as stable.
 - `observed`: local mock/loopback, desktop/browser demo, and public release verification are observed evidence.
-- `accepted`: real API-key provider E2E, cost confirmation, manual configuration round-trip/recovery, and upgrade installation from a trusted older signed app remain separate acceptance work.
+- `accepted`: real OAuth/API-key upstream E2E, cost confirmation, transactional configuration apply/recovery, and upgrade installation from a trusted older signed app remain separate acceptance work.
 - `cleanup`: release jobs remove temporary signing materials before upload; local test credentials/configuration must still be cleaned by the operator.
 
 See the [current release runbook and evidence summary](docs/release.md) for version-specific source SHAs, runs, assets, and acceptance limits. Versioned notes preserve their tag-time gate state; later public verification is recorded separately. The earlier `v0.5.0-beta.1` remains an unsigned community pre-release and is not the stable download.

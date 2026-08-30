@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-import-proxy-auth-profile"
+description = "Enables the import_proxy_auth_profile command without any pre-configured scope."
+commands.allow = ["import_proxy_auth_profile"]
+
+[[permission]]
+identifier = "deny-import-proxy-auth-profile"
+description = "Denies the import_proxy_auth_profile command without any pre-configured scope."
+commands.deny = ["import_proxy_auth_profile"]

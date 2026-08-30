@@ -328,25 +328,89 @@ export interface SaveCodexProviderInput {
 }
 
 export type CodexGatewayState = "stopped" | "running" | "error";
+export type CodexGatewaySource = "none" | "oauth-pool" | "external-provider";
 
 export interface CodexGatewayStatus {
   state: CodexGatewayState;
+  source: CodexGatewaySource;
+  installed: boolean;
+  coreVersion: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  installing: boolean;
+  processId: number | null;
+  coreSource: string;
   providerId: string | null;
   providerName: string | null;
   endpoint: string | null;
   startedAt: string | null;
-  requests: number;
-  failed: number;
-  inFlight: number;
+  requests: number | null;
+  failed: number | null;
+  inFlight: number | null;
   lastError: string | null;
   port: number;
 }
 
-/** Explicit reveal result. configSnippet contains a local-only client bearer. */
-export interface CodexGatewaySetup {
-  port: number;
-  endpoint: string;
+export type CodexConfigProfileKind = "official-direct" | "local-cliproxy" | "external-compatible";
+
+export interface CodexConfigProfile {
+  id: string;
+  name: string;
+  kind: CodexConfigProfileKind;
+  baseUrl: string | null;
+  model: string | null;
+  reasoningEffort: string | null;
+  /** Opaque native Keychain lookup reference; never a credential value. */
+  secretRef: string | null;
+  isActive: boolean;
+  isVerified: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CodexConfigSnapshot {
+  profiles: CodexConfigProfile[];
+  activeProfileId: string | null;
+  activeRevision: string | null;
+  state: string;
+  message: string | null;
+}
+
+export interface CodexConfigPreview {
+  profileId: string;
+  expectedRevision: string | null;
   configSnippet: string;
+  managedFields: string[];
+}
+
+export interface CodexConfigApplyResult {
+  changed: boolean;
+  state: string;
+  activeProfileId: string | null;
+  activeRevision: string | null;
+  verified: boolean;
+  message: string | null;
+}
+
+export interface ProxyAuthProfile {
+  id: string;
+  label: string;
+  provider: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastCheckpointAt: string | null;
+  state: string;
+  errorCode: string | null;
+}
+
+export interface ProxyAuthProfileList {
+  profiles: ProxyAuthProfile[];
+}
+
+export interface ProxyAuthImportOutcome {
+  profile: ProxyAuthProfile;
+  action: "created" | "updated" | "restored";
 }
 
 export interface BootstrapPayload {
@@ -398,12 +462,24 @@ export const COMMANDS = {
   activateAuthProfile: "activate_auth_profile",
   deleteAuthProfile: "delete_auth_profile",
   restoreAuthProfile: "restore_auth_profile",
+  getCodexConfigSnapshot: "get_codex_config_snapshot",
+  saveCodexConfigProfile: "save_codex_config_profile",
+  deleteCodexConfigProfile: "delete_codex_config_profile",
+  previewCodexConfigProfile: "preview_codex_config_profile",
+  applyCodexConfigProfile: "apply_codex_config_profile",
+  restoreCodexConfig: "restore_codex_config",
+  listProxyAuthProfiles: "list_proxy_auth_profiles",
+  importProxyAuthProfile: "import_proxy_auth_profile",
+  setProxyAuthProfileEnabled: "set_proxy_auth_profile_enabled",
+  deleteProxyAuthProfile: "delete_proxy_auth_profile",
+  restoreProxyAuthProfile: "restore_proxy_auth_profile",
   listCodexProviders: "list_codex_providers",
   saveCodexProvider: "save_codex_provider",
   deleteCodexProvider: "delete_codex_provider",
   getCodexGatewayStatus: "get_codex_gateway_status",
+  checkLatestCliproxyCore: "check_latest_cliproxy_core",
+  installLatestCliproxyCore: "install_latest_cliproxy_core",
   updateCodexGatewayPort: "update_codex_gateway_port",
   startCodexGateway: "start_codex_gateway",
   stopCodexGateway: "stop_codex_gateway",
-  revealCodexGatewaySetup: "reveal_codex_gateway_setup",
 } as const;

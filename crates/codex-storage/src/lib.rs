@@ -209,6 +209,27 @@ pub struct CodexProviderRow {
     pub updated_at: String,
 }
 
+/// Routing metadata for one user-visible Codex configuration profile.
+///
+/// `secret_ref` is an opaque Keychain/helper lookup key, not a bearer token or
+/// API key. The value is intentionally enough to construct a fixed
+/// `auth.command` invocation but not enough to authenticate by itself.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexConfigProfileRow {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub model: String,
+    pub reasoning_effort: Option<String>,
+    pub base_url: Option<String>,
+    pub secret_ref: Option<String>,
+    pub active: bool,
+    pub verified_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// Persisted display-only update metadata. Download URLs, signatures, and
 /// updater handles stay in the desktop process and are never stored here.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -347,6 +368,10 @@ impl Store {
         self.apply_migration(
             12,
             include_str!("../migrations/0012_cli_schema_capability.sql"),
+        )?;
+        self.apply_migration(
+            13,
+            include_str!("../migrations/0013_codex_config_profiles.sql"),
         )?;
         self.backfill_logical_fingerprints()?;
         Ok(())
@@ -1309,6 +1334,87 @@ impl Store {
             .context("删除 Codex 供应商失败")?
             == 1)
     }
+    pub fn codex_config_profiles(&self) -> Result<Vec<CodexConfigProfileRow>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id,name,kind,model,reasoning_effort,base_url,secret_ref,active,verified_at,created_at,updated_at \
+             FROM codex_config_profiles ORDER BY active DESC,updated_at DESC,id",
+        )?;
+        Ok(statement
+            .query_map([], row_codex_config_profile)?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+    pub fn codex_config_profile(&self, id: &str) -> Result<Option<CodexConfigProfileRow>> {
+        self.conn
+            .query_row(
+                "SELECT id,name,kind,model,reasoning_effort,base_url,secret_ref,active,verified_at,created_at,updated_at \
+                 FROM codex_config_profiles WHERE id=?1",
+                params![id],
+                row_codex_config_profile,
+            )
+            .optional()
+            .context("读取 Codex 配置档案失败")
+    }
+    /// Saves non-secret profile metadata. A profile is only made active by a
+    /// completed config write/readback, via `mark_codex_config_profile_active`.
+    pub fn save_codex_config_profile(&self, profile: &CodexConfigProfileRow) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO codex_config_profiles(id,name,kind,model,reasoning_effort,base_url,secret_ref,active,verified_at,created_at,updated_at) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,0,NULL,?8,?9) \
+             ON CONFLICT(id) DO UPDATE SET \
+               name=excluded.name,kind=excluded.kind,model=excluded.model,reasoning_effort=excluded.reasoning_effort,base_url=excluded.base_url, \
+               secret_ref=excluded.secret_ref,updated_at=excluded.updated_at",
+            params![
+                profile.id,
+                profile.name,
+                profile.kind,
+                profile.model,
+                profile.reasoning_effort,
+                profile.base_url,
+                profile.secret_ref,
+                profile.created_at,
+                profile.updated_at,
+            ],
+        ).context("保存 Codex 配置档案失败")?;
+        Ok(())
+    }
+    pub fn delete_codex_config_profile(&self, id: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM codex_config_profiles WHERE id=?1", params![id])
+            .context("删除 Codex 配置档案失败")?
+            == 1)
+    }
+    /// Commits the active/verified state after a successful on-disk write and
+    /// caller-controlled readback. Exactly one profile can be active.
+    pub fn mark_codex_config_profile_active(
+        &self,
+        id: &str,
+        verified_at: &str,
+        updated_at: &str,
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let exists = tx.execute(
+            "UPDATE codex_config_profiles SET active=0 WHERE active=1 AND id<>?1",
+            params![id],
+        )?;
+        let changed = tx.execute(
+            "UPDATE codex_config_profiles SET active=1,verified_at=?2,updated_at=?3 WHERE id=?1",
+            params![id, verified_at, updated_at],
+        )?;
+        if changed != 1 {
+            let _ = exists;
+            return Err(anyhow::anyhow!("Codex 配置档案不存在"));
+        }
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn clear_active_codex_config_profile(&self, updated_at: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE codex_config_profiles SET active=0,updated_at=?1 WHERE active=1",
+            params![updated_at],
+        )?;
+        Ok(())
+    }
     pub fn app_update_status(&self) -> Result<Option<AppUpdateStatusRow>> {
         self.conn
             .query_row(
@@ -1498,6 +1604,22 @@ fn row_revision(r: &rusqlite::Row<'_>) -> rusqlite::Result<RevisionRow> {
         byte_length: r.get(5)?,
         before_content: r.get(6)?,
         after_content: r.get(7)?,
+    })
+}
+
+fn row_codex_config_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<CodexConfigProfileRow> {
+    Ok(CodexConfigProfileRow {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        kind: row.get(2)?,
+        model: row.get(3)?,
+        reasoning_effort: row.get(4)?,
+        base_url: row.get(5)?,
+        secret_ref: row.get(6)?,
+        active: row.get::<_, i64>(7)? != 0,
+        verified_at: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
     })
 }
 

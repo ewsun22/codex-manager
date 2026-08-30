@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import { invokeBackend, isDesktopRuntime } from "./app/client.ts";
 import { preferredAgentsFile } from "./app/agents.ts";
 import { CodexGatewayQuickControl, CodexGatewayView } from "./app/codex-gateway.tsx";
+import { CodexConfigView } from "./app/codex-config.tsx";
 import {
   MAX_UPDATE_CHECK_INTERVAL_HOURS,
   MIN_UPDATE_CHECK_INTERVAL_HOURS,
@@ -45,7 +46,7 @@ import {
   type UpdateInstallResult,
 } from "./shared/contracts.ts";
 
-type View = "overview" | "activity" | "projects" | "gateway" | "oauth" | "pricing" | "settings";
+type View = "overview" | "activity" | "projects" | "config" | "gateway" | "oauth" | "pricing" | "settings";
 
 interface Notice {
   tone: "success" | "error" | "info";
@@ -56,7 +57,8 @@ const navItems: Array<{ id: View; label: string; helper: string }> = [
   { id: "overview", label: "总览", helper: "采集与使用概览" },
   { id: "activity", label: "活动记录", helper: "每次模型调用的元数据" },
   { id: "projects", label: "项目与 AGENTS", helper: "项目发现与安全编辑" },
-  { id: "gateway", label: "Codex 配置", helper: "供应商、网关与配置预览" },
+  { id: "config", label: "Codex 配置", helper: "路由档案与安全切换" },
+  { id: "gateway", label: "本地代理", helper: "CLIProxyAPI 与 OAuth 凭据池" },
   { id: "oauth", label: "官方订阅", helper: "账户登录、档案与额度" },
   { id: "pricing", label: "价格目录", helper: "估算来源与覆盖规则" },
   { id: "settings", label: "设置", helper: "本地路径与保留策略" },
@@ -1817,7 +1819,8 @@ export function App() {
       case "overview": return <Overview payload={payload} onNavigate={setView} />;
       case "activity": return <ActivityView initial={payload.activity} projects={projects} onLoad={loadActivity} refreshRevision={activityRefreshRevision} fullRefreshRevision={activityFullRefreshRevision} />;
       case "projects": return <ProjectsView projects={projects} authorizedRoots={payload.settings.authorizedRoots} onProjectsChange={(next) => setPayload((old) => old ? { ...old, projects: next } : old)} showNotice={setNotice} />;
-      case "gateway": return <CodexGatewayView codexHome={payload.settings.codexHomes[0]} onNotice={showGatewayNotice} onOpenOfficialSubscription={() => setView("oauth")} />;
+      case "config": return <CodexConfigView onNotice={showGatewayNotice} onOpenOfficialSubscription={() => setView("oauth")} />;
+      case "gateway": return <CodexGatewayView onNotice={showGatewayNotice} />;
       case "oauth": return <OAuthView showNotice={setNotice} />;
       case "pricing": return <PricingView rules={payload.pricingRules} />;
       case "settings": return <SettingsView settings={payload.settings} capability={payload.capability} updateStatus={updateStatus} updateBusy={updateBusy} updateMessage={updateMessage} onSave={(next) => void updateSettings(next)} onProbe={() => void probe()} onCheckUpdate={() => void checkForUpdate()} onInstallUpdate={() => void installUpdate()} saving={saving} />;

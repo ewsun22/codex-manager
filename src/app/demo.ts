@@ -12,10 +12,16 @@ import type {
   BootstrapPayload,
   CodexCapability,
   CodexAccountSnapshot,
-  CodexGatewaySetup,
+  CodexConfigApplyResult,
+  CodexConfigPreview,
+  CodexConfigProfile,
+  CodexConfigSnapshot,
   CodexGatewayStatus,
   CodexLoginStartResult,
   CodexProviderProfile,
+  ProxyAuthImportOutcome,
+  ProxyAuthProfile,
+  ProxyAuthProfileList,
   CreateAgentsFileInput,
   DashboardSummary,
   PricingRule,
@@ -401,10 +407,70 @@ let authProfiles: AuthProfilesSnapshot = {
   message: "演示模式：档案秘密位于应用专用 macOS Keychain，活动账户使用 file 模式 auth.json。",
 };
 
+let proxyAuthProfiles: ProxyAuthProfile[] = [
+  {
+    id: "proxy-auth-demo-codex",
+    label: "Codex 个人账户",
+    provider: "codex",
+    enabled: true,
+    createdAt: "2026-08-27T08:00:00.000Z",
+    updatedAt: observedAt,
+    lastCheckpointAt: null,
+    state: "ready",
+    errorCode: null,
+  },
+  {
+    id: "proxy-auth-demo-claude",
+    label: "Claude 备用账户",
+    provider: "claude",
+    enabled: false,
+    createdAt: "2026-08-27T09:00:00.000Z",
+    updatedAt: observedAt,
+    lastCheckpointAt: null,
+    state: "disabled",
+    errorCode: null,
+  },
+];
+
+let codexConfigSnapshot: CodexConfigSnapshot = {
+  profiles: [
+    {
+      id: "official-direct",
+      name: "官方直连",
+      kind: "official-direct",
+      baseUrl: null,
+      model: null,
+      reasoningEffort: null,
+      secretRef: null,
+      isActive: true,
+      isVerified: true,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    },
+    {
+      id: "local-cliproxy",
+      name: "本地 CLIProxyAPI",
+      kind: "local-cliproxy",
+      baseUrl: "http://127.0.0.1:47653/v1",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      secretRef: "local-proxy-client",
+      isActive: false,
+      isVerified: false,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    },
+  ],
+  activeProfileId: "official-direct",
+  activeRevision: "demo-config-revision-1",
+  state: "official-direct",
+  message: null,
+};
+
 let codexProviders: CodexProviderProfile[] = [
   {
     id: "provider-demo-relay",
-    name: "Responses 中转",
+    name: "OpenAI 中转",
     baseUrl: "https://relay.example.test/v1",
     model: "gpt-5.6-sol",
     reasoningEffort: "high",
@@ -414,7 +480,7 @@ let codexProviders: CodexProviderProfile[] = [
   },
   {
     id: "provider-demo-local",
-    name: "本机 EasyCLI",
+    name: "本机兼容上游",
     baseUrl: "http://127.0.0.1:8317/v1",
     model: "gpt-5.6-terra",
     reasoningEffort: "medium",
@@ -426,13 +492,21 @@ let codexProviders: CodexProviderProfile[] = [
 
 let codexGatewayStatus: CodexGatewayStatus = {
   state: "stopped",
+  source: "none",
+  installed: true,
+  coreVersion: "7.2.145",
+  latestVersion: "7.2.145",
+  updateAvailable: false,
+  installing: false,
+  processId: null,
+  coreSource: "GitHub Release",
   providerId: null,
   providerName: null,
   endpoint: null,
   startedAt: null,
-  requests: 0,
-  failed: 0,
-  inFlight: 0,
+  requests: null,
+  failed: null,
+  inFlight: null,
   lastError: null,
   port: 47653,
 };
@@ -710,6 +784,128 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
       authProfiles.profiles = authProfiles.profiles.map((profile) => profile.id === id ? { ...profile, deletedAt: null } : profile);
       return { changed: true, message: "演示模式：档案已恢复。" } satisfies AuthProfileOperationResult as T;
     }
+    case COMMANDS.getCodexConfigSnapshot:
+      return structuredClone(codexConfigSnapshot) as T;
+    case COMMANDS.saveCodexConfigProfile: {
+      const input = args.profile as CodexConfigProfile;
+      const now = new Date().toISOString();
+      const existing = codexConfigSnapshot.profiles.find((profile) => profile.id === input.id);
+      const profile: CodexConfigProfile = {
+        ...input,
+        isActive: existing?.isActive ?? false,
+        isVerified: existing?.isVerified ?? false,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      codexConfigSnapshot.profiles = existing
+        ? codexConfigSnapshot.profiles.map((item) => item.id === profile.id ? profile : item)
+        : [...codexConfigSnapshot.profiles, profile];
+      return structuredClone(profile) as T;
+    }
+    case COMMANDS.deleteCodexConfigProfile: {
+      const profileId = String(args.profileId ?? "");
+      const target = codexConfigSnapshot.profiles.find((profile) => profile.id === profileId);
+      if (target?.isActive) throw new Error("当前正在使用该配置档案。");
+      const before = codexConfigSnapshot.profiles.length;
+      codexConfigSnapshot.profiles = codexConfigSnapshot.profiles.filter((profile) => profile.id !== profileId);
+      return (codexConfigSnapshot.profiles.length !== before) as T;
+    }
+    case COMMANDS.previewCodexConfigProfile: {
+      const profileId = String(args.profileId ?? "");
+      const profile = codexConfigSnapshot.profiles.find((item) => item.id === profileId);
+      if (!profile) throw new Error("Codex 配置档案不存在。");
+      const configSnippet = profile.kind === "official-direct"
+        ? "# 恢复到 Codex Manager 接管前的配置。\n"
+        : `model = ${JSON.stringify(profile.model)}\nmodel_provider = ${JSON.stringify(`codex-manager-${profile.id}`)}\n\n[model_providers.${JSON.stringify(`codex-manager-${profile.id}`)}]\nbase_url = ${JSON.stringify(profile.baseUrl)}\nwire_api = "responses"\nauth = { command = "/Applications/Codex Manager.app/Contents/MacOS/codex-manager-desktop", args = ["--codex-manager-credential", "${profile.secretRef}"] }\n`;
+      return {
+        profileId,
+        expectedRevision: codexConfigSnapshot.activeRevision,
+        configSnippet,
+        managedFields: ["model", "model_provider", "model_providers.<managed>"],
+      } satisfies CodexConfigPreview as T;
+    }
+    case COMMANDS.applyCodexConfigProfile: {
+      const profileId = String(args.profileId ?? "");
+      if (!codexConfigSnapshot.profiles.some((profile) => profile.id === profileId)) {
+        throw new Error("Codex 配置档案不存在。");
+      }
+      codexConfigSnapshot.profiles = codexConfigSnapshot.profiles.map((profile) => ({
+        ...profile,
+        isActive: profile.id === profileId,
+        isVerified: profile.id === profileId ? true : profile.isVerified,
+      }));
+      codexConfigSnapshot.activeProfileId = profileId;
+      codexConfigSnapshot.activeRevision = `demo-config-revision-${Date.now()}`;
+      codexConfigSnapshot.state = profileId === "official-direct" ? "official-direct" : "active";
+      return {
+        changed: true,
+        state: codexConfigSnapshot.state,
+        activeProfileId: profileId,
+        activeRevision: codexConfigSnapshot.activeRevision,
+        verified: true,
+        message: "演示模式：已写入并复核 Codex 配置。",
+      } satisfies CodexConfigApplyResult as T;
+    }
+    case COMMANDS.restoreCodexConfig: {
+      codexConfigSnapshot.profiles = codexConfigSnapshot.profiles.map((profile) => ({
+        ...profile,
+        isActive: profile.id === "official-direct",
+        isVerified: profile.id === "official-direct" ? true : profile.isVerified,
+      }));
+      codexConfigSnapshot.activeProfileId = "official-direct";
+      codexConfigSnapshot.activeRevision = `demo-config-revision-${Date.now()}`;
+      codexConfigSnapshot.state = "official-direct";
+      return {
+        changed: true,
+        state: "official-direct",
+        activeProfileId: "official-direct",
+        activeRevision: codexConfigSnapshot.activeRevision,
+        verified: true,
+        message: "演示模式：已恢复接管前的配置。",
+      } satisfies CodexConfigApplyResult as T;
+    }
+    case COMMANDS.listProxyAuthProfiles:
+      return {
+        profiles: structuredClone(proxyAuthProfiles.filter((profile) => Boolean(args.includeDeleted) || profile.state !== "deleted")),
+      } satisfies ProxyAuthProfileList as T;
+    case COMMANDS.importProxyAuthProfile: {
+      const now = new Date().toISOString();
+      const profile: ProxyAuthProfile = {
+        id: `proxy-auth-demo-${proxyAuthProfiles.length + 1}`,
+        label: String(args.label || "新 OAuth 档案"),
+        provider: "codex",
+        enabled: true,
+        createdAt: now,
+        updatedAt: now,
+        lastCheckpointAt: null,
+        state: "ready",
+        errorCode: null,
+      };
+      proxyAuthProfiles.push(profile);
+      return { profile, action: "created" } satisfies ProxyAuthImportOutcome as T;
+    }
+    case COMMANDS.setProxyAuthProfileEnabled: {
+      const profileId = String(args.profileId ?? "");
+      const enabled = Boolean(args.enabled);
+      const target = proxyAuthProfiles.find((profile) => profile.id === profileId && profile.state !== "deleted");
+      if (!target) throw new Error("OAuth 档案不存在。");
+      Object.assign(target, { enabled, state: enabled ? "ready" : "disabled", updatedAt: new Date().toISOString() });
+      return structuredClone(target) as T;
+    }
+    case COMMANDS.deleteProxyAuthProfile: {
+      const profileId = String(args.profileId ?? "");
+      const target = proxyAuthProfiles.find((profile) => profile.id === profileId && profile.state !== "deleted");
+      if (!target) throw new Error("OAuth 档案不存在。");
+      Object.assign(target, { enabled: false, state: "deleted", updatedAt: new Date().toISOString() });
+      return structuredClone(target) as T;
+    }
+    case COMMANDS.restoreProxyAuthProfile: {
+      const profileId = String(args.profileId ?? "");
+      const target = proxyAuthProfiles.find((profile) => profile.id === profileId && profile.state === "deleted");
+      if (!target) throw new Error("OAuth 档案尚未删除。");
+      Object.assign(target, { enabled: false, state: "disabled", updatedAt: new Date().toISOString() });
+      return structuredClone(target) as T;
+    }
     case COMMANDS.listCodexProviders:
       return structuredClone(codexProviders) as T;
     case COMMANDS.saveCodexProvider: {
@@ -741,21 +937,50 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
     }
     case COMMANDS.getCodexGatewayStatus:
       return structuredClone(codexGatewayStatus) as T;
+    case COMMANDS.checkLatestCliproxyCore:
+      codexGatewayStatus = {
+        ...codexGatewayStatus,
+        latestVersion: "7.2.145",
+        updateAvailable: codexGatewayStatus.coreVersion !== "7.2.145",
+      };
+      return structuredClone(codexGatewayStatus) as T;
+    case COMMANDS.installLatestCliproxyCore:
+      if (codexGatewayStatus.state === "running") throw new Error("请先关闭反代再更新内核。");
+      codexGatewayStatus = {
+        ...codexGatewayStatus,
+        installed: true,
+        installing: false,
+        coreVersion: codexGatewayStatus.latestVersion ?? "7.2.145",
+        latestVersion: codexGatewayStatus.latestVersion ?? "7.2.145",
+        updateAvailable: false,
+      };
+      return structuredClone(codexGatewayStatus) as T;
     case COMMANDS.updateCodexGatewayPort:
       if (codexGatewayStatus.state === "running") throw new Error("网关运行中不能修改端口。");
       codexGatewayStatus = { ...codexGatewayStatus, port: Number(args.port) };
       return structuredClone(codexGatewayStatus) as T;
     case COMMANDS.startCodexGateway: {
+      const source = String(args.source ?? "");
       const providerId = String(args.providerId ?? "");
       const provider = codexProviders.find((item) => item.id === providerId);
-      if (!provider?.hasApiKey) throw new Error("供应商不存在或尚未保存 API Key。");
+      if (source === "external-provider" && !provider?.hasApiKey) {
+        throw new Error("供应商不存在或尚未保存 API Key。");
+      }
+      if (source === "oauth-pool" && !proxyAuthProfiles.some((profile) => profile.enabled && profile.state === "ready")) {
+        throw new Error("没有已启用的 OAuth 档案。");
+      }
+      if (source !== "external-provider" && source !== "oauth-pool") {
+        throw new Error("本地反代启动来源无效。");
+      }
       codexGatewayStatus = {
         ...codexGatewayStatus,
         state: "running",
-        providerId: provider.id,
-        providerName: provider.name,
+        source,
+        providerId: source === "external-provider" ? provider!.id : null,
+        providerName: source === "external-provider" ? provider!.name : "CLIProxyAPI OAuth 凭据池",
         endpoint: `http://127.0.0.1:${codexGatewayStatus.port}/v1`,
         startedAt: new Date().toISOString(),
+        processId: 59317,
         lastError: null,
       };
       return structuredClone(codexGatewayStatus) as T;
@@ -764,22 +989,15 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
       codexGatewayStatus = {
         ...codexGatewayStatus,
         state: "stopped",
+        source: "none",
         providerId: null,
         providerName: null,
         endpoint: null,
         startedAt: null,
-        inFlight: 0,
+        processId: null,
+        inFlight: null,
       };
       return structuredClone(codexGatewayStatus) as T;
-    case COMMANDS.revealCodexGatewaySetup:
-      if (codexGatewayStatus.state !== "running" || !codexGatewayStatus.endpoint) {
-        throw new Error("请先启动网关。");
-      }
-      return {
-        port: codexGatewayStatus.port,
-        endpoint: codexGatewayStatus.endpoint,
-        configSnippet: `model_provider = "codex_manager_gateway"\nmodel = "${codexProviders.find((provider) => provider.id === codexGatewayStatus.providerId)?.model ?? "gpt-5.6-sol"}"\nmodel_reasoning_effort = "${codexProviders.find((provider) => provider.id === codexGatewayStatus.providerId)?.reasoningEffort ?? "high"}"\n\n[model_providers.codex_manager_gateway]\nname = "Codex Manager Gateway"\nbase_url = "${codexGatewayStatus.endpoint}"\nwire_api = "responses"\nexperimental_bearer_token = "demo-local-token-not-real"\n`,
-      } satisfies CodexGatewaySetup as T;
     default:
       throw new Error(`演示适配器不支持命令：${command}`);
   }

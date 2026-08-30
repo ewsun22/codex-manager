@@ -32,13 +32,25 @@
     "allow-activate-auth-profile",
     "allow-delete-auth-profile",
     "allow-restore-auth-profile",
+    "allow-get-codex-config-snapshot",
+    "allow-save-codex-config-profile",
+    "allow-delete-codex-config-profile",
+    "allow-preview-codex-config-profile",
+    "allow-apply-codex-config-profile",
+    "allow-restore-codex-config",
+    "allow-list-proxy-auth-profiles",
+    "allow-import-proxy-auth-profile",
+    "allow-set-proxy-auth-profile-enabled",
+    "allow-delete-proxy-auth-profile",
+    "allow-restore-proxy-auth-profile",
     "allow-list-codex-providers",
     "allow-save-codex-provider",
     "allow-delete-codex-provider",
     "allow-get-codex-gateway-status",
+    "allow-check-latest-cliproxy-core",
+    "allow-install-latest-cliproxy-core",
     "allow-update-codex-gateway-port",
     "allow-start-codex-gateway",
-    "allow-stop-codex-gateway",
-    "allow-reveal-codex-gateway-setup"
+    "allow-stop-codex-gateway"
   ]
 }

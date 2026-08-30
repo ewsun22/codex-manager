@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-restore-codex-config"
+description = "Enables the restore_codex_config command without any pre-configured scope."
+commands.allow = ["restore_codex_config"]
+
+[[permission]]
+identifier = "deny-restore-codex-config"
+description = "Denies the restore_codex_config command without any pre-configured scope."
+commands.deny = ["restore_codex_config"]

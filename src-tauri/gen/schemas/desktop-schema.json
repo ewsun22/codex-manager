@@ -183,6 +183,12 @@
           "markdownDescription": "Enables the activate_auth_profile command without any pre-configured scope."
         },
         {
+          "description": "Enables the apply_codex_config_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-apply-codex-config-profile",
+          "markdownDescription": "Enables the apply_codex_config_profile command without any pre-configured scope."
+        },
+        {
           "description": "Enables the bootstrap command without any pre-configured scope.",
           "type": "string",
           "const": "allow-bootstrap",
@@ -193,6 +199,12 @@
           "type": "string",
           "const": "allow-check-for-update",
           "markdownDescription": "Enables the check_for_update command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the check_latest_cliproxy_core command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-latest-cliproxy-core",
+          "markdownDescription": "Enables the check_latest_cliproxy_core command without any pre-configured scope."
         },
         {
           "description": "Enables the create_agents_file command without any pre-configured scope.",
@@ -207,10 +219,22 @@
           "markdownDescription": "Enables the delete_auth_profile command without any pre-configured scope."
         },
         {
+          "description": "Enables the delete_codex_config_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-codex-config-profile",
+          "markdownDescription": "Enables the delete_codex_config_profile command without any pre-configured scope."
+        },
+        {
           "description": "Enables the delete_codex_provider command without any pre-configured scope.",
           "type": "string",
           "const": "allow-delete-codex-provider",
           "markdownDescription": "Enables the delete_codex_provider command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_proxy_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-proxy-auth-profile",
+          "markdownDescription": "Enables the delete_proxy_auth_profile command without any pre-configured scope."
         },
         {
           "description": "Enables the discover_projects command without any pre-configured scope.",
@@ -229,6 +253,12 @@
           "type": "string",
           "const": "allow-get-codex-account",
           "markdownDescription": "Enables the get_codex_account command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_codex_config_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-codex-config-snapshot",
+          "markdownDescription": "Enables the get_codex_config_snapshot command without any pre-configured scope."
         },
         {
           "description": "Enables the get_codex_gateway_status command without any pre-configured scope.",
@@ -259,6 +289,18 @@
           "type": "string",
           "const": "allow-import-auth-profile",
           "markdownDescription": "Enables the import_auth_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the import_proxy_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-import-proxy-auth-profile",
+          "markdownDescription": "Enables the import_proxy_auth_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the install_latest_cliproxy_core command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-install-latest-cliproxy-core",
+          "markdownDescription": "Enables the install_latest_cliproxy_core command without any pre-configured scope."
         },
         {
           "description": "Enables the install_pending_update command without any pre-configured scope.",
@@ -303,6 +345,12 @@
           "markdownDescription": "Enables the list_projects command without any pre-configured scope."
         },
         {
+          "description": "Enables the list_proxy_auth_profiles command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-proxy-auth-profiles",
+          "markdownDescription": "Enables the list_proxy_auth_profiles command without any pre-configured scope."
+        },
+        {
           "description": "Enables the list_sources command without any pre-configured scope.",
           "type": "string",
           "const": "allow-list-sources",
@@ -313,6 +361,12 @@
           "type": "string",
           "const": "allow-open-agents-file",
           "markdownDescription": "Enables the open_agents_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the preview_codex_config_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-codex-config-profile",
+          "markdownDescription": "Enables the preview_codex_config_profile command without any pre-configured scope."
         },
         {
           "description": "Enables the probe_codex command without any pre-configured scope.",
@@ -339,10 +393,16 @@
           "markdownDescription": "Enables the restore_auth_profile command without any pre-configured scope."
         },
         {
-          "description": "Enables the reveal_codex_gateway_setup command without any pre-configured scope.",
+          "description": "Enables the restore_codex_config command without any pre-configured scope.",
           "type": "string",
-          "const": "allow-reveal-codex-gateway-setup",
-          "markdownDescription": "Enables the reveal_codex_gateway_setup command without any pre-configured scope."
+          "const": "allow-restore-codex-config",
+          "markdownDescription": "Enables the restore_codex_config command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the restore_proxy_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-restore-proxy-auth-profile",
+          "markdownDescription": "Enables the restore_proxy_auth_profile command without any pre-configured scope."
         },
         {
           "description": "Enables the save_agents_file command without any pre-configured scope.",
@@ -351,10 +411,22 @@
           "markdownDescription": "Enables the save_agents_file command without any pre-configured scope."
         },
         {
+          "description": "Enables the save_codex_config_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-codex-config-profile",
+          "markdownDescription": "Enables the save_codex_config_profile command without any pre-configured scope."
+        },
+        {
           "description": "Enables the save_codex_provider command without any pre-configured scope.",
           "type": "string",
           "const": "allow-save-codex-provider",
           "markdownDescription": "Enables the save_codex_provider command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_proxy_auth_profile_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-proxy-auth-profile-enabled",
+          "markdownDescription": "Enables the set_proxy_auth_profile_enabled command without any pre-configured scope."
         },
         {
           "description": "Enables the start_codex_gateway command without any pre-configured scope.",
@@ -393,6 +465,12 @@
           "markdownDescription": "Denies the activate_auth_profile command without any pre-configured scope."
         },
         {
+          "description": "Denies the apply_codex_config_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-apply-codex-config-profile",
+          "markdownDescription": "Denies the apply_codex_config_profile command without any pre-configured scope."
+        },
+        {
           "description": "Denies the bootstrap command without any pre-configured scope.",
           "type": "string",
           "const": "deny-bootstrap",
@@ -403,6 +481,12 @@
           "type": "string",
           "const": "deny-check-for-update",
           "markdownDescription": "Denies the check_for_update command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_latest_cliproxy_core command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-latest-cliproxy-core",
+          "markdownDescription": "Denies the check_latest_cliproxy_core command without any pre-configured scope."
         },
         {
           "description": "Denies the create_agents_file command without any pre-configured scope.",
@@ -417,10 +501,22 @@
           "markdownDescription": "Denies the delete_auth_profile command without any pre-configured scope."
         },
         {
+          "description": "Denies the delete_codex_config_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-codex-config-profile",
+          "markdownDescription": "Denies the delete_codex_config_profile command without any pre-configured scope."
+        },
+        {
           "description": "Denies the delete_codex_provider command without any pre-configured scope.",
           "type": "string",
           "const": "deny-delete-codex-provider",
           "markdownDescription": "Denies the delete_codex_provider command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_proxy_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-proxy-auth-profile",
+          "markdownDescription": "Denies the delete_proxy_auth_profile command without any pre-configured scope."
         },
         {
           "description": "Denies the discover_projects command without any pre-configured scope.",
@@ -439,6 +535,12 @@
           "type": "string",
           "const": "deny-get-codex-account",
           "markdownDescription": "Denies the get_codex_account command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_codex_config_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-codex-config-snapshot",
+          "markdownDescription": "Denies the get_codex_config_snapshot command without any pre-configured scope."
         },
         {
           "description": "Denies the get_codex_gateway_status command without any pre-configured scope.",
@@ -469,6 +571,18 @@
           "type": "string",
           "const": "deny-import-auth-profile",
           "markdownDescription": "Denies the import_auth_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the import_proxy_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-import-proxy-auth-profile",
+          "markdownDescription": "Denies the import_proxy_auth_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the install_latest_cliproxy_core command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-install-latest-cliproxy-core",
+          "markdownDescription": "Denies the install_latest_cliproxy_core command without any pre-configured scope."
         },
         {
           "description": "Denies the install_pending_update command without any pre-configured scope.",
@@ -513,6 +627,12 @@
           "markdownDescription": "Denies the list_projects command without any pre-configured scope."
         },
         {
+          "description": "Denies the list_proxy_auth_profiles command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-proxy-auth-profiles",
+          "markdownDescription": "Denies the list_proxy_auth_profiles command without any pre-configured scope."
+        },
+        {
           "description": "Denies the list_sources command without any pre-configured scope.",
           "type": "string",
           "const": "deny-list-sources",
@@ -523,6 +643,12 @@
           "type": "string",
           "const": "deny-open-agents-file",
           "markdownDescription": "Denies the open_agents_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_codex_config_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-codex-config-profile",
+          "markdownDescription": "Denies the preview_codex_config_profile command without any pre-configured scope."
         },
         {
           "description": "Denies the probe_codex command without any pre-configured scope.",
@@ -549,10 +675,16 @@
           "markdownDescription": "Denies the restore_auth_profile command without any pre-configured scope."
         },
         {
-          "description": "Denies the reveal_codex_gateway_setup command without any pre-configured scope.",
+          "description": "Denies the restore_codex_config command without any pre-configured scope.",
           "type": "string",
-          "const": "deny-reveal-codex-gateway-setup",
-          "markdownDescription": "Denies the reveal_codex_gateway_setup command without any pre-configured scope."
+          "const": "deny-restore-codex-config",
+          "markdownDescription": "Denies the restore_codex_config command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the restore_proxy_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-restore-proxy-auth-profile",
+          "markdownDescription": "Denies the restore_proxy_auth_profile command without any pre-configured scope."
         },
         {
           "description": "Denies the save_agents_file command without any pre-configured scope.",
@@ -561,10 +693,22 @@
           "markdownDescription": "Denies the save_agents_file command without any pre-configured scope."
         },
         {
+          "description": "Denies the save_codex_config_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-codex-config-profile",
+          "markdownDescription": "Denies the save_codex_config_profile command without any pre-configured scope."
+        },
+        {
           "description": "Denies the save_codex_provider command without any pre-configured scope.",
           "type": "string",
           "const": "deny-save-codex-provider",
           "markdownDescription": "Denies the save_codex_provider command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_proxy_auth_profile_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-proxy-auth-profile-enabled",
+          "markdownDescription": "Denies the set_proxy_auth_profile_enabled command without any pre-configured scope."
         },
         {
           "description": "Denies the start_codex_gateway command without any pre-configured scope.",

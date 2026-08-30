@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-codex-config-profile"
+description = "Enables the delete_codex_config_profile command without any pre-configured scope."
+commands.allow = ["delete_codex_config_profile"]
+
+[[permission]]
+identifier = "deny-delete-codex-config-profile"
+description = "Denies the delete_codex_config_profile command without any pre-configured scope."
+commands.deny = ["delete_codex_config_profile"]

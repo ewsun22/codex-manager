@@ -10,8 +10,19 @@ ship with every public beta. Do not hand-edit generated inventories.
 The project does not bundle credentials, user transcripts, Codex configuration, or
 local databases in release artifacts.
 
-EasyCLIProxyAPI was inspected only as a product-flow reference. Its GUI repository did
-not contain a machine-readable or root license at the inspected revision, so Codex
-Manager does not copy or adapt its source, styling, icons, or brand assets. The OAuth
-feature and explicit profile switching are clean-room implementations using the official
-Codex CLI and App Server; Codex Manager does not adopt EasyCLIProxyAPI's proxy rotation.
+EasyCLIProxyAPI was inspected as a product-flow and sidecar-lifecycle reference at commit
+`79b50b7a2b76607e6ccd01966f4b6d4430a31dcd`. Its GUI repository did not contain a
+machine-readable or root license at that revision, so Codex Manager does not copy or
+adapt its source, styling, icons, brand assets, configuration schema, or Rust
+implementation. Codex Manager's downloader, supervisor, and UI are clean-room code.
+
+CLIProxyAPI is an optional, separately versioned runtime from
+<https://github.com/router-for-me/CLIProxyAPI>, licensed under the MIT License. Codex
+Manager does not compile, link, modify, or bundle its Go source or binary. After an
+explicit user action, the app can download the official prebuilt asset directly from the
+upstream GitHub Release, verify its published SHA-256 values, and run it as a restricted
+loopback sidecar. The upstream binary is not covered by Codex Manager's Developer ID,
+notarization, Tauri updater signature, SBOM, or reproducible-build claims. The audited
+integration baseline is CLIProxyAPI `v7.2.145`, tag commit
+`d9cea8904b14fbbebb77ef26e98ef08f6b48a724`; the actually installed version is shown
+separately in the application.
