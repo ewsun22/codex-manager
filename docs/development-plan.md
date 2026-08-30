@@ -40,7 +40,7 @@
 - [x] SHA/mtime 冲突、同目录原子替换、fsync、两阶段 revision 与崩溃恢复
 - [x] 每文件最多 20 个本地 revision，支持带当前 SHA 的恢复
 
-## Phase 4：macOS beta 工程 — signed stable channel released through v0.4.0; updater E2E pending
+## Phase 4：macOS beta 工程 — signed stable channel active; updater E2E pending
 
 - [x] 隐私、路径安全、CSP 与显式 Tauri command capability
 - [x] 原创应用图标与 macOS 13+ bundle 配置
@@ -67,23 +67,27 @@
 - [x] `v0.3.0` 已从 exact source `fab415af2d9da6dfa41e79c7073bfb9fbb5fb818` 完成签名发布与公开复验；release run `33254920672`、published verification run `33255604307` 均成功，Release ID 为 `378997476`，九项资产已核对
 - [x] `v0.4.0` 已从 exact source `e462db05aa1f2608509cbf333d992bbd89be9a1d` 完成签名发布与公开复验；release run `33278181464`、published verification run `33278878143` 均成功
 - [ ] 尚未取得从已安装旧签名版本到 `v0.4.0` 的真实检查、下载、验签、安装、重启 updater E2E 证据
+- [x] `v0.5.0` 已从 exact source `fdc96c38de8d6d6cacc46a9b7fc70157d39439ee` 完成签名发布与公开复验；CI run `33284042848`、release run `33284510727`、published verification run `33285144491` 均成功，Release ID `379147257` 与九项资产已核对
+- [ ] 尚未取得从已安装的可信旧签名版本到 `v0.5.0` 的真实检查、下载、验签、安装、重启 updater E2E 证据
+- [x] `v0.5.1` 版本、双语 README、脱敏截图、正式 release note 与用户可见面同步门禁已在同一发布源定版；线上状态仍须由最终 exact source SHA 的 CI、签名、公证、草稿与公开复验决定
+- [ ] 尚未取得从已安装的可信旧签名版本到 `v0.5.1` 的真实检查、下载、验签、安装、重启 updater E2E 证据
 
 ## 后续阶段
 
-### Phase 5：Codex 供应商与 Responses 网关 — v0.5.0 stable source finalized; real-provider acceptance pending
+### Phase 5：Codex 供应商与 Responses 网关 — stable channel active; real-provider acceptance pending
 
 - [x] 供应商非秘密元数据使用统一 SQLite store；API Key 使用应用专用 macOS Keychain，WebView DTO 只返回 `hasApiKey`
 - [x] 新增表格优先的“供应商与反代”界面，并把既有 OAuth/认证档案/额度入口明确命名为“官方订阅”
-- [x] 未发布界面将供应商工作流重组为“Codex 配置管理”卡片与弹窗；保留 Keychain-only、显式启动和原生确认边界，未实现的模型测试只给出不发送请求的说明，通用配置或自动接管开关保持禁用
+- [x] `v0.5.1` 将供应商工作流重组为“Codex 配置管理”卡片与弹窗；保留 Keychain-only、显式启动和原生确认边界，模型测试只给出不发送请求的说明，通用配置或自动接管开关保持禁用
 - [x] 显式启动/停止固定 IPv4 loopback 的 Responses identity gateway；随机本机 bearer、body/并发限制、受限响应 header 与 redirect disabled
 - [x] 只支持 `/v1/responses` 与 `/v1/responses/compact`；不把官方 OAuth token 放入反代池
 - [x] 远程 HTTPS 公网和显式 loopback HTTP 两类上游；拒绝 userinfo、query、fragment、私网/link-local 等地址
 - [x] 原生确认后只显示手动配置片段；本版不自动改写 `config.toml` 或 `auth.json`
 - [x] `v0.5.0-beta.1` 已从 exact source `dd370070ae58c3e70d61e95f3ad7b38278080a50`、CI run `33282176058` 发布为 `Unsigned Community Build` GitHub Pre-release；Release ID `379137424`，四项公开资产已回下载复验且稳定 updater 仍为 `v0.4.0`
-- [x] `v0.5.0` 版本、正式 release note、适用文档和 main-only CI push 触发边界已定版；源码定版不预先声明签名 Release 已发布
-- [ ] `v0.5.0` 必须从最终 exact SHA 完成单次主线 CI、受保护签名/双公证、九资产草稿复验、人工 Publish 与 published-mode 公开复验；实际状态以 GitHub Release 和 Actions evidence 为准
+- [x] `v0.5.0` 版本、正式 release note、适用文档和 main-only CI push 触发边界已定版，并从最终 exact source `fdc96c38de8d6d6cacc46a9b7fc70157d39439ee` 完成单次主线 CI、受保护签名/双公证、九资产草稿复验、人工 Publish 与 published-mode 公开复验
+- [x] `v0.5.1` 配置页紧凑卡片/弹窗、响应式布局、双语开源展示与稳定下载入口已定版；本条不预先代表已签名或已公开
 - [ ] 用用户授权的真实 API-key 上游完成 Codex CLI Responses E2E、费用确认与恢复直连验收
-- [ ] 从已安装的可信签名旧版本真实检查、下载、验签、安装、重启到 `v0.5.0`，完成 updater E2E 验收
+- [ ] 从已安装的可信签名旧版本真实检查、下载、验签、安装、重启到最新稳定版本，完成 updater E2E 验收
 - [ ] 为运行中配置漂移、退出前恢复、崩溃恢复设计受管 config state machine；在此之前网关不会自动接管 Codex
 
 首版明确不做 Chat/Anthropic/Gemini 转换、provider failover/retry pool、远程 provider catalog、自定义 header DSL、请求正文日志、官方订阅代理或后台自动换号。

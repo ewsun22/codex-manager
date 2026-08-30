@@ -37,12 +37,19 @@ Release note 采用 `docs/release-notes/v<VERSION>.md` 的固定章节。CI 通�
 - 四项资产已经公开回下载并复验 tag/source、DMG、ZIP 和 SHA-256；稳定 `releases/latest` 与 updater alias 仍指向 `v0.4.0`。创建 tag 曾额外触发同 SHA 的 CI run `33282746660`，因此 `ci.yml` 从 `v0.5.0` 起将 push 限制到 `main`。
 - 真实供应商、费用、手动配置往返、恢复直连和原生安装仍未 `accepted`；该 Pre-release 不得晋升、覆盖或复用为稳定版资产。
 
-## 2026-08-30 v0.5.0 签名稳定版定版边界
+## 2026-08-30 v0.5.0 已发布事实
 
-- `v0.5.0` 使用独立的 final `main` exact SHA、完整 release note 和受保护签名工作流；不得修改或复用 `v0.5.0-beta.1` 的 tag 与四项 unsigned 资产。
-- 只有 final SHA 的单次成功主线 CI、Developer ID/Hardened Runtime/secure timestamp、app 与 DMG 双 notary `Accepted`、stapling、Gatekeeper、updater 签名、九项资产、provenance、attestation 和草稿全量回下载全部通过，才允许人工 Publish。
-- Publish 后还必须用 `Verify existing macOS Release` 的 `published` 模式匿名复验正式 tag URL、`releases/latest`、`latest.json` alias 与全部九项资产。完成前不得报告 `published publicly verified`。
-- 即使公开复验成功，真实 API-key 供应商链和从可信旧签名版本升级安装到 `v0.5.0` 仍分别保持 `accepted=false`，需要独立授权与证据。
+- `v0.5.0` 已从 exact source `fdc96c38de8d6d6cacc46a9b7fc70157d39439ee` 完成签名稳定发布。主线 CI run `33284042848`、受保护签名 release run `33284510727` 与公开后只读复验 run `33285144491` 均成功。
+- GitHub Release ID 为 `379147257`，`draft=false`、`prerelease=false`；tag、Release、`releases/latest` 和 `latest.json` 均绑定同一 exact source。九项正式资产已按资产 ID 与正式 URL 回下载，并重跑 SHA-256、updater 验签、app/DMG Developer ID 签名、Hardened Runtime、双 notary `Accepted`、stapling、Gatekeeper、provenance 与 attestation 门禁。
+- 该状态可报告为 `published publicly verified`，但不等于真实供应商或 updater 已经业务验收。真实 API-key Codex CLI Responses E2E、费用确认、手动配置往返/恢复直连，以及从可信旧签名版本完成检查、下载、验签、安装、重启到 `v0.5.0` 的 updater E2E 仍保持 `accepted=false`。
+- `v0.5.0-beta.1` 仍是隔离的 unsigned community Pre-release；不得覆盖、晋升或复用它的 tag 与四项资产。
+
+## 2026-08-30 v0.5.1 定版与发布边界
+
+- `v0.5.1` 定版 Codex 配置管理页的紧凑卡片/新增编辑弹窗、桌面五列与窄屏响应式布局，并同步英文主 README、简体中文 README、五张脱敏截图、稳定 `releases/latest` 下载入口和上线前用户可见面同步门禁。
+- 本版本不改变 SQLite schema、rollout/OTel/App Server 字段口径、OAuth/Keychain、网关协议、网络监听或权限边界；`docs/architecture.md`、`PRIVACY.md`、`docs/supply-chain.md` 与 `LICENSE` 因此记录为 `no change`。GitHub Description 已同步产品定位，Topics 已覆盖当前分类并记录为 `no change`。
+- 本段随 tag source 定版，不预先宣称已签名或已公开。必须在最终 exact source SHA 上完成单次主线 CI、受保护签名与双公证、九资产草稿回下载复验、人工 Publish 和 published-mode 公开复验，才能提升为 `published publicly verified`。
+- 真实 API-key 供应商 E2E、费用确认、手动配置往返/恢复直连，以及从可信旧签名版本安装更新到 `v0.5.1` 均不在本次授权范围内，继续保持 `accepted=false`。
 
 ## Unsigned Community Build 发布
 

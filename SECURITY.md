@@ -2,7 +2,7 @@
 
 ## 支持状态
 
-项目目前是 macOS beta。源码和明确标注的 `Unsigned Community Build` prerelease 可供开发者验证，但它没有 Apple 身份保证，不属于正式支持的 macOS beta artifact。签名、公证的稳定下载通道已通过 `v0.2.1` 至 `v0.4.0` 的发布链建立；每个新版本仍须用自己的 exact SHA 重新通过全部门禁。Windows 尚未进入安全支持范围。
+项目目前是 macOS beta。源码和明确标注的 `Unsigned Community Build` prerelease 可供开发者验证，但它没有 Apple 身份保证，不属于正式支持的 macOS beta artifact。签名、公证的稳定下载通道已经建立；每个新版本仍须用自己的 exact SHA 重新通过全部门禁，不能继承旧版本的签名、公证或公开复验证据。Windows 尚未进入安全支持范围。
 
 ## 报告问题
 
@@ -12,7 +12,7 @@
 
 ## 安全基线
 
-- local-first、metadata-only、OTel opt-in；`v0.5.0` Codex Responses 网关默认停止且只监听 IPv4 loopback，不提供系统代理、LAN listener 或 root helper。
+- local-first、metadata-only、OTel opt-in；可选 Codex Responses 网关默认停止且只监听 IPv4 loopback，不提供系统代理、LAN listener 或 root helper。
 - 不持久化 Codex 消息正文、Authorization、Cookie、OAuth code、完整环境变量或请求 query。供应商 API Key 与本机网关 bearer 只进入应用专用 Keychain/原生运行时，不进入 SQLite、普通 WebView DTO、日志、备份或错误详情。
 - OTel 只监听 IPv4 loopback 的首次随机、后续持久化端口，使用 localhost TLS 身份和 body 解码前专用 header 认证；持久化端口被占用时 fail closed。请求体上限 128 KiB，连接 10 秒无读写进展即超时，并限制连接/请求并发、频率、处理时间、解码基数与属性 allowlist；日志 body 不被读取。
 - OTel event/provider 仅保存固定枚举，未知 model/thread/turn 仅保存带类型的 SHA-256 截断伪名，endpoint 仅保存 provider/origin/route 分类，避免将攻击者控制的高基数字符串持久化。
@@ -41,7 +41,7 @@
 - SQLite 和普通应用数据对同一 OS 用户可见；认证档案秘密不进入这些位置，而是使用应用专用 macOS Keychain。Keychain 访问仍服从当前登录用户和系统的访问控制，未提供额外主密码。
 - 官方 Codex 可能按用户自己的 `cli_auth_credentials_store` 设置把活动凭据保存在 OS credential store 或 `~/.codex/auth.json`。多档案切换不会改写该设置，只支持 file 模式；keyring/auto 会拒绝切换。切换活动文件会影响共享该缓存的 CLI 与 IDE 扩展。
 - 当前轮换是用户确认后的整账户显式切换，不是请求级调度；不会检测限额后后台自动换号，也不会迁移正在运行的会话。
-- `v0.5.0` 网关不自动改写、接管或恢复 `config.toml`/`auth.json`；它也不是常驻 helper。用户手动使用配置片段后，停止应用或 listener 会使 Codex 请求失败，因此必须先恢复直连。真实 API-key 供应商 E2E 与崩溃恢复尚未 `accepted`。
+- 网关不自动改写、接管或恢复 `config.toml`/`auth.json`；它也不是常驻 helper。用户手动使用配置片段后，停止应用或 listener 会使 Codex 请求失败，因此必须先恢复直连。真实 API-key 供应商 E2E 与崩溃恢复尚未 `accepted`。
 - 当前没有远程撤回机制。桌面版会在启动后按需检查并按配置间隔自动检查更新；自动检查不下载、不安装、不重启。在线更新会将完整更新包读入内存后验签；严格下载字节上限是后续加固项。
 - 签名发布已拆成 secret-free build、无 Release 写权限的受保护 sign、无 Apple/updater secret 的 draft 三个 job；sign/draft 不执行 build artifact 携带的 signer 或 verifier。sign 先下载固定版本 Tauri signer并核对 SHA-512，updater 私钥只在紧邻签名命令的独立 step 注入并在命令后 unset；验签使用 exact checkout 中仅依赖 Node 标准密码库的 Minisign/Ed25519 verifier，transfer 只携带公开 updater key。临时证书/Keychain 在任何上传前清理。draft 只允许 exact source/Release/asset digest 调和，所有资产按 ID 回下载复验；人工发布后另由只读 workflow 匿名验证正式 tag URL 和 latest alias。发布人员已报告 updater 私钥存在独立离线备份，首次发布前仍须复核实际恢复介质。
 

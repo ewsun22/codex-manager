@@ -26,3 +26,7 @@ output/*
 !output/playwright/
 output/playwright/*
 !output/playwright/final-*.png
+!output/playwright/desktop-overview.png
+!output/playwright/activity-turns-1280.png
+!output/playwright/oauth-quota-desktop.png
+!output/playwright/codex-gateway-desktop.png

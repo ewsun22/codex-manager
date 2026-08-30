@@ -26,6 +26,9 @@
 ## 开源文档与发布流程
 
 - 每次用户可见的功能、行为、字段口径、配置、隐私、兼容性或发布流程变化，必须在同一提交更新适用文档；不得只改代码或只改 Release 页面。
+- 任何项目更新准备推送到线上时（包括合并/推送 GitHub 默认分支、创建 tag 或 Release、进入 updater 通道、官网或下载页上线），必须在最终 exact SHA 推送或 Publish 前执行一次“全部用户可见面同步检查”。凡是用户能看到、下载到、读到或依此做决策的内容，只要受本次更新影响，就必须在同一交付切片内一并更新，不得先上线代码、事后再补用户可见内容。
+- 用户可见面同步检查至少覆盖：英文 `README.md` 与 `README.zh-CN.md`、截图/GIF/徽章/下载与 Quick Start 链接、应用内文案与版本/平台说明、适用的 docs/安全/隐私/兼容性文档、`docs/release-notes/unreleased.md` 或定版 note、Release 正文与 `latest.json.notes`、GitHub Repository Description/Topics 等对外元数据，以及其他本次更新实际触达的对外入口。双语内容的主要结构、功能事实、版本、下载、平台和状态边界必须同步。
+- 上线前必须验证用户可见内容的 Markdown/渲染、相对链接、图片资产、对外 URL、版本与平台描述，并检查是否残留 candidate、unreleased、draft 或过期功能状态。不适用的用户可见面可不改，但必须在 Pull Request、Release 证据或最终交付说明中记录 `no change` 及原因，不得默认跳过。如需修改线上元数据或 Release 内容但当前任务尚未授权该外部操作，必须标记 `needs-confirmation` 并说明待同步项，不得把本地文件已修改报告成线上已完成。
 - 文档映射：产品能力与使用说明更新 `README.md`；采集来源、字段口径和能力边界更新 `docs/capability-matrix.md`；架构、数据粒度、去重和状态机更新 `docs/architecture.md`；开发范围和后续事项更新 `docs/development-plan.md`；安全、隐私或供应链变化更新 `SECURITY.md`、`PRIVACY.md`、`docs/supply-chain.md`；发布行为更新 `docs/release.md`；未分配新版本的用户可见变更先更新 `docs/release-notes/unreleased.md`，定版时移入 `docs/release-notes/v<VERSION>.md`，不得改写已有 tag 的功能事实。
 - Release note 必须使用可读固定结构，至少包含“概览”“主要变化”“验证状态”“兼容性与限制”“隐私与安全”“发布状态”和“完整性”章节。`implemented`、`tested`、`published`、`observed`、`accepted`、`cleanup` 必须分别表述，不得把计划、草稿或进行中状态写成完成。
 - Pull Request 必须说明适用文档、验证命令和状态边界；没有文档变化时必须解释原因。Release 正文使用完整版本 note；`latest.json.notes` 由同一 note 生成短摘要，不得另写固定模板或包含密钥、令牌、凭据和隐私数据。
