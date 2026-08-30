@@ -52,6 +52,13 @@ Release note 采用 `docs/release-notes/v<VERSION>.md` 的固定章节。CI 通�
 - 九项正式资产已按 draft asset ID 和公开 tag URL 回下载，完成 SHA-256、updater 签名、Developer ID、Hardened Runtime、secure timestamp、app/DMG 双 notary `Accepted`、stapling、Gatekeeper、provenance 与 attestation 复验。签名 job 在上传前已删除临时证书和 Keychain；该状态可报告为 `published publicly verified`。
 - 真实 API-key 供应商 E2E、费用确认、手动配置往返/恢复直连，以及从可信旧签名版本安装更新到 `v0.5.1` 均不在本次授权范围内，继续保持 `accepted=false`。
 
+## 2026-08-30 v0.6.0 已发布事实
+
+- `v0.6.0` 已从 exact source `ab27a0632d158c553e50cc48750479082f190f86` 完成签名稳定发布。主线 CI run `33298155396`、受保护签名 release run `33298611370` attempt 2 与公开后只读复验 run `33299373110` 均成功。
+- GitHub Release ID 为 `379210189`，`draft=false`、`prerelease=false`；tag、Release、`releases/latest` 与 `latest.json` 均绑定同一 exact source。九项正式资产已按草稿 asset ID 和公开 tag URL 回下载，完成 SHA-256、updater 签名、Developer ID、Hardened Runtime、secure timestamp、app/DMG 双 notary `Accepted`、stapling、Gatekeeper、provenance 与 attestation 复验；该状态为 `published publicly verified`。
+- release run attempt 1 的 secret-free Rust checks 在 `macos-15 arm64` runner 上因刚生成的 `proc-macro2`、`quote` 与 `libc` build script 报 `cannot execute binary file` 而失败；失败发生在受保护 secret job 之前，没有创建 tag 或 Release。只对同一 run、同一 source 重跑失败 job 后，attempt 2 重新通过不可变源、全量构建与供应链门禁，再进入签名、草稿与公开复验；没有绕过或手工替代失败门禁。
+- 本版本发布总览紧凑化、首页 Responses 网关快捷控制、官方订阅 Keychain cache-first 白名单快照、SQLite schema v12 的 CLI Schema 兼容性状态、构建信息与配置占位清理。真实 API-key 上游、费用、配置往返/恢复直连，以及从可信旧签名版本安装更新到 `v0.6.0` 仍未 `accepted`。
+
 ## Unsigned Community Build 发布
 
 1. 只使用 `main` 当前 commit 的成功 `CI` run 所上传的 `codex-manager-macos-unsigned` artifact，不使用本机历史产物。
