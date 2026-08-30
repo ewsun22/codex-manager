@@ -59,6 +59,14 @@ Release note 采用 `docs/release-notes/v<VERSION>.md` 的固定章节。CI 通�
 - release run attempt 1 的 secret-free Rust checks 在 `macos-15 arm64` runner 上因刚生成的 `proc-macro2`、`quote` 与 `libc` build script 报 `cannot execute binary file` 而失败；失败发生在受保护 secret job 之前，没有创建 tag 或 Release。只对同一 run、同一 source 重跑失败 job 后，attempt 2 重新通过不可变源、全量构建与供应链门禁，再进入签名、草稿与公开复验；没有绕过或手工替代失败门禁。
 - 本版本发布总览紧凑化、首页 Responses 网关快捷控制、官方订阅 Keychain cache-first 白名单快照、SQLite schema v12 的 CLI Schema 兼容性状态、构建信息与配置占位清理。真实 API-key 上游、费用、配置往返/恢复直连，以及从可信旧签名版本安装更新到 `v0.6.0` 仍未 `accepted`。
 
+## 2026-08-31 v0.6.1 已发布事实
+
+- `v0.6.1` 已从 exact source `50a715f8b59f1c20c641ecb47d31853e68dd0f09` 完成签名稳定发布。主线 CI run `33323029379`、受保护签名 release run `33323661275` 与公开后只读复验 run `33324580987` 均成功。
+- GitHub Release ID 为 `379347316`，`draft=false`、`prerelease=false`；tag、Release、`releases/latest` 与 `latest.json` 均绑定同一 exact source。九项正式资产已按草稿 asset ID 和公开 tag URL 回下载，完成 SHA-256、updater 签名、Developer ID、Hardened Runtime、secure timestamp、app/DMG 双 notary `Accepted`、stapling、Gatekeeper、provenance 与 attestation 复验；该状态为 `published publicly verified`。
+- 本版本将本地反代收敛为独立版本的 CLIProxyAPI OAuth 凭据池，外部 Responses provider 改由 Codex 配置直接访问；内核固定审核基线 `v7.2.145` 的精确平台资产与 SHA-256，不跟随上游 `latest`，并修复受管 sidecar 异常退出后的恢复死锁。
+- 用户可见面已同步英文与简体中文 README、最新本地代理截图、隐私与安全策略、架构、能力矩阵、开发计划、供应链说明和版本 note。GitHub Description、Topics、平台范围、`LICENSE` 与第三方许可事实记录为 `no change`。
+- 真实 CLIProxyAPI OAuth → loopback → Codex Responses、供应商费用、隔离环境 sidecar 网络/磁盘观测，以及从可信旧签名版本安装更新到 `v0.6.1` 仍未 `accepted`；签名发布与公开资产复验不外推为这些业务链验收。
+
 ## Unsigned Community Build 发布
 
 1. 只使用 `main` 当前 commit 的成功 `CI` run 所上传的 `codex-manager-macos-unsigned` artifact，不使用本机历史产物。

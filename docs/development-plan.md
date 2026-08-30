@@ -73,6 +73,8 @@
 - [ ] 尚未取得从已安装的可信旧签名版本到 `v0.5.1` 的真实检查、下载、验签、安装、重启 updater E2E 证据
 - [x] `v0.6.0` 已从 exact source `ab27a0632d158c553e50cc48750479082f190f86` 完成签名发布与公开复验；CI run `33298155396`、release run `33298611370` attempt 2、published verification run `33299373110` 均成功，Release ID `379210189` 与九项资产已核对
 - [ ] 尚未取得从已安装的可信旧签名版本到 `v0.6.0` 的真实检查、下载、验签、安装、重启 updater E2E 证据
+- [x] `v0.6.1` 已从 exact source `50a715f8b59f1c20c641ecb47d31853e68dd0f09` 完成签名发布与公开复验；CI run `33323029379`、release run `33323661275`、published verification run `33324580987` 均成功，Release ID `379347316` 与九项资产已核对
+- [ ] 尚未取得从已安装的可信旧签名版本到 `v0.6.1` 的真实检查、下载、验签、安装、重启 updater E2E 证据
 
 ## 后续阶段
 
@@ -90,15 +92,16 @@
 - [x] `v0.6.0` 官方订阅改为 cache-first：白名单账户摘要/套餐/额度/时间进入独立 macOS Keychain，cache miss/手动刷新才解析可信 CLI；超过 6 小时或刷新失败显式 stale
 - [x] `v0.6.0` 将 App Server capability 重命名为“CLI Schema 兼容性（非采集源）”，持久化最近探测结果，不影响 rollout 主采集
 - [x] `v0.6.0` 侧栏本地桌面模式显示版本、构建时间（可选短 SHA）；Codex 配置移除三个未开放占位模块
-- [x] 未发布：删除旧 Rust 进程内 Responses 转发路径，改由 `router-for-me/CLIProxyAPI` 官方预编译 sidecar 承担反代；主体与内核独立版本，本机不编译 Go
-- [x] 未发布：首页增加显式反代开关、OpenAI/Claude/Gemini 兼容 URL、内核版本和 PID；反代页提供确认/安装/切回审核基线入口
-- [x] 未发布：安装器只选择代码中已审核的 `v7.2.145` 精确平台资产名与 SHA-256，不请求上游 `latest`；限制下载/解压并使用私有 staging，新内核健康前保留旧版
-- [x] 未发布：生成配置固定 `127.0.0.1`、`commercial-mode:true`，关闭 remote management/control panel/plugins/request log/file log/usage stats；OAuth 凭据只从独立 Keychain 物化到运行期 `0600` auth-dir，停止后删除
-- [x] 未发布：CLIProxyAPI OAuth 档案支持原生文件选择器导入、独立 Keychain 保存、启用/禁用、删除/恢复与运行时 checkpoint；Management API/OAuth callback 不向 WebView 开放，官方 OAuth token 不跨域
+- [x] `v0.6.1`：删除旧 Rust 进程内 Responses 转发路径，改由 `router-for-me/CLIProxyAPI` 官方预编译 sidecar 承担反代；主体与内核独立版本，本机不编译 Go
+- [x] `v0.6.1`：首页增加显式反代开关、OpenAI/Claude/Gemini 兼容 URL、内核版本和 PID；反代页提供确认/安装/切回审核基线入口
+- [x] `v0.6.1`：安装器只选择代码中已审核的 `v7.2.145` 精确平台资产名与 SHA-256，不请求上游 `latest`；限制下载/解压并使用私有 staging，新内核健康前保留旧版
+- [x] `v0.6.1`：生成配置固定 `127.0.0.1`、`commercial-mode:true`，关闭 remote management/control panel/plugins/request log/file log/usage stats；OAuth 凭据只从独立 Keychain 物化到运行期 `0600` auth-dir，停止后删除
+- [x] `v0.6.1`：CLIProxyAPI OAuth 档案支持原生文件选择器导入、独立 Keychain 保存、启用/禁用、删除/恢复与运行时 checkpoint；Management API/OAuth callback 不向 WebView 开放，官方 OAuth token 不跨域
 - [x] `v0.5.0-beta.1` 已从 exact source `dd370070ae58c3e70d61e95f3ad7b38278080a50`、CI run `33282176058` 发布为 `Unsigned Community Build` GitHub Pre-release；Release ID `379137424`，四项公开资产已回下载复验且稳定 updater 仍为 `v0.4.0`
 - [x] `v0.5.0` 版本、正式 release note、适用文档和 main-only CI push 触发边界已定版，并从最终 exact source `fdc96c38de8d6d6cacc46a9b7fc70157d39439ee` 完成单次主线 CI、受保护签名/双公证、九资产草稿复验、人工 Publish 与 published-mode 公开复验
 - [x] `v0.5.1` 配置页紧凑卡片/弹窗、响应式布局、双语开源展示与稳定下载入口已发布，并完成签名、公证、stapling、草稿与公开后复验
 - [x] `v0.6.0` 总览、官方订阅缓存、CLI Schema 诊断与构建信息已完成签名、公证、九资产草稿复验、人工 Publish 和 published-mode 公开复验
+- [x] `v0.6.1` OAuth-only 本地代理、固定 CLIProxyAPI 审核基线与外部 provider 直连已完成签名、公证、九资产草稿复验、人工 Publish 和 published-mode 公开复验
 - [ ] 用用户授权的真实 CLIProxyAPI OAuth 凭据完成 OAuth → loopback → Codex CLI Responses E2E、费用确认与恢复直连验收
 - [ ] 从已安装的可信签名旧版本真实检查、下载、验签、安装、重启到最新稳定版本，完成 updater E2E 验收
 - [ ] 为运行中配置漂移、退出前恢复、崩溃恢复设计受管 config state machine；在此之前网关不会自动接管 Codex
