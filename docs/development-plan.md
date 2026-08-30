@@ -74,6 +74,7 @@
 
 - [x] 供应商非秘密元数据使用统一 SQLite store；API Key 使用应用专用 macOS Keychain，WebView DTO 只返回 `hasApiKey`
 - [x] 新增表格优先的“供应商与反代”界面，并把既有 OAuth/认证档案/额度入口明确命名为“官方订阅”
+- [x] 未发布界面将供应商工作流重组为“Codex 配置管理”卡片与弹窗；保留 Keychain-only、显式启动和原生确认边界，未实现的模型测试只给出不发送请求的说明，通用配置或自动接管开关保持禁用
 - [x] 显式启动/停止固定 IPv4 loopback 的 Responses identity gateway；随机本机 bearer、body/并发限制、受限响应 header 与 redirect disabled
 - [x] 只支持 `/v1/responses` 与 `/v1/responses/compact`；不把官方 OAuth token 放入反代池
 - [x] 远程 HTTPS 公网和显式 loopback HTTP 两类上游；拒绝 userinfo、query、fragment、私网/link-local 等地址

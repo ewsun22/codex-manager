@@ -100,3 +100,20 @@ test("网关 WebView 权限只开放显式命令且不引入通用网络或进�
     false,
   );
 });
+
+test("Codex 配置页保持保存、应用和官方订阅边界可见", () => {
+  const source = readFileSync(
+    new URL("../src/app/codex-gateway.tsx", import.meta.url),
+    "utf8",
+  );
+  const shell = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /Codex 配置管理/);
+  assert.match(source, /非敏感配置预览/);
+  assert.match(source, /模型测试尚未开放/);
+  assert.match(source, /不会自动改写 `config\.toml`/);
+  assert.match(source, /真正的 loopback bearer 不会显示在这里/);
+  assert.match(source, /管理官方订阅/);
+  assert.match(shell, /codexHome=\{payload\.settings\.codexHomes\[0\]\}/);
+  assert.match(shell, /onOpenOfficialSubscription=\{\(\) => setView\("oauth"\)\}/);
+});

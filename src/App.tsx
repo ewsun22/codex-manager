@@ -55,7 +55,7 @@ const navItems: Array<{ id: View; label: string; helper: string }> = [
   { id: "overview", label: "总览", helper: "采集与使用概览" },
   { id: "activity", label: "活动记录", helper: "每次模型调用的元数据" },
   { id: "projects", label: "项目与 AGENTS", helper: "项目发现与安全编辑" },
-  { id: "gateway", label: "供应商与反代", helper: "Codex Responses 网关" },
+  { id: "gateway", label: "Codex 配置", helper: "供应商、网关与配置预览" },
   { id: "oauth", label: "官方订阅", helper: "账户登录、档案与额度" },
   { id: "pricing", label: "价格目录", helper: "估算来源与覆盖规则" },
   { id: "settings", label: "设置", helper: "本地路径与保留策略" },
@@ -1794,7 +1794,7 @@ export function App() {
       case "overview": return <Overview payload={payload} onNavigate={setView} />;
       case "activity": return <ActivityView initial={payload.activity} projects={projects} onLoad={loadActivity} refreshRevision={activityRefreshRevision} fullRefreshRevision={activityFullRefreshRevision} />;
       case "projects": return <ProjectsView projects={projects} authorizedRoots={payload.settings.authorizedRoots} onProjectsChange={(next) => setPayload((old) => old ? { ...old, projects: next } : old)} showNotice={setNotice} />;
-      case "gateway": return <CodexGatewayView onNotice={showGatewayNotice} />;
+      case "gateway": return <CodexGatewayView codexHome={payload.settings.codexHomes[0]} onNotice={showGatewayNotice} onOpenOfficialSubscription={() => setView("oauth")} />;
       case "oauth": return <OAuthView showNotice={setNotice} />;
       case "pricing": return <PricingView rules={payload.pricingRules} />;
       case "settings": return <SettingsView settings={payload.settings} capability={payload.capability} updateStatus={updateStatus} updateBusy={updateBusy} updateMessage={updateMessage} onSave={(next) => void updateSettings(next)} onProbe={() => void probe()} onCheckUpdate={() => void checkForUpdate()} onInstallUpdate={() => void installUpdate()} saving={saving} />;

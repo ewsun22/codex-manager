@@ -23,7 +23,7 @@ Codex Manager 是一个独立运行、本地优先的开源 Codex 桌面管理�
 - 在授权根目录内创建项目级 `AGENTS.md`，并以 canonical path、逐段 no-follow、SHA/mtime 冲突检查、同目录原子交换和本地 revision 完成保存与恢复。
 - 探测 Desktop 内置或 PATH 中的 Codex CLI，并生成 App Server JSON Schema 指纹；不附着 Codex Desktop 的私有 stdio。
 - OAuth 页面由用户点击启动官方 `codex login` 浏览器流程，并用短生命周期的官方 App Server 读取账户、套餐与 ChatGPT Codex 额度窗口。macOS beta 还支持通过原生文件选择器导入 ChatGPT OAuth `auth.json`、把多个档案秘密保存在应用专用 Keychain、软删除/恢复，以及由用户明确触发的“设为当前”或“轮换到下一个”。token、文件路径、原始 JSON、授权 URL 与回调 URL不进入 WebView、SQLite 或应用日志。
-- `v0.5.0` 提供 Codex Responses-compatible 供应商表和显式启停的本地网关。供应商元数据进入 SQLite，API Key 与随机本机 bearer 只进入应用专用 Keychain/原生运行时；普通 DTO 只返回 `hasApiKey`。网关固定监听 `127.0.0.1`，只支持 `/v1/models`、`/v1/responses`、`/v1/responses/compact` 和受保护的本机辅助端点，禁用 redirect 和系统代理，不保存请求/响应 body、header 或 query。它不会自动改写 `config.toml`；配置片段只在用户通过原生确认后临时显示。
+- `v0.5.0` 提供 Codex Responses-compatible 供应商和显式启停的本地网关；未发布界面进一步把这一工作流整理为“Codex 配置管理”：供应商改用紧凑卡片与新增/编辑弹窗，页面就近展示网关状态、配置预览入口和官方订阅边界。供应商元数据进入 SQLite，API Key 与随机本机 bearer 只进入应用专用 Keychain/原生运行时；普通 DTO 只返回 `hasApiKey`。网关固定监听 `127.0.0.1`，只支持 `/v1/models`、`/v1/responses`、`/v1/responses/compact` 和受保护的本机辅助端点，禁用 redirect 和系统代理，不保存请求/响应 body、header 或 query。界面中的“应用”只启动所选供应商的 loopback 网关，不会自动改写 `config.toml`；含 bearer 的配置片段仍只在用户通过原生确认后临时显示。
 - 设置页提供 GitHub Releases 更新检查：桌面版启动后按需检查，并默认每 12 小时自动检查一次；检查间隔可在设置中配置为 1–168 小时。Rust 后端固定 endpoint 和公钥，只持久化最近检查尝试时间，以及最近成功检查的当前/可用版本、发布日期和截断后的 notes；发现新版本时设置侧栏与应用更新卡片都会提醒。安装前显示 macOS 原生确认框并验证 Tauri 更新签名，下载、安装和重启仍需用户显式操作。
 
 ## 观测边界
