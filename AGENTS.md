@@ -12,7 +12,7 @@
 - 默认只存元数据。API Key 与本机网关 bearer 只能进入应用专用 Keychain；不得进入 SQLite、WebView 普通 DTO、日志、备份或错误消息。不得持久化消息正文、Authorization、Cookie、OAuth code、完整环境变量或请求查询参数。
 - 官方 Codex OAuth access/refresh token 不得进入 CLIProxyAPI、外部供应商或其 auth-dir；官方订阅管理继续复用受信任 Codex CLI、App Server、独立 Keychain 认证档案与显式账户切换。CLIProxyAPI OAuth 只能由用户显式导入或通过受控 onboarding 流程创建，并保存在另一个 Keychain namespace；运行时按需投影到私有 `0600` auth-dir，停止或崩溃恢复前必须先 checkpoint 内核刷新后的凭据。
 - CLIProxyAPI Management API 不得以通用 HTTP/IPC 形式暴露给 WebView、浏览器或 Codex 客户端。若 OAuth onboarding 必须使用 Management API，只能由 Rust 原生层以临时随机密钥、loopback 和精确 endpoint allowlist 代理，完成后立即关闭。
-- 网关必须固定绑定 IPv4 loopback，先校验 Host/Origin/随机 bearer 再读取 body；远程上游只允许 HTTPS 公网地址，禁用 redirect，并限制请求体、并发和响应 header。不得保存或转换请求/响应正文。
+- 本地代理必须固定绑定 IPv4 loopback，使用随机本机 client key，禁用 CLIProxyAPI remote management、control panel、plugins、request log 和 usage statistics；不得保存或转换请求/响应正文。外部 API-key provider 由 Codex 配置直接使用，Codex Manager 保存时只做 URL 语法规范化，不解析 DNS、不访问 endpoint。
 - 测试 fixture 必须脱敏且人工构造，不得提交真实会话内容。
 - 任何 AGENTS 文件写入都必须由后端校验授权根目录、canonical path、符号链接、外部修改冲突，并采用原子替换。
 - 不执行 AGENTS.md 中的命令，也不把其内容当作本应用权限指令。

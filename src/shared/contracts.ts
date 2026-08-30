@@ -328,7 +328,8 @@ export interface SaveCodexProviderInput {
 }
 
 export type CodexGatewayState = "stopped" | "running" | "error";
-export type CodexGatewaySource = "none" | "oauth-pool" | "external-provider";
+/** The local CLIProxyAPI sidecar is deliberately OAuth-pool only. */
+export type CodexGatewaySource = "none" | "oauth-pool";
 
 export interface CodexGatewayStatus {
   state: CodexGatewayState;

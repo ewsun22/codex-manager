@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, ToSocketAddrs},
+    net::{Ipv4Addr, TcpListener},
     path::{Component, Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
@@ -29,8 +29,9 @@ const KEYCHAIN_PREFIX: &str = "provider:";
 const KEYCHAIN_GATEWAY_TOKEN: &str = "gateway-client-token";
 const MAX_FIELD_BYTES: usize = 256;
 const CORE_REPOSITORY: &str = "router-for-me/CLIProxyAPI";
-const CORE_RELEASE_URL: &str =
-    "https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest";
+/// The app never follows the upstream "latest" channel.  Each supported
+/// platform is deliberately pinned to the reviewed v7.2.145 asset and digest.
+const PINNED_CORE_VERSION: &str = "7.2.145";
 const CORE_DOWNLOAD_LIMIT: u64 = 128 * 1024 * 1024;
 const CORE_EXTRACT_LIMIT: u64 = 512 * 1024 * 1024;
 const CORE_HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -90,6 +91,7 @@ struct CoreMetadata {
     core_version: Option<String>,
     asset: Option<String>,
     digest: Option<String>,
+    binary_digest: Option<String>,
     installed_at: Option<String>,
     latest_version: Option<String>,
     previous_core_dir: Option<String>,
@@ -113,24 +115,12 @@ struct CoreRollbackJournal {
     restored: CoreMetadata,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-struct GithubRelease {
-    tag_name: String,
-    assets: Vec<GithubAsset>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct GithubAsset {
-    name: String,
-    browser_download_url: String,
-    digest: Option<String>,
-}
-
 #[derive(Clone, Debug)]
-struct CoreRelease {
+struct PinnedCoreAsset {
+    name: String,
     version: String,
-    asset: GithubAsset,
-    checksums: GithubAsset,
+    download_url: String,
+    sha256: String,
 }
 
 trait KeychainBackend: Send + Sync {
@@ -373,16 +363,12 @@ fn normalize_base_url(value: &str) -> Result<String, GatewayError> {
     {
         return Err(GatewayError::InvalidProvider);
     }
-    let host = url.host_str().ok_or(GatewayError::InvalidProvider)?;
-    let local = host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1";
-    if !(url.scheme() == "https" || (url.scheme() == "http" && local)) {
+    url.host_str().ok_or(GatewayError::InvalidProvider)?;
+    if !matches!(url.scheme(), "http" | "https") {
         return Err(GatewayError::InvalidProvider);
     }
     if url.port_or_known_default().is_none() {
         return Err(GatewayError::InvalidProvider);
-    }
-    if url.scheme() == "https" {
-        resolve_safe_remote(host, url.port_or_known_default().unwrap())?;
     }
     let path = url.path().trim_end_matches('/');
     if !(path.is_empty() || path == "/v1") {
@@ -390,69 +376,6 @@ fn normalize_base_url(value: &str) -> Result<String, GatewayError> {
     }
     url.set_path("/v1");
     Ok(url.to_string().trim_end_matches('/').to_owned())
-}
-/// A deliberately conservative global-unicast allowlist. `IpAddr::is_global`
-/// is not available on every supported Rust version, and permissive fallback
-/// checks would let special-use or documentation networks become SSRF sinks.
-fn unsafe_remote_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(value) => !is_public_v4(value),
-        IpAddr::V6(value) => !is_public_v6(value),
-    }
-}
-fn is_public_v4(ip: Ipv4Addr) -> bool {
-    let [a, b, c, _] = ip.octets();
-    if a == 0 || a == 10 || a == 127 || a >= 224 {
-        return false;
-    }
-    if (a == 100 && (64..=127).contains(&b)) // shared CGNAT
-        || (a == 169 && b == 254) // link-local
-        || (a == 172 && (16..=31).contains(&b))
-        || (a == 192 && b == 168)
-        || (a == 198 && (b == 18 || b == 19)) // benchmark
-        || (a == 192 && b == 0) // IETF protocol assignments / documentation
-        || (a == 192 && b == 0 && c == 2)
-        || (a == 198 && b == 51 && c == 100)
-        || (a == 203 && b == 0 && c == 113)
-        || (a == 192 && b == 31 && c == 196) // AS112
-        || (a == 192 && b == 52 && c == 193) // AMT
-        || (a == 192 && b == 88 && c == 99) // deprecated 6to4 relay
-        || (a == 192 && b == 175 && c == 48)
-    {
-        return false;
-    }
-    true
-}
-fn is_public_v6(ip: Ipv6Addr) -> bool {
-    if let Some(mapped) = ip.to_ipv4_mapped() {
-        return is_public_v4(mapped);
-    }
-    let segments = ip.segments();
-    // Only globally routable 2000::/3 is permitted. This excludes ::/128,
-    // loopback, IPv4-compatible, NAT64, ULA, link-local and multicast space.
-    if (segments[0] & 0xe000) != 0x2000 {
-        return false;
-    }
-    // Remaining special-purpose addresses nested inside 2000::/3.
-    !((segments[0] == 0x2001
-        && (segments[1] <= 0x01ff // IETF special-purpose 2001::/23
-            || segments[1] == 0x0db8)) // documentation 2001:db8::/32
-        || segments[0] == 0x2002 // deprecated 6to4, can embed non-public v4
-        || segments[0] == 0x3ffe) // retired 6bone
-}
-fn resolve_safe_remote(host: &str, port: u16) -> Result<SocketAddr, GatewayError> {
-    let addresses = (host, port)
-        .to_socket_addrs()
-        .map_err(|_| GatewayError::InvalidProvider)?
-        .collect::<Vec<_>>();
-    let first = *addresses.first().ok_or(GatewayError::InvalidProvider)?;
-    if addresses
-        .iter()
-        .any(|address| unsafe_remote_ip(address.ip()))
-    {
-        return Err(GatewayError::InvalidProvider);
-    }
-    Ok(first)
 }
 fn dto(row: CodexProviderRow, has_api_key: bool) -> ProviderDto {
     ProviderDto {
@@ -489,6 +412,16 @@ struct SidecarProcess {
     runtime_dir: PathBuf,
 }
 impl ServerHandle {
+    pub fn is_running(&self) -> bool {
+        self.sidecar.as_ref().is_some_and(|sidecar| {
+            sidecar
+                .child
+                .lock()
+                .map(|mut child| child.try_wait().is_ok_and(|status| status.is_none()))
+                .unwrap_or(false)
+        })
+    }
+
     pub fn status(&self) -> GatewayStatus {
         let Some(sidecar) = self.sidecar.as_ref() else {
             return status_from_core(
@@ -563,75 +496,28 @@ impl Drop for ServerHandle {
     }
 }
 
-/// Fetches only the official GitHub Release manifest and persists the latest
-/// version marker. A missing API digest is deliberately a hard failure.
+/// Records the bundled review baseline. This intentionally performs no network
+/// lookup: a new upstream CLIProxyAPI release must be reviewed in this project
+/// before its version and per-platform digest are changed here.
 pub async fn check_latest_core(data_dir: &Path) -> Result<(), String> {
-    let release = fetch_latest_release().await?;
     let mut metadata = read_core_metadata(data_dir)?;
-    metadata.latest_version = Some(release.version);
+    metadata.latest_version = Some(PINNED_CORE_VERSION.into());
     write_core_metadata(data_dir, &metadata)
 }
 
-/// Installs an official prebuilt CLIProxyAPI release. CLIProxyAPI source code is
-/// never downloaded, built or linked into the desktop application.
+/// Installs the reviewed prebuilt CLIProxyAPI baseline. CLIProxyAPI source code
+/// is never downloaded, built or linked into the desktop application.
 pub async fn install_latest_core(data_dir: &Path) -> Result<(), String> {
     let root = core_root(data_dir);
     ensure_private_dir(&root)?;
     recover_incomplete_core_rollback(&root)?;
     recover_incomplete_core_install(&root)?;
-    let release = fetch_latest_release().await?;
+    let release = pinned_core_asset()?;
     let stage = root.join(format!(".staging-{}", Uuid::new_v4()));
     ensure_private_dir(&stage)?;
     let outcome = install_release_into(&root, &stage, &release).await;
     let _ = fs::remove_dir_all(&stage);
     outcome
-}
-
-pub async fn start(
-    store: &Store,
-    provider_id: &str,
-    port: u16,
-    data_dir: &Path,
-) -> Result<ServerHandle, String> {
-    if !(1024..=65535).contains(&port) {
-        return Err("本地反代端口必须在 1024 到 65535 之间。".into());
-    }
-    let metadata = read_core_metadata(data_dir)?;
-    if metadata.core_version.is_none() {
-        return Err("CLIProxyAPI 内核尚未安装；请先安装官方 Release。".into());
-    }
-    let row = store
-        .codex_provider(provider_id)
-        .map_err(|_| "读取供应商失败。".to_string())?
-        .ok_or_else(|| "供应商不存在。".to_string())?;
-    let secret = mac_keychain()
-        .read(&provider_account(&row.id))
-        .map_err(public_error)?
-        .ok_or_else(|| "供应商缺少 API Key。".to_string())?;
-    let upstream_key =
-        String::from_utf8(secret.to_vec()).map_err(|_| "供应商 API Key 无效。".to_string())?;
-    let token = gateway_token(mac_keychain())?;
-    match start_sidecar(row, upstream_key, token, port, data_dir).await {
-        Ok(handle) => {
-            if let Err(error) = finalize_core_update(data_dir) {
-                let _ = handle.stop().await;
-                let rollback = rollback_core_update(data_dir);
-                return Err(match rollback {
-                    Ok(true) => format!("新 CLIProxyAPI 内核已停止并恢复上一版：{error}"),
-                    Ok(false) => error,
-                    Err(rollback_error) => format!("{error}；{rollback_error}"),
-                });
-            }
-            Ok(handle)
-        }
-        Err(error) => match rollback_core_update(data_dir) {
-            Ok(true) => Err(format!(
-                "新 CLIProxyAPI 内核未通过健康检查，已恢复上一版：{error}"
-            )),
-            Ok(false) => Err(error),
-            Err(rollback_error) => Err(format!("{error}；{rollback_error}")),
-        },
-    }
 }
 
 pub async fn start_oauth(
@@ -645,6 +531,10 @@ pub async fn start_oauth(
     let metadata = read_core_metadata(data_dir)?;
     if metadata.core_version.is_none() {
         return Err("CLIProxyAPI 内核尚未安装；请先安装官方 Release。".into());
+    }
+    let baseline = pinned_core_asset()?;
+    if !reviewed_core_ready(data_dir, &metadata, &baseline) {
+        return Err("已安装的 CLIProxyAPI 与当前审核基线不一致；请先安装审核基线。".into());
     }
     // Holding the port before touching recovery evidence proves that no
     // orphaned CLIProxyAPI process is still serving/writing the auth-dir.
@@ -761,66 +651,47 @@ fn write_core_metadata(data_dir: &Path, metadata: &CoreMetadata) -> Result<(), S
     atomic_private_write(&metadata_path(data_dir), &bytes)
 }
 
-async fn fetch_latest_release() -> Result<CoreRelease, String> {
-    let client = Client::builder()
-        .user_agent("Codex-Manager/CLIProxyAPI-core")
-        .redirect(Policy::none())
-        .timeout(Duration::from_secs(20))
-        .build()
-        .map_err(|_| "创建 CLIProxyAPI Release 客户端失败。".to_string())?;
-    let response = client
-        .get(CORE_RELEASE_URL)
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .await
-        .map_err(|_| "无法读取 CLIProxyAPI 官方 Release。".to_string())?;
-    if !response.status().is_success() {
-        return Err("无法读取 CLIProxyAPI 官方 Release。".into());
-    }
-    let release: GithubRelease = response
-        .json()
-        .await
-        .map_err(|_| "CLIProxyAPI 官方 Release 数据无效。".to_string())?;
-    select_release_asset(release)
+fn pinned_core_asset() -> Result<PinnedCoreAsset, String> {
+    let (os, arch, extension) = platform_asset_parts()?;
+    let asset = format!("CLIProxyAPI_{PINNED_CORE_VERSION}_{os}_{arch}.{extension}");
+    let sha256 = match (os, arch) {
+        ("darwin", "aarch64") => "c711728ab6f340c69ea322544970fc2b137816adba501438d57670365c8e513d",
+        ("darwin", "amd64") => "2f6b37e92f1a9ec2d4ba98c491aaf941f9796b2a9937fa1b68b6cc0a65853962",
+        ("linux", "aarch64") => "c03974b0e10f93f8104c4be6a061135c07924396fc310215802b0a22aa33ee54",
+        ("linux", "amd64") => "ffb59d406af9b849ec9174154d96642a1d3ccb315f8687c56ac55202816e9b37",
+        ("windows", "aarch64") => {
+            "b4dc618ee05e287216afd9afeadb7928605cdbf8bf73d288427bd2a543676865"
+        }
+        ("windows", "amd64") => "fc03a63675d75be8bdb3f11599a8026c7e7e593589c53e0f38647803f70791d6",
+        _ => return Err("当前平台没有已审核的 CLIProxyAPI 内核资产。".into()),
+    };
+    Ok(PinnedCoreAsset {
+        download_url: format!(
+            "https://github.com/{CORE_REPOSITORY}/releases/download/v{PINNED_CORE_VERSION}/{asset}"
+        ),
+        name: asset,
+        version: PINNED_CORE_VERSION.into(),
+        sha256: sha256.into(),
+    })
 }
 
-fn select_release_asset(release: GithubRelease) -> Result<CoreRelease, String> {
-    let (os, arch, extension) = platform_asset_parts()?;
-    let version = release
-        .tag_name
-        .strip_prefix('v')
-        .filter(|value| {
-            let parts = value.split('.').collect::<Vec<_>>();
-            parts.len() == 3
-                && parts
-                    .iter()
-                    .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
-        })
-        .ok_or_else(|| "CLIProxyAPI 最新 Release tag 不是受支持的稳定语义版本。".to_string())?
-        .to_owned();
-    let expected_name = format!("CLIProxyAPI_{version}_{os}_{arch}.{extension}");
-    let mut candidates = release
-        .assets
-        .iter()
-        .filter(|asset| asset.name == expected_name)
-        .cloned()
-        .collect::<Vec<_>>();
-    if candidates.len() != 1 {
-        return Err("CLIProxyAPI 官方 Release 未提供唯一匹配的当前平台内核。".into());
+fn reviewed_core_ready(
+    data_dir: &Path,
+    metadata: &CoreMetadata,
+    baseline: &PinnedCoreAsset,
+) -> bool {
+    if metadata.core_version.as_deref() != Some(baseline.version.as_str())
+        || metadata.asset.as_deref() != Some(baseline.name.as_str())
+        || metadata.digest.as_deref() != Some(baseline.sha256.as_str())
+    {
+        return false;
     }
-    let checksums = release
-        .assets
-        .iter()
-        .find(|asset| asset.name == "checksums.txt")
-        .cloned()
-        .ok_or_else(|| "CLIProxyAPI 官方 Release 缺少 checksums.txt。".to_string())?;
-    require_sha256_digest(&candidates[0].digest)?;
-    require_sha256_digest(&checksums.digest)?;
-    Ok(CoreRelease {
-        version,
-        asset: candidates.remove(0),
-        checksums,
-    })
+    let Some(expected_binary_digest) = metadata.binary_digest.as_deref() else {
+        return false;
+    };
+    find_unique_core_binary(&core_dir(data_dir))
+        .and_then(|binary| sha256_file(&binary))
+        .is_ok_and(|digest| digest == expected_binary_digest)
 }
 
 fn platform_asset_parts() -> Result<(&'static str, &'static str, &'static str), String> {
@@ -838,34 +709,19 @@ fn platform_asset_parts() -> Result<(&'static str, &'static str, &'static str), 
     Ok((os, arch, if os == "windows" { "zip" } else { "tar.gz" }))
 }
 
-fn require_sha256_digest(value: &Option<String>) -> Result<String, String> {
-    let value = value
-        .as_deref()
-        .and_then(|value| value.strip_prefix("sha256:"))
-        .filter(|digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        .ok_or_else(|| "CLIProxyAPI 官方 Release 缺少可验证的 SHA-256 digest。".to_string())?;
-    Ok(value.to_ascii_lowercase())
-}
-
 async fn install_release_into(
     root: &Path,
     stage: &Path,
-    release: &CoreRelease,
+    release: &PinnedCoreAsset,
 ) -> Result<(), String> {
     let previous_metadata = read_core_metadata_from_root(root)?;
     if previous_metadata.previous_core_dir.is_some() {
         return Err("上一次 CLIProxyAPI 更新尚未通过启动验证；请先启动或恢复内核。".into());
     }
-    let archive = stage.join(&release.asset.name);
-    let checksums = stage.join("checksums.txt");
-    download_verified(&release.asset, &archive).await?;
-    download_verified(&release.checksums, &checksums).await?;
-    let api_digest = require_sha256_digest(&release.asset.digest)?;
-    let checksums_digest = checksum_for_asset(
-        &fs::read_to_string(&checksums).map_err(|_| "读取 checksums.txt 失败。".to_string())?,
-        &release.asset.name,
-    )?;
-    if checksums_digest != api_digest || sha256_file(&archive)? != api_digest {
+    let archive = stage.join(&release.name);
+    download_verified(release, &archive).await?;
+    let api_digest = release.sha256.clone();
+    if sha256_file(&archive)? != api_digest {
         return Err("CLIProxyAPI 内核 SHA-256 校验失败；未安装该文件。".into());
     }
     let staged_core = stage.join("core");
@@ -873,6 +729,7 @@ async fn install_release_into(
     extract_archive(&archive, &staged_core)?;
     let binary = find_unique_core_binary(&staged_core)?;
     set_executable(&binary)?;
+    let binary_digest = sha256_file(&binary)?;
     let core = root.join("core");
     let transaction = Uuid::new_v4();
     let backup = core
@@ -880,8 +737,9 @@ async fn install_release_into(
         .then(|| root.join(format!(".core-backup-{transaction}")));
     let metadata = CoreMetadata {
         core_version: Some(release.version.clone()),
-        asset: Some(release.asset.name.clone()),
+        asset: Some(release.name.clone()),
         digest: Some(api_digest),
+        binary_digest: Some(binary_digest),
         installed_at: Some(Utc::now().to_rfc3339()),
         latest_version: Some(release.version.clone()),
         previous_core_dir: backup.as_ref().and_then(|path| {
@@ -934,8 +792,8 @@ fn replace_core_directory(
     Ok(())
 }
 
-async fn download_verified(asset: &GithubAsset, destination: &Path) -> Result<(), String> {
-    let expected = require_sha256_digest(&asset.digest)?;
+async fn download_verified(asset: &PinnedCoreAsset, destination: &Path) -> Result<(), String> {
+    let expected = &asset.sha256;
     let client = Client::builder()
         .user_agent("Codex-Manager/CLIProxyAPI-core")
         // GitHub asset URLs intentionally redirect to a signed release-assets
@@ -944,11 +802,20 @@ async fn download_verified(asset: &GithubAsset, destination: &Path) -> Result<()
         .timeout(Duration::from_secs(90))
         .build()
         .map_err(|_| "创建 CLIProxyAPI 下载客户端失败。".to_string())?;
-    let response = client
-        .get(&asset.browser_download_url)
-        .send()
-        .await
-        .map_err(|_| "下载 CLIProxyAPI 官方内核失败。".to_string())?;
+    let mut response = None;
+    for attempt in 0..3 {
+        match client.get(&asset.download_url).send().await {
+            Ok(value) => {
+                response = Some(value);
+                break;
+            }
+            Err(_) if attempt < 2 => {
+                tokio::time::sleep(Duration::from_millis(250 * (attempt + 1))).await;
+            }
+            Err(_) => return Err("下载 CLIProxyAPI 官方内核失败。".into()),
+        }
+    }
+    let response = response.ok_or_else(|| "下载 CLIProxyAPI 官方内核失败。".to_string())?;
     if !response.status().is_success()
         || response
             .content_length()
@@ -972,24 +839,10 @@ async fn download_verified(asset: &GithubAsset, destination: &Path) -> Result<()
     output
         .sync_all()
         .map_err(|_| "同步 CLIProxyAPI 下载文件失败。".to_string())?;
-    if sha256_file(destination)? != expected {
+    if sha256_file(destination)? != *expected {
         return Err("CLIProxyAPI 官方内核下载校验失败。".into());
     }
     Ok(())
-}
-
-fn checksum_for_asset(contents: &str, asset: &str) -> Result<String, String> {
-    let found = contents.lines().find_map(|line| {
-        let mut parts = line.split_whitespace();
-        let digest = parts.next()?;
-        let filename = parts.next()?.trim_start_matches('*');
-        (filename == asset).then(|| digest.to_ascii_lowercase())
-    });
-    let digest = found.ok_or_else(|| "checksums.txt 未包含所选 CLIProxyAPI 内核。".to_string())?;
-    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err("checksums.txt 中的 SHA-256 无效。".into());
-    }
-    Ok(digest)
 }
 
 fn sha256_file(path: &Path) -> Result<String, String> {
@@ -1380,66 +1233,6 @@ fn set_executable(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-async fn start_sidecar(
-    row: CodexProviderRow,
-    upstream_key: String,
-    token: Zeroizing<String>,
-    port: u16,
-    data_dir: &Path,
-) -> Result<ServerHandle, String> {
-    let core = core_dir(data_dir);
-    let binary = find_unique_core_binary(&core)?;
-    ensure_private_dir(&core_root(data_dir))?;
-    let port_guard = reserve_loopback_port(port)?;
-    let runtime_root = runtime_dir(data_dir);
-    ensure_private_dir(&runtime_root)?;
-    let runtime = runtime_root.join(format!("session-{}", Uuid::new_v4()));
-    ensure_private_dir(&runtime)?;
-    ensure_private_dir(&runtime.join("auth"))?;
-    ensure_private_dir(&runtime.join("logs"))?;
-    let config = sidecar_config(&row, &upstream_key, &token, port, &runtime);
-    atomic_private_write(&runtime.join("config.yaml"), config.as_bytes())?;
-    drop(port_guard);
-    let child = match Command::new(&binary)
-        .arg("-config")
-        .arg(runtime.join("config.yaml"))
-        .arg("-local-model")
-        .current_dir(&core)
-        .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(_) => {
-            let _ = fs::remove_dir_all(&runtime);
-            return Err("启动 CLIProxyAPI 内核失败。".into());
-        }
-    };
-    let mut handle = ServerHandle {
-        port,
-        source: "external-provider".into(),
-        provider_id: Some(row.id),
-        provider_name: row.name,
-        started_at: Utc::now().to_rfc3339(),
-        endpoint: format!("http://127.0.0.1:{port}/v1"),
-        token,
-        sidecar: Some(SidecarProcess {
-            child: Mutex::new(child),
-            data_dir: data_dir.to_path_buf(),
-            runtime_dir: runtime,
-        }),
-        proxy_auth_store: None,
-        proxy_auth_runtime: None,
-    };
-    if let Err(error) = wait_for_health(&mut handle).await {
-        let _ = handle.stop().await;
-        return Err(error);
-    }
-    Ok(handle)
-}
-
 async fn start_oauth_sidecar(
     token: Zeroizing<String>,
     port: u16,
@@ -1589,26 +1382,6 @@ async fn stop_sidecar(sidecar: SidecarProcess) -> Result<(), String> {
     Ok(())
 }
 
-fn sidecar_config(
-    row: &CodexProviderRow,
-    api_key: &str,
-    token: &str,
-    port: u16,
-    runtime: &Path,
-) -> String {
-    let quote = |value: &str| serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into());
-    format!(
-        "host: \"127.0.0.1\"\nport: {port}\nauth-dir: {}\napi-keys:\n  - {}\ndebug: false\ncommercial-mode: true\nrequest-log: false\nlogging-to-file: false\nusage-statistics-enabled: false\nrequest-retry: 0\nplugins:\n  enabled: false\n  dir: {}\nremote-management:\n  allow-remote: false\n  secret-key: \"\"\n  disable-control-panel: true\n  disable-auto-update-panel: true\nopenai-compatibility:\n  - name: \"codex-manager\"\n    disabled: false\n    base-url: {}\n    api-key-entries:\n      - api-key: {}\n    models:\n      - name: {}\n        alias: {}\n",
-        quote(&runtime.join("auth").to_string_lossy()),
-        quote(token),
-        quote(&runtime.join("plugins").to_string_lossy()),
-        quote(&row.base_url),
-        quote(api_key),
-        quote(&row.model),
-        quote(&row.model)
-    )
-}
-
 fn oauth_sidecar_config(token: &str, port: u16, auth_dir: &Path, runtime: &Path) -> String {
     let quote = |value: &str| serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into());
     format!(
@@ -1643,9 +1416,10 @@ fn status_from_core(data_dir: &Path, port: u16, mut fields: CoreStatusFields) ->
             CoreMetadata::default()
         }
     };
-    let installed = metadata.core_version.is_some()
-        && fields.last_error.is_none()
-        && find_unique_core_binary(&core_dir(data_dir)).is_ok();
+    let installed =
+        metadata.core_version.is_some() && find_unique_core_binary(&core_dir(data_dir)).is_ok();
+    let reviewed = pinned_core_asset()
+        .is_ok_and(|baseline| reviewed_core_ready(data_dir, &metadata, &baseline));
     GatewayStatus {
         state: fields.state.into(),
         source: fields.source.unwrap_or_else(|| "none".into()),
@@ -1660,13 +1434,11 @@ fn status_from_core(data_dir: &Path, port: u16, mut fields: CoreStatusFields) ->
         port,
         installed,
         core_version: metadata.core_version.clone(),
-        latest_version: metadata.latest_version.clone(),
-        update_available: metadata.core_version.is_some()
-            && metadata.latest_version.is_some()
-            && metadata.core_version != metadata.latest_version,
+        latest_version: Some(PINNED_CORE_VERSION.into()),
+        update_available: metadata.core_version.is_some() && !reviewed,
         installing: fields.installing,
         process_id: fields.process_id,
-        core_source: format!("GitHub Release: {CORE_REPOSITORY}"),
+        core_source: format!("已审核固定基线: {CORE_REPOSITORY} v{PINNED_CORE_VERSION}"),
     }
 }
 
@@ -1779,98 +1551,144 @@ mod sidecar_tests {
     }
 
     #[test]
-    fn release_asset_requires_exact_platform_digest_and_non_plugin_asset() {
-        let digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let release = GithubRelease {
-            tag_name: "v7.2.145".into(),
-            assets: vec![
-                GithubAsset {
-                    name: "checksums.txt".into(),
-                    browser_download_url: "https://example.test/checksums".into(),
-                    digest: Some(digest.into()),
-                },
-                GithubAsset {
-                    name: format!(
-                        "CLIProxyAPI_7.2.145_{}_{}.{}",
-                        if cfg!(target_os = "macos") {
-                            "darwin"
-                        } else if cfg!(target_os = "linux") {
-                            "linux"
-                        } else {
-                            "windows"
-                        },
-                        if cfg!(target_arch = "aarch64") {
-                            "aarch64"
-                        } else {
-                            "amd64"
-                        },
-                        if cfg!(target_os = "windows") {
-                            "zip"
-                        } else {
-                            "tar.gz"
-                        }
-                    ),
-                    browser_download_url: "https://example.test/core".into(),
-                    digest: Some(digest.into()),
-                },
-            ],
-        };
-        assert!(select_release_asset(release.clone()).is_ok());
-        let mut prerelease = release.clone();
-        prerelease.tag_name = "v7.2.145-rc1".into();
-        assert!(select_release_asset(prerelease).is_err());
-        let mut mismatched = release;
-        mismatched.tag_name = "v7.2.146".into();
-        assert!(select_release_asset(mismatched).is_err());
+    fn pinned_release_has_exact_current_platform_asset_and_digest() {
+        let asset = pinned_core_asset().unwrap();
+        assert_eq!(asset.version, PINNED_CORE_VERSION);
+        assert!(asset.name.contains(PINNED_CORE_VERSION));
+        assert!(asset.download_url.contains("/releases/download/v7.2.145/"));
+        assert_eq!(asset.sha256.len(), 64);
+        assert!(asset.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()));
     }
 
     #[test]
-    fn checksum_and_archive_paths_fail_closed() {
-        let digest = "a".repeat(64);
+    fn external_provider_url_validation_is_syntax_only() {
         assert_eq!(
-            checksum_for_asset(&format!("{digest}  core.tar.gz"), "core.tar.gz").unwrap(),
-            digest
+            normalize_base_url("http://192.168.10.20:8080").unwrap(),
+            "http://192.168.10.20:8080/v1"
         );
-        assert!(checksum_for_asset("not-a-digest  core.tar.gz", "core.tar.gz").is_err());
+        assert_eq!(
+            normalize_base_url("https://offline-provider.invalid/v1").unwrap(),
+            "https://offline-provider.invalid/v1"
+        );
+        assert!(normalize_base_url("ftp://provider.example/v1").is_err());
+        assert!(normalize_base_url("https://user@provider.example/v1").is_err());
+        assert!(normalize_base_url("https://provider.example/v1?token=secret").is_err());
+    }
+
+    #[test]
+    fn reviewed_core_requires_exact_metadata_and_unchanged_binary() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = core_dir(directory.path());
+        ensure_private_dir(&core).unwrap();
+        let binary = core.join(if cfg!(windows) {
+            "cli-proxy-api.exe"
+        } else {
+            "cli-proxy-api"
+        });
+        fs::write(&binary, b"reviewed-binary").unwrap();
+        let baseline = pinned_core_asset().unwrap();
+        let metadata = CoreMetadata {
+            core_version: Some(baseline.version.clone()),
+            asset: Some(baseline.name.clone()),
+            digest: Some(baseline.sha256.clone()),
+            binary_digest: Some(sha256_file(&binary).unwrap()),
+            ..CoreMetadata::default()
+        };
+        assert!(reviewed_core_ready(directory.path(), &metadata, &baseline));
+
+        let mut missing_digest = metadata.clone();
+        missing_digest.binary_digest = None;
+        assert!(!reviewed_core_ready(
+            directory.path(),
+            &missing_digest,
+            &baseline
+        ));
+
+        fs::write(&binary, b"replaced-binary").unwrap();
+        assert!(!reviewed_core_ready(directory.path(), &metadata, &baseline));
+    }
+
+    #[test]
+    fn runtime_error_does_not_hide_an_intact_installed_core() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = core_dir(directory.path());
+        ensure_private_dir(&core).unwrap();
+        let binary = core.join(if cfg!(windows) {
+            "cli-proxy-api.exe"
+        } else {
+            "cli-proxy-api"
+        });
+        fs::write(&binary, b"reviewed-binary").unwrap();
+        let baseline = pinned_core_asset().unwrap();
+        write_core_metadata(
+            directory.path(),
+            &CoreMetadata {
+                core_version: Some(baseline.version),
+                asset: Some(baseline.name),
+                digest: Some(baseline.sha256),
+                binary_digest: Some(sha256_file(&binary).unwrap()),
+                ..CoreMetadata::default()
+            },
+        )
+        .unwrap();
+
+        let status = stopped_status_with_core(
+            directory.path(),
+            8317,
+            Some("CLIProxyAPI 进程已退出。".into()),
+            false,
+        );
+        assert_eq!(status.state, "error");
+        assert!(status.installed);
+        assert!(!status.update_available);
+    }
+
+    #[test]
+    fn exited_sidecar_handle_is_detected_and_can_be_reaped() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = directory.path().join("runtime");
+        ensure_private_dir(&runtime).unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .arg("--definitely-not-a-test-argument")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        child.wait().unwrap();
+        let handle = ServerHandle {
+            port: 8317,
+            source: "oauth-pool".into(),
+            provider_id: None,
+            provider_name: "CLIProxyAPI OAuth 凭据池".into(),
+            started_at: Utc::now().to_rfc3339(),
+            endpoint: "http://127.0.0.1:8317/v1".into(),
+            token: Zeroizing::new("fixture-runtime-token".into()),
+            sidecar: Some(SidecarProcess {
+                child: Mutex::new(child),
+                data_dir: directory.path().to_path_buf(),
+                runtime_dir: runtime.clone(),
+            }),
+            proxy_auth_store: None,
+            proxy_auth_runtime: None,
+        };
+
+        assert!(!handle.is_running());
+        tauri::async_runtime::block_on(handle.stop()).unwrap();
+        assert!(!runtime.exists());
+    }
+
+    #[test]
+    fn archive_paths_fail_closed() {
         assert!(safe_archive_path(Path::new("../escape")).is_err());
         assert!(safe_archive_path(Path::new("/absolute")).is_err());
     }
 
     #[test]
-    fn generated_config_is_loopback_and_private_by_contract() {
-        let row = CodexProviderRow {
-            id: "id".into(),
-            name: "provider".into(),
-            base_url: "https://example.test/v1".into(),
-            model: "model".into(),
-            reasoning_effort: "medium".into(),
-            created_at: "now".into(),
-            updated_at: "now".into(),
-        };
-        let config = sidecar_config(
-            &row,
-            "provider-secret",
-            "local-secret",
-            8317,
-            Path::new("/tmp/runtime"),
-        );
-        for expected in [
-            "host: \"127.0.0.1\"",
-            "commercial-mode: true",
-            "request-log: false",
-            "logging-to-file: false",
-            "usage-statistics-enabled: false",
-            "request-retry: 0",
-            "secret-key: \"\"",
-            "disable-control-panel: true",
-            "disable-auto-update-panel: true",
-            "enabled: false",
-        ] {
-            assert!(config.contains(expected), "{expected}");
-        }
+    fn gateway_status_does_not_expose_runtime_secret_or_external_provider() {
         let status = stopped_status_with_core(Path::new("/not-installed"), 8317, None, false);
         let dto = serde_json::to_string(&status).unwrap();
-        assert!(!dto.contains("provider-secret") && !dto.contains("local-secret"));
+        assert!(!dto.contains("local-secret") && !dto.contains("external-provider"));
         assert!(status.requests.is_none() && status.failed.is_none() && status.in_flight.is_none());
     }
 

@@ -30,8 +30,8 @@
 - 活动账户切换只支持安全的 file 模式 `auth.json`。App Server `config/read` 必须证明最终生效的 `cli_auth_credentials_store` 明确为 `file`；同进程异步门闩、Codex Manager 实例间非阻塞锁、opaque revision、SHA/mtime/文件身份 CAS、`0600` 同目录原子替换、切换后官方账户复核与条件回滚共同防止并发覆盖。活动账户读取如触发官方凭据刷新，后端必须在文件稳定后重新取得 bytes 和文件戳，再用于 Keychain 更新或回滚。官方登录子进程的整个生命周期也持有 Manager 进程锁。keyring/auto、配置缺失、外部改写、身份不符、活动/最后档案删除均 fail closed；删除提交前再次读取活动文件，软删除保留 30 天后才清理。CLI/IDE 不遵守 Manager 的锁，用户仍须结束正在运行的 Codex 任务。
 - 三个信任域严格隔离：官方 OAuth access/refresh token 不得进入 CLIProxyAPI；CLIProxyAPI OAuth 只来自原生文件选择器，存入独立 Keychain service `cc.codex.manager.cliproxy-auth.v1`。普通 DTO 不含账户、路径、token 或 fingerprint；Management API、OAuth callback、原始配置、认证文件、`api-call` 与动态插件不得通过 WebView 开放。
 - CLIProxyAPI 配置固定 `host: 127.0.0.1` 和非空随机 client key；同时强制 `commercial-mode:true`、`request-log:false`、`debug:false`、`logging-to-file:false`、`usage-statistics-enabled:false`、remote management/control panel/plugins disabled。启动验收必须检查受管 PID 与 `/healthz`，端口占用不得终止无关进程。
-- 内核下载只允许官方 `router-for-me/CLIProxyAPI` 非 draft、非 prerelease Release，选择精确平台/架构资产并强制 GitHub asset digest 与 `checksums.txt` 双 SHA-256 一致；下载与解压有上限，拒绝绝对路径、`..`、symlink/hardlink，经私有 staging 安装，失败保留旧内核。检查和安装只能由用户显式触发。
-- 远程 Base URL 只允许无 userinfo/query/fragment 的 HTTPS `/v1` origin；HTTP 仅允许显式 loopback。供应商实际出站、协议转换和响应处理由 CLIProxyAPI 执行，因此其行为与安全边界必须按独立内核版本重新验收，不能继承旧 Rust 网关的 header/body/redirect 结论。当前上游 `openai-compatibility` 没有可禁止 redirect 或锁定已验证 DNS/IP 的配置；一次运行观测无法证明任意自定义 Base URL 不会经 DNS rebinding 或 3xx 把请求正文转向其他 origin。在上游提供等价强制项，或引入能强制该出站规则的受信任架构层前，支持任意 OpenAI-compatible Base URL 的本功能属于明确的发布 No-Go。
+- 内测只安装已在代码中审核锁定的 `router-for-me/CLIProxyAPI v7.2.145` 平台/架构资产，使用内置精确 SHA-256 验证，不查询或自动追随上游 `latest`；下载与解压有上限，拒绝绝对路径、`..`、symlink/hardlink，经私有 staging 安装。安装后额外记录已解压二进制摘要，状态读取和启动前复核；不匹配时界面提供切回审核基线的入口。确认和安装只能由用户显式触发。
+- 本地代理只承载 CLIProxyAPI OAuth 凭据池；外部 API Key 供应商由“Codex 配置”直接管理，不经过 CLIProxyAPI。CLIProxyAPI 的输入和运行时目录仍固定在 IPv4 loopback、随机 client key、私有 `0700` 目录和 `0600` 文件权限内。
 - SQLite 在 Unix 上使用私有目录/文件权限、WAL、foreign keys、busy timeout 和全库页数硬上限；OTel 另有总行数配额与单事务批量上限。
 - CI action 以完整 commit SHA 固定；发布流程包含 lockfile、fail-closed 审计、无 `rg` 依赖且未完整扫描即失败的 secret scan、SBOM、许可证清单与 artifact SHA-256。
 
@@ -44,10 +44,10 @@
 - 账户白名单快照虽然不含 credential，仍可能包含 email 和额度信息；它与认证档案 secret 使用不同的 Keychain service/account，删除应用数据或退出官方账户不会自动等价于删除该快照，后续应提供用户可见的显式清理入口。
 - 官方 Codex 可能按用户自己的 `cli_auth_credentials_store` 设置把活动凭据保存在 OS credential store 或 `~/.codex/auth.json`。多档案切换不会改写该设置，只支持 file 模式；keyring/auto 会拒绝切换。切换活动文件会影响共享该缓存的 CLI 与 IDE 扩展。
 - 当前轮换是用户确认后的整账户显式切换，不是请求级调度；不会检测限额后后台自动换号，也不会迁移正在运行的会话。
-- Codex 配置页面只管理 `model`、`model_provider` 和一个 provider table，使用 `model_providers.<id>.auth.command` 调用当前 app binary 的 allowlisted opaque secret ref；私有 journal 支持 CAS/原子应用与恢复，文件漂移拒绝覆盖。`verified` 只代表写后文件复核，不代表 Codex 成功请求上游。真实 OAuth/API-key 上游 E2E、异常请求无正文落盘、实际 socket 仅 loopback、崩溃恢复与旧内核回滚尚未 `accepted`。
+- Codex 配置页面只管理 `model`、`model_provider` 和一个 provider table，使用 `model_providers.<id>.auth.command` 调用当前 app binary 的 allowlisted opaque secret ref；私有 journal 支持 CAS/原子应用与恢复，文件漂移拒绝覆盖。`verified` 只代表写后文件复核，不代表 Codex 成功请求上游。真实 CLIProxyAPI OAuth E2E、异常请求无正文落盘、实际 socket 仅 loopback、崩溃恢复与旧内核回滚尚未 `accepted`。
 - 每次 sidecar 使用随机 runtime session；正常停止会 kill/wait 自己持有的 child 并删除整个 session，下次 stopped 状态会清理崩溃遗留配置，启动前的端口独占检查会拒绝把旧 `/healthz` 误认成新 child。但 macOS 在应用被 `SIGKILL` 时没有可靠 parent-death signal，旧 CLIProxyAPI 仍可能存活；在持久化 ownership/PID/启动时间并可安全回收前，本应用只 fail closed，不按进程名广泛 kill。
-- CLIProxyAPI `v7.2.145` 上游 Release 没有 Developer ID、公证、detached signature、SBOM 或可复现 provenance，asset digest 与 `checksums.txt` 仍属于同一 GitHub 信任域；其构建会拉取 mutable model catalog。主应用签名不能被描述为覆盖下载后的第三方 sidecar。正式发布前必须决定独立审核 manifest/固定版本策略；当前直接跟随上游 latest 只属于技术原型。即使建立 manifest，也不会解决上述不可配置的 redirect/DNS/IP 出站约束缺失；两个发布门必须分别关闭。
-- 预编译 CLIProxyAPI 的 OAuth callback 可能绑定全网卡，且存在无法由当前配置关闭的 Antigravity 外部版本请求。因此本应用不开放其 Management API/OAuth callback；导入的 OAuth 文件仅由原生层投影到私有 auth-dir，并须用运行时网络观测证明普通反代模式没有超出披露范围的监听和正文落盘；完成前不得发布或写成 `accepted`。
+- CLIProxyAPI `v7.2.145` 上游 Release 的 Developer ID、公证、detached signature、SBOM 和可复现 provenance 不由本项目继承；当前内测使用代码内置的精确资产 SHA-256 拒绝字节漂移，后续在审阅新版本后更新基线。上游构建可能拉取 mutable model catalog，属于已知供应链限制和后续优化项，不再作为内测发布阻断。
+- 预编译 CLIProxyAPI 的 OAuth callback 可能绑定全网卡，且存在无法由当前配置关闭的 Antigravity 外部版本请求。因此本应用不开放其 Management API/OAuth callback；导入的 OAuth 文件仅由原生层投影到私有 auth-dir。首个正式版本需完成一次隔离环境网络与磁盘观测；后续每版不重复执行，除非内核版本或配置边界发生变化。
 - 当前没有远程撤回机制。桌面版会在启动后按需检查并按配置间隔自动检查更新；自动检查不下载、不安装、不重启。在线更新会将完整更新包读入内存后验签；严格下载字节上限是后续加固项。
 - 签名发布已拆成 secret-free build、无 Release 写权限的受保护 sign、无 Apple/updater secret 的 draft 三个 job；sign/draft 不执行 build artifact 携带的 signer 或 verifier。sign 先下载固定版本 Tauri signer并核对 SHA-512，updater 私钥只在紧邻签名命令的独立 step 注入并在命令后 unset；验签使用 exact checkout 中仅依赖 Node 标准密码库的 Minisign/Ed25519 verifier，transfer 只携带公开 updater key。临时证书/Keychain 在任何上传前清理。draft 只允许 exact source/Release/asset digest 调和，所有资产按 ID 回下载复验；人工发布后另由只读 workflow 匿名验证正式 tag URL 和 latest alias。发布人员已报告 updater 私钥存在独立离线备份，首次发布前仍须复核实际恢复介质。
 
@@ -55,8 +55,8 @@
 
 2026-08-27 完成一次全代码树安全扫描，确认的 12 项发现（9 medium、3 low）已全部修复，并由新的只读验证者逐项追踪为 `verified_fixed`。这是当时 unversioned working tree 的本机证据，不替代正式发布 commit 的重新扫描、签名与公证。
 
-## 发布安全门
+## 发布安全门（内测精简版）
 
-Community prerelease 必须确认测试、clippy、依赖审计、secret scan、SBOM/许可证、DMG 完整性与下载后 SHA-256，并确认没有 `latest.json` 或 updater bundle；发布文案必须披露 unsigned/unnotarized 状态。
+内测 prerelease 只要求针对当前 exact SHA 完成应用测试、secret scan、CLIProxyAPI `v7.2.145` 精确版本与 SHA-256 校验、产物完整性检查，并明确披露 `unsigned/unnotarized` 状态；不再把 SBOM、许可证全集、上游 provenance、跨进程完美回收或每个 provider 的真实网络链路作为内测阻断条件。内测包不得进入稳定 updater 通道。
 
-签名稳定发布还必须确认 Developer ID 身份、leaf certificate、Team ID、Hardened Runtime、secure timestamp、无禁用 entitlement、notarytool `Accepted`、`stapler validate`、Gatekeeper、Tauri updater 签名、SBOM/许可证、九项 asset digest 与 attestation 全部一致。`latest.json` 只能绑定确定性的 `https://github.com/<owner>/<repo>/releases/download/v<VERSION>/<tar-name>`；任何 `untagged-*` URL 都是阻断。draft 通过只叫 `draft remotely verified`；人工发布后还必须验证 tag/release/latest 与 exact SHA、匿名回下载九项正式 URL并重跑完整链。任何一步缺失都保持相应的 `unsigned community prerelease`、`signed`、`notarized`、`draft`、`published but unverified` 或 `unreleased` 状态，不能越级表述。
+正式 macOS 发布仍要求 Developer ID、Hardened Runtime、Apple notarization、stapling、Gatekeeper 和 updater 签名；这些是平台分发要求，不等同于 CLIProxyAPI 上游必须具备 Developer ID、SBOM 或可复现构建。正式发布前至少完成一次真实 CLIProxyAPI OAuth → loopback → Codex Responses E2E，并记录停止、凭据 checkpoint 和失败清理结果。未完成的真实 E2E 只能标为 `tested locally`/`unaccepted`，不能写成 `accepted`。

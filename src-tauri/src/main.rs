@@ -933,6 +933,7 @@ async fn import_proxy_auth_profile(
         .gateway_transition_gate
         .try_lock()
         .map_err(|_| "本地反代正在启动或停止；请稍后导入。".to_string())?;
+    clear_exited_codex_gateway(&state).await?;
     if state.gateway.lock().map_err(lock_err)?.is_some() {
         return Err("本地反代运行中不能变更 OAuth 档案；请先停止服务。".into());
     }
@@ -958,6 +959,7 @@ fn set_proxy_auth_profile_enabled(
         .gateway_transition_gate
         .try_lock()
         .map_err(|_| "本地反代正在启动或停止；请稍后重试。".to_string())?;
+    tauri::async_runtime::block_on(clear_exited_codex_gateway(&state))?;
     if state.gateway.lock().map_err(lock_err)?.is_some() {
         return Err("本地反代运行中不能变更 OAuth 档案。".into());
     }
@@ -976,6 +978,7 @@ fn delete_proxy_auth_profile(
         .gateway_transition_gate
         .try_lock()
         .map_err(|_| "本地反代正在启动或停止；请稍后重试。".to_string())?;
+    tauri::async_runtime::block_on(clear_exited_codex_gateway(&state))?;
     if state.gateway.lock().map_err(lock_err)?.is_some() {
         return Err("本地反代运行中不能删除 OAuth 档案。".into());
     }
@@ -994,6 +997,7 @@ fn restore_proxy_auth_profile(
         .gateway_transition_gate
         .try_lock()
         .map_err(|_| "本地反代正在启动或停止；请稍后重试。".to_string())?;
+    tauri::async_runtime::block_on(clear_exited_codex_gateway(&state))?;
     if state.gateway.lock().map_err(lock_err)?.is_some() {
         return Err("本地反代运行中不能恢复 OAuth 档案。".into());
     }
@@ -1016,18 +1020,6 @@ fn save_codex_provider(
     state: State<'_, AppState>,
     input: provider_gateway::ProviderSaveInput,
 ) -> Result<provider_gateway::ProviderDto, String> {
-    let _transition_guard = state
-        .gateway_transition_gate
-        .try_lock()
-        .map_err(|_| "本地反代正在启动或停止；请稍后再修改供应商。".to_string())?;
-    let gateway = state.gateway.lock().map_err(lock_err)?;
-    if input.id.as_deref().is_some_and(|id| {
-        gateway
-            .as_ref()
-            .is_some_and(|server| server.status().provider_id.as_deref() == Some(id))
-    }) {
-        return Err("该供应商正在被本地反代使用；请先停止服务后再保存。".into());
-    }
     let store = state.store.lock().map_err(lock_err)?;
     if let Some(provider_id) = input.id.as_deref() {
         let secret_ref = format!("external-provider:{provider_id}");
@@ -1048,18 +1040,6 @@ fn delete_codex_provider(
     state: State<'_, AppState>,
     provider_id: String,
 ) -> Result<Vec<provider_gateway::ProviderDto>, String> {
-    let _transition_guard = state
-        .gateway_transition_gate
-        .try_lock()
-        .map_err(|_| "本地反代正在启动或停止；请稍后再删除供应商。".to_string())?;
-    let gateway = state.gateway.lock().map_err(lock_err)?;
-    if gateway
-        .as_ref()
-        .is_some_and(|server| server.status().provider_id.as_deref() == Some(&provider_id))
-    {
-        return Err("该供应商正在被本地反代使用；请先停止服务。".into());
-    }
-    drop(gateway);
     let store = state.store.lock().map_err(lock_err)?;
     let secret_ref = format!("external-provider:{provider_id}");
     if store
@@ -1096,6 +1076,32 @@ fn codex_gateway_status_inner(state: &AppState) -> Result<provider_gateway::Gate
         }))
 }
 
+async fn clear_exited_codex_gateway(state: &AppState) -> Result<(), String> {
+    let exited = {
+        let mut gateway = state.gateway.lock().map_err(lock_err)?;
+        if gateway.as_ref().is_some_and(|server| !server.is_running()) {
+            gateway.take()
+        } else {
+            None
+        }
+    };
+    let Some(server) = exited else {
+        return Ok(());
+    };
+    match server.stop().await {
+        Ok(()) => {
+            *state.gateway_error.lock().map_err(lock_err)? = None;
+            Ok(())
+        }
+        Err(error) => {
+            *state.gateway_error.lock().map_err(lock_err)? = Some(error.clone());
+            Err(format!(
+                "已回收异常退出的本地反代，但 OAuth checkpoint 未完成：{error}"
+            ))
+        }
+    }
+}
+
 #[tauri::command]
 fn update_codex_gateway_port(
     state: State<'_, AppState>,
@@ -1105,6 +1111,7 @@ fn update_codex_gateway_port(
         .gateway_transition_gate
         .try_lock()
         .map_err(|_| "本地反代正在启动或停止；请稍后再修改端口。".to_string())?;
+    tauri::async_runtime::block_on(clear_exited_codex_gateway(&state))?;
     if !(1024..=65535).contains(&port) {
         return Err("本地反代端口必须在 1024 到 65535 之间。".into());
     }
@@ -1147,13 +1154,12 @@ fn update_codex_gateway_port(
 #[tauri::command]
 fn start_codex_gateway(
     state: State<'_, AppState>,
-    source: String,
-    provider_id: Option<String>,
 ) -> Result<provider_gateway::GatewayStatus, String> {
     let _transition_guard = state
         .gateway_transition_gate
         .try_lock()
         .map_err(|_| "本地反代正在启动或停止；请稍后重试。".to_string())?;
+    tauri::async_runtime::block_on(clear_exited_codex_gateway(&state))?;
     let mut gateway = state.gateway.lock().map_err(lock_err)?;
     if gateway.is_some() {
         return Err("本地反代已在运行；请先停止后再切换供应商。".into());
@@ -1164,26 +1170,11 @@ fn start_codex_gateway(
         .map_err(lock_err)?
         .codex_gateway_port()
         .map_err(display_error)?;
-    let started = match source.as_str() {
-        "oauth-pool" => tauri::async_runtime::block_on(provider_gateway::start_oauth(
-            port,
-            &state.data_dir,
-            std::sync::Arc::clone(&state.proxy_auth_profiles),
-        )),
-        "external-provider" => {
-            let provider_id = provider_id
-                .as_deref()
-                .ok_or_else(|| "请选择一个外部供应商。".to_string())?;
-            let store = state.store.lock().map_err(lock_err)?;
-            tauri::async_runtime::block_on(provider_gateway::start(
-                &store,
-                provider_id,
-                port,
-                &state.data_dir,
-            ))
-        }
-        _ => return Err("本地反代启动来源无效。".into()),
-    };
+    let started = tauri::async_runtime::block_on(provider_gateway::start_oauth(
+        port,
+        &state.data_dir,
+        std::sync::Arc::clone(&state.proxy_auth_profiles),
+    ));
     match started {
         Ok(server) => {
             let status = server.status();
@@ -1251,6 +1242,7 @@ fn install_latest_cliproxy_core(
         .gateway_transition_gate
         .try_lock()
         .map_err(|_| "本地反代正在启动、停止或更新；请稍后重试。".to_string())?;
+    tauri::async_runtime::block_on(clear_exited_codex_gateway(&state))?;
     if state.gateway.lock().map_err(lock_err)?.is_some() {
         return Err("反代运行中不能更新 CLIProxyAPI 内核；请先关闭反代。".into());
     }
@@ -3796,12 +3788,12 @@ mod tests {
             );
         }
         let dto = serde_json::to_value(BuildInfo {
-            version: "0.6.0".into(),
+            version: "0.6.1".into(),
             build_time: env!("CODEX_MANAGER_BUILD_TIME").into(),
             commit_sha: option_env!("CODEX_MANAGER_COMMIT_SHA").map(str::to_owned),
         })
         .unwrap();
-        assert_eq!(dto["version"], "0.6.0");
+        assert_eq!(dto["version"], "0.6.1");
         assert_eq!(dto["buildTime"], env!("CODEX_MANAGER_BUILD_TIME"));
         assert!(dto.get("commitSha").is_some());
     }

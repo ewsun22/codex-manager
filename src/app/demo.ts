@@ -469,7 +469,7 @@ let codexConfigSnapshot: CodexConfigSnapshot = {
 
 let codexProviders: CodexProviderProfile[] = [
   {
-    id: "provider-demo-relay",
+    id: "00000000-0000-4000-8000-000000000001",
     name: "OpenAI 中转",
     baseUrl: "https://relay.example.test/v1",
     model: "gpt-5.6-sol",
@@ -479,7 +479,7 @@ let codexProviders: CodexProviderProfile[] = [
     updatedAt: observedAt,
   },
   {
-    id: "provider-demo-local",
+    id: "00000000-0000-4000-8000-000000000002",
     name: "本机兼容上游",
     baseUrl: "http://127.0.0.1:8317/v1",
     model: "gpt-5.6-terra",
@@ -499,7 +499,7 @@ let codexGatewayStatus: CodexGatewayStatus = {
   updateAvailable: false,
   installing: false,
   processId: null,
-  coreSource: "GitHub Release",
+  coreSource: "已审核固定基线: router-for-me/CLIProxyAPI v7.2.145",
   providerId: null,
   providerName: null,
   endpoint: null,
@@ -622,7 +622,7 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
         settings,
         capability,
         buildInfo: {
-          version: "0.6.0",
+          version: "0.6.1",
           buildTime: observedAt,
           commitSha: null,
         },
@@ -913,7 +913,7 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
       const now = new Date().toISOString();
       const existing = input.id ? codexProviders.find((provider) => provider.id === input.id) : undefined;
       const profile: CodexProviderProfile = {
-        id: existing?.id ?? `provider-demo-${codexProviders.length + 1}`,
+        id: existing?.id ?? crypto.randomUUID(),
         name: input.name,
         baseUrl: input.baseUrl.replace(/\/$/, ""),
         model: input.model,
@@ -929,9 +929,7 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
     }
     case COMMANDS.deleteCodexProvider: {
       const providerId = String(args.providerId ?? "");
-      if (codexGatewayStatus.state === "running" && codexGatewayStatus.providerId === providerId) {
-        throw new Error("运行中的上游不能删除，请先停止网关。");
-      }
+      if (codexConfigSnapshot.profiles.some((profile) => profile.secretRef === `external-provider:${providerId}`)) throw new Error("该供应商仍被 Codex 配置档案引用，请先删除或改用其他供应商。");
       codexProviders = codexProviders.filter((provider) => provider.id !== providerId);
       return structuredClone(codexProviders) as T;
     }
@@ -960,24 +958,15 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
       codexGatewayStatus = { ...codexGatewayStatus, port: Number(args.port) };
       return structuredClone(codexGatewayStatus) as T;
     case COMMANDS.startCodexGateway: {
-      const source = String(args.source ?? "");
-      const providerId = String(args.providerId ?? "");
-      const provider = codexProviders.find((item) => item.id === providerId);
-      if (source === "external-provider" && !provider?.hasApiKey) {
-        throw new Error("供应商不存在或尚未保存 API Key。");
-      }
-      if (source === "oauth-pool" && !proxyAuthProfiles.some((profile) => profile.enabled && profile.state === "ready")) {
+      if (!proxyAuthProfiles.some((profile) => profile.enabled && profile.state === "ready")) {
         throw new Error("没有已启用的 OAuth 档案。");
-      }
-      if (source !== "external-provider" && source !== "oauth-pool") {
-        throw new Error("本地反代启动来源无效。");
       }
       codexGatewayStatus = {
         ...codexGatewayStatus,
         state: "running",
-        source,
-        providerId: source === "external-provider" ? provider!.id : null,
-        providerName: source === "external-provider" ? provider!.name : "CLIProxyAPI OAuth 凭据池",
+        source: "oauth-pool",
+        providerId: null,
+        providerName: "CLIProxyAPI OAuth 凭据池",
         endpoint: `http://127.0.0.1:${codexGatewayStatus.port}/v1`,
         startedAt: new Date().toISOString(),
         processId: 59317,

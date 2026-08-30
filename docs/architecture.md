@@ -26,7 +26,7 @@ User confirm ─ config/read=file ─ revision/CAS/process lock ─ atomic `auth
 
 Provider UI ─ write-only API Key IPC ─ Keychain secret + SQLite metadata
 User install ─ official CLIProxyAPI Release ─ digest + checksums ─ private staging/core
-User start ─ private 0600 runtime config ─ managed CLIProxyAPI sidecar ─ API-key upstream
+User start ─ private 0600 auth-dir ─ managed CLIProxyAPI sidecar ─ OAuth upstream
 Native confirm ─ temporary Codex provider snippet; no automatic config/auth mutation
 ```
 
@@ -69,21 +69,21 @@ OAuth 与认证 App Server 不继承任意父进程环境，只保留 HOME、用
 
 ### Codex provider 与 CLIProxyAPI sidecar
 
-`codex_providers` 只保存随机 id、名称、规范化 Base URL、模型、reasoning effort 与时间；供应商 API Key 保存在独立 Keychain service。保存命令把 API Key 视为 write-only input，普通 list/save DTO 只返回 `hasApiKey`。删除供应商时同时删除其 Keychain item；正在被网关使用的供应商不可删除。
+`codex_providers` 只保存随机 id、名称、规范化 Base URL、模型、reasoning effort 与时间；供应商 API Key 保存在独立 Keychain service。保存命令把 API Key 视为 write-only input，普通 list/save DTO 只返回 `hasApiKey`。删除供应商时同时删除其 Keychain item；仍被任何 Codex 配置档案引用的供应商不可删除。
 
-总览只显示本地代理的非秘密快捷状态、OpenAI/Claude/Gemini 兼容接入地址、内核版本、PID 和显式开关，不展示 bearer 或 API Key。代理可选择 CLIProxyAPI OAuth 池或 API-key `openai-compatibility` 上游；多协议 endpoint 是内核 client 入口，实际可用性取决于所选上游。
+总览只显示本地代理的非秘密快捷状态、OpenAI/Claude/Gemini 兼容接入地址、内核版本、PID 和显式开关，不展示 bearer 或 API Key。代理只选择 CLIProxyAPI OAuth 池；多协议 endpoint 是内核 client 入口，实际可用性取决于 OAuth 凭据和内核。外部 API-key 上游由 Codex 配置编排器直接管理，不经过 sidecar。
 
-桌面主体与 CLIProxyAPI 使用独立版本。版本检查与安装只能由用户显式触发；Rust 只读取 `router-for-me/CLIProxyAPI` 官方非 draft、非 prerelease 最新 Release，为当前 OS/arch 选择与稳定三段式 tag 完全一致的精确命名资产，并要求 GitHub Release asset `sha256:` digest 与官方 `checksums.txt` 对同一资产给出相同摘要。资产下载上限 128 MiB、解压上限 512 MiB；tar/zip 路径必须相对且无 `..`，链接与额外可执行文件拒绝。解压在应用私有 `0700` staging 中进行，校验完成后才切换 core；安装目录切换与健康失败回滚都会先持久化事务标记，下次读取状态、启动或安装前会恢复中断前最后已提交的目录与匹配元数据。上一版另外保留到新内核真正通过 `/healthz`，启动失败会恢复旧目录与版本元数据。应用不下载或编译 Go 源码。
+桌面主体与 CLIProxyAPI 使用独立版本。内测安装器只允许用户显式确认和安装代码中已审核的 `v7.2.145`；Rust 按当前 OS/arch 选择内置精确资产名与 SHA-256，从官方 tag URL 下载，不请求或追随上游 `latest`。资产下载上限 128 MiB、解压上限 512 MiB；tar/zip 路径必须相对且无 `..`，链接与额外可执行文件拒绝。解压在应用私有 `0700` staging 中进行，校验完成后才切换 core；安装目录切换与健康失败回滚保护已安装版本，但完美跨进程恢复不作为内测发布门禁。应用不下载或编译 Go 源码。
 
-用户显式选择 API-key 上游或 OAuth 凭据池后，Rust 从各自隔离的 Keychain service 读取秘密，为每次启动生成随机私有 `0700` runtime session；OAuth 模式再投影随机 `auth-dir` 与 `0600` 文件。配置固定 `host: 127.0.0.1`、`commercial-mode:true`、非空 client key、日志/usage stats/retry 关闭，并禁用 remote management、control panel、plugins。启动前独占验证 loopback 端口，启动成功要求新 child 持续存活且 `/healthz` 返回成功。正常停止先 checkpoint 内核原地 refresh 后的 provider/identity/CAS，再精确删除 runtime；发现 pending 崩溃证据时 fail closed，确认无 orphan 后才恢复。状态 DTO 的 request/failed/in-flight 因 usage stats 关闭而返回 `unavailable`。
+用户显式启动 OAuth 凭据池后，Rust 从隔离的 Keychain service 读取秘密，为每次启动生成随机私有 `0700` runtime session，并投影随机 `auth-dir` 与 `0600` 文件。外部 API-key 上游由 Codex 配置编排器直接管理，不经过 sidecar。配置固定 `host: 127.0.0.1`、`commercial-mode:true`、非空 client key、日志/usage stats/retry 关闭，并禁用 remote management、control panel、plugins。启动前独占验证 loopback 端口，启动成功要求新 child 持续存活且 `/healthz` 返回成功。正常停止先 checkpoint 内核原地 refresh 后的 provider/identity/CAS，再精确删除 runtime；发现 pending 崩溃证据时 fail closed，确认无 orphan 后才恢复。状态 DTO 的 request/failed/in-flight 因 usage stats 关闭而返回 `unavailable`。
 
 应用被 `SIGKILL` 或系统强制终止时，pending runtime/checkpoint 是恢复证据；下次启动不会盲删或按名称强杀进程，而是先验证端口、ownership 与 checkpoint 状态，无法证明安全归属就 fail closed。
 
-CLIProxyAPI 只能从文件读取运行时凭据，因此 API Key 或 OAuth token 的静态来源分别是隔离 Keychain，运行期间物化到私有配置/auth-dir。这些运行文件不得进入 SQLite、WebView、日志或备份；正常停止前先 checkpoint，再精确清理。Codex 配置由独立编排器使用 `auth.command` 管理，不改写 `auth.json`。
+CLIProxyAPI 只能从文件读取运行时凭据，因此 OAuth token 的静态来源是隔离 Keychain，运行期间物化到私有 auth-dir；外部 API Key 不进入 CLIProxyAPI。这些运行文件不得进入 SQLite、WebView、日志或备份；正常停止前先 checkpoint，再精确清理。Codex 配置由独立编排器使用 `auth.command` 管理，不改写 `auth.json`。
 
-CLIProxyAPI Management API 与 OAuth callback 不向 WebView 开放：OAuth 档案仅通过原生文件选择器导入并存入 `cc.codex.manager.cliproxy-auth.v1`，支持当前已理解的 provider 格式；运行时按需投影，官方 OAuth 永不进入该域。Base URL 仍只接受无 userinfo/query/fragment 的 HTTPS `/v1` origin，HTTP 仅允许显式 loopback 开发上游。
+CLIProxyAPI Management API 与 OAuth callback 不向 WebView 开放：OAuth 档案仅通过原生文件选择器导入并存入 `cc.codex.manager.cliproxy-auth.v1`，支持当前已理解的 provider 格式；运行时按需投影，官方 OAuth 永不进入该域。本地代理不再接受任意外部 Base URL，因此删除了该路径上的 redirect/DNS/IP 安全门；外部 endpoint 由 Codex 配置直接管理。
 
-预编译内核不是主应用签名信任链的一部分。上游 Release 缺少 Developer ID、公证、detached signature、SBOM 与可复现 provenance，并存在无法由当前配置关闭的后台版本请求；双 SHA-256 只证明字节与同一 GitHub 信任域发布元数据一致。正式发布前必须补独立审核 manifest/版本策略，并以真实运行观测验证只监听 loopback、未产生错误正文日志和未超出隐私披露的外部连接；当前实现不能仅凭 `/healthz` 标记为 `accepted`。
+预编译内核不是主应用签名信任链的一部分。内测固定 CLIProxyAPI `v7.2.145` 及每个资产的精确 SHA-256，用于防止下载字节漂移；上游缺少 Developer ID、公证、detached signature、SBOM 和可复现 provenance 属于已知限制，不作为内测阻断。首次正式发布前仍需一次隔离环境观测，确认 loopback、凭据清理和隐私披露边界。
 
 官方订阅页面采用 cache-first。首次成功的账户读取或用户点击刷新后，后端仅将白名单账户摘要（可含 email）、套餐、额度窗口和确认/更新时间保存到独立 macOS Keychain，并作为不含 token/原始响应的白名单 DTO 提供当前 OAuth 页面读取；后续页面访问先读取该缓存，cache miss 或刷新按钮才解析并验签可信 CLI、触发实时读取，因此 CLI 暂时缺失时仍能显示已有安全快照。快照超过 6 小时或强制刷新失败时标记为 stale，并保留上次确认时间。token、原始 App Server JSON、授权 URL 和错误正文永不进入缓存。
 
@@ -134,7 +134,7 @@ SQLite 位于平台应用数据目录，启用 WAL、foreign keys、busy timeout
 
 ## 前端与 IPC
 
-React 只使用显式 Tauri commands；CLIProxyAPI 新增的能力仅限检查最新内核、安装最新内核、读取脱敏状态和启停受管进程。OTel 与本机网关凭据只在用户点击显示配置并通过原生确认时返回前端。OAuth/认证档案只获得账户摘要、登录状态、档案白名单 DTO 与变更结果；provider 普通 DTO 只有非秘密字段和 `hasApiKey`。原生导入和确认由 Rust dialog 完成，WebView 没有通用路径、JSON、HTTP、shell、process、dialog 或 updater 插件能力。WebView 使用严格 CSP；浏览器开发模式使用人工构造的 demo adapter，不读取本机 Codex 数据、下载内核或启动真实 listener。
+React 只使用显式 Tauri commands；CLIProxyAPI 新增的能力仅限确认审核基线、安装审核基线、读取脱敏状态和启停受管进程。OTel 凭据只在用户点击显示配置并通过原生确认后进入专用配置片段；CLIProxyAPI client key 与 provider API Key 永不返回 WebView，前端只能获得非秘密 endpoint、运行状态和 `hasApiKey`。OAuth/认证档案只获得账户摘要、登录状态、档案白名单 DTO 与变更结果。原生导入和确认由 Rust dialog 完成，WebView 没有通用路径、JSON、HTTP、shell、process、dialog 或 updater 插件能力。WebView 使用严格 CSP；浏览器开发模式使用人工构造的 demo adapter，不读取本机 Codex 数据、下载内核或启动真实 listener。
 
 ## 在线更新信任边界
 

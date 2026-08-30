@@ -50,6 +50,7 @@ test("保存供应商不会把提交的秘密回传给 WebView", async () => {
   });
 
   assert.deepEqual(Object.keys(provider).sort(), providerKeys);
+  assert.match(provider.id, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
   assert.equal(provider.hasApiKey, true);
   assert.doesNotMatch(JSON.stringify(provider), new RegExp(secret));
 });
@@ -78,13 +79,8 @@ test("网关普通状态不包含本机 bearer，WebView 没有凭据揭示入�
   ]);
   assert.doesNotMatch(JSON.stringify(status), /authorization|bearer|token|secret|api[_-]?key/i);
 
-  const [provider] = await invokeDemo<CodexProviderProfile[]>(COMMANDS.listCodexProviders);
-  assert.ok(provider);
-  const running = await invokeDemo<CodexGatewayStatus>(COMMANDS.startCodexGateway, {
-    source: "external-provider",
-    providerId: provider.id,
-  });
-  assert.equal(running.source, "external-provider");
+  const running = await invokeDemo<CodexGatewayStatus>(COMMANDS.startCodexGateway);
+  assert.equal(running.source, "oauth-pool");
   assert.doesNotMatch(JSON.stringify(running), /authorization|bearer|token|secret|api[_-]?key/i);
   assert.equal("revealCodexGatewaySetup" in COMMANDS, false);
   await invokeDemo<CodexGatewayStatus>(COMMANDS.stopCodexGateway);
@@ -143,6 +139,8 @@ test("两个产品页拆分本地代理与 Codex 配置的信任边界", () => {
   assert.match(configSource, /官方直连/);
   assert.match(configSource, /本地 CLIProxyAPI/);
   assert.match(configSource, /外部 Responses 兼容代理/);
+  assert.match(configSource, /支持 HTTP\(S\)，保存时不解析或访问该地址/);
+  assert.doesNotMatch(configSource, /远程上游必须使用 HTTPS/);
   assert.match(configSource, /打开官方订阅/);
   assert.match(shell, /id: "config", label: "Codex 配置"/);
   assert.match(shell, /id: "gateway", label: "本地代理"/);
@@ -175,6 +173,7 @@ test("首页代理快捷控制仅复制 endpoint，支持可访问的启停状�
   assert.match(quickControl, /role="switch"/);
   assert.match(quickControl, /aria-checked=\{running\}/);
   assert.match(quickControl, /COMMANDS\.installLatestCliproxyCore/);
+  assert.match(quickControl, /!status\?\.installed \|\| status\.updateAvailable/);
   assert.match(quickControl, /aria-busy=\{busy !== null\}/);
   assert.match(quickControl, /aria-live="polite"/);
   assert.doesNotMatch(source, /全局提示词|插件与市场|会话管理/);
@@ -183,7 +182,7 @@ test("首页代理快捷控制仅复制 endpoint，支持可访问的启停状�
 test("CLIProxyAPI 内核版本与桌面应用独立检查和更新", async () => {
   const checked = await invokeDemo<CodexGatewayStatus>(COMMANDS.checkLatestCliproxyCore);
   assert.equal(checked.latestVersion, "7.2.145");
-  assert.equal(checked.coreSource, "GitHub Release");
+  assert.match(checked.coreSource, /已审核固定基线.*v7\.2\.145/);
 
   const installed = await invokeDemo<CodexGatewayStatus>(COMMANDS.installLatestCliproxyCore);
   assert.equal(installed.installed, true);
@@ -196,6 +195,7 @@ test("原生反代只启动受限 CLIProxyAPI sidecar，不保留旧内嵌转发
     new URL("../src-tauri/src/provider_gateway.rs", import.meta.url),
     "utf8",
   );
+  const production = source.slice(0, source.indexOf("#[cfg(test)]"));
 
   for (const boundary of [
     "host: \\\"127.0.0.1\\\"",
@@ -207,7 +207,11 @@ test("原生反代只启动受限 CLIProxyAPI sidecar，不保留旧内嵌转发
     ".arg(\"-local-model\")",
     ".env_clear()",
   ]) {
-    assert.match(source, new RegExp(boundary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(production, new RegExp(boundary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
-  assert.doesNotMatch(source, /axum::serve|fn forward\(|struct Counters|start_with_secret/);
+  assert.doesNotMatch(production, /axum::serve|fn forward\(|struct Counters|start_with_secret/);
+  assert.doesNotMatch(production, /fn start_sidecar|fn sidecar_config|source: "external-provider"/);
+  assert.doesNotMatch(production, /releases\/latest|fetch_latest_release|openai-compatibility/);
+  assert.match(production, /PINNED_CORE_VERSION: &str = "7\.2\.145"/);
+  assert.match(production, /与当前审核基线不一致/);
 });

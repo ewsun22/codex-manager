@@ -641,14 +641,12 @@ fn normalized_base_url(
             }
         }
         ConfigProfileKind::ExternalCompatible => {
-            let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
-            if parsed.scheme() != "https"
-                || host.is_empty()
-                || host == "localhost"
-                || host == "127.0.0.1"
-                || host == "::1"
+            if !matches!(parsed.scheme(), "http" | "https")
+                || parsed.host_str().is_none()
+                || parsed.port_or_known_default().is_none()
+                || !matches!(parsed.path(), "/v1" | "/v1/")
             {
-                return Err("外部兼容代理必须使用 HTTPS 公网地址。".into());
+                return Err("外部兼容代理必须是 HTTP(S) /v1 地址。".into());
             }
         }
         ConfigProfileKind::OfficialDirect => unreachable!(),
@@ -1108,6 +1106,35 @@ mod tests {
             created_at: String::new(),
             updated_at: String::new(),
         }
+    }
+
+    #[test]
+    fn external_profile_accepts_http_and_https_without_network_resolution() {
+        assert_eq!(
+            normalized_base_url(
+                ConfigProfileKind::ExternalCompatible,
+                Some("http://192.168.10.20:8317/v1")
+            )
+            .unwrap()
+            .as_deref(),
+            Some("http://192.168.10.20:8317/v1")
+        );
+        assert_eq!(
+            normalized_base_url(
+                ConfigProfileKind::ExternalCompatible,
+                Some("https://offline-provider.invalid/v1")
+            )
+            .unwrap()
+            .as_deref(),
+            Some("https://offline-provider.invalid/v1")
+        );
+        assert!(
+            normalized_base_url(
+                ConfigProfileKind::ExternalCompatible,
+                Some("ftp://provider.example/v1")
+            )
+            .is_err()
+        );
     }
 
     fn setup() -> (tempfile::TempDir, Store, PathBuf, PathBuf) {

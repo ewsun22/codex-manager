@@ -28,16 +28,16 @@
 
 | 能力 | 数据/运行来源 | 当前结论 |
 |---|---|---|
-| OpenAI-compatible 供应商 | SQLite 非秘密元数据 + 应用专用 Keychain API Key | macOS；名称、HTTPS/loopback Base URL、模型和 reasoning effort 可管理；普通 DTO 只有 `hasApiKey` |
+| OpenAI-compatible 供应商 | SQLite 非秘密元数据 + 应用专用 Keychain API Key | macOS；名称、HTTP(S) Base URL、模型和 reasoning effort 可管理；普通 DTO 只有 `hasApiKey`；地址由 Codex 直连，保存时不做 DNS/私网门禁 |
 | Codex 配置控制面 | Codex `config.toml` + SQLite 非秘密 profile | 独立页面管理官方直连、本地 CLIProxyAPI、已保存外部 Responses provider；支持预览、CAS/原子事务应用与恢复；仅维护 `model`、`model_provider` 和一个 provider table |
-| 本地代理控制面 | 预编译 CLIProxyAPI + 独立 OAuth/API-key 凭据域 | 独立页面/首页开关管理内核、监听状态、接入地址与凭据模式；不与官方 OAuth 档案共用 auth-dir 或 Keychain service |
-| 内核来源与版本 | `router-for-me/CLIProxyAPI` 官方 GitHub Release | 桌面主体与内核独立版本；用户显式检查/安装；本机不编译 Go；只选择精确平台资产 |
-| 下载与安装 | Rust supervisor + 私有 staging/事务标记 | Release asset digest 与 `checksums.txt` 必须双匹配；下载/解压有上限，拒绝穿越和链接；安装切换或健康失败回滚中断时恢复上一已提交内核与匹配元数据，新版健康前保留旧版 |
+| 本地代理控制面 | 预编译 CLIProxyAPI + 独立 OAuth 凭据域 | 独立页面/首页开关管理内核、监听状态、接入地址与 OAuth 凭据池；不与官方 OAuth 档案共用 auth-dir 或 Keychain service |
+| 内核来源与版本 | `router-for-me/CLIProxyAPI` 官方 GitHub tag 资产 | 桌面主体与内核独立版本；用户显式确认/安装；内测固定审核基线 `v7.2.145`，不追随 `latest`；本机不编译 Go |
+| 下载与安装 | Rust supervisor + 私有 staging/事务标记 | 内置精确资产名与 SHA-256；下载/解压有上限，拒绝穿越和链接；记录已解压二进制摘要，状态/启动前复核，不匹配时可显式切回审核基线 |
 | 本地监听 | CLIProxyAPI 预编译 sidecar | 默认停止；生成配置固定 IPv4 loopback 与用户选定端口；PID + `/healthz` 检查；不会安装系统代理或后台 helper |
 | 客户端认证 | 本机 loopback API key | 仅显示非秘密接入状态和 URL；Codex 配置通过 `auth.command` 读取原生 helper，配置只存 app binary path 与 allowlisted opaque secret ref，不保存 bearer/API Key |
-| 上游转发 | CLIProxyAPI `openai-compatibility` | 当前表单只配置 OpenAI-compatible API-key 上游；核心提供多协议 client endpoint，但 Claude/Gemini 是否可用取决于上游配置，不宣称已做真实 E2E |
-| 上游网络安全 | CLIProxyAPI 预编译 HTTP client | 当前无禁 redirect 或 DNS/IP pinning 配置；任意自定义 Base URL 发布 No-Go，需上游或受信任架构层补齐 |
-| CLIProxyAPI API-key 凭据 | Keychain + 私有 runtime config | API Key 静态保留在应用专用 Keychain；运行时进入 `0700` 目录/`0600` 配置，停止时删除；不进入 SQLite、普通 DTO、日志或备份 |
+| 上游转发 | CLIProxyAPI OAuth provider pool | 当前只通过 CLIProxyAPI OAuth 凭据池转发；核心提供多协议 client endpoint，但 Claude/Gemini 是否可用取决于凭据和内核，不宣称已做真实 E2E |
+| 外部 API-key 配置 | Codex `model_providers` + Keychain | 外部 API-key 供应商由 Codex 配置直接使用，不经过 CLIProxyAPI；普通 DTO 只返回 `hasApiKey` |
+| CLIProxyAPI OAuth 凭据 | Keychain + 私有 auth-dir | OAuth token 静态保留在独立 Keychain；运行时进入 `0700` 目录/`0600` 文件，停止时删除；不进入 SQLite、普通 DTO、日志或备份 |
 | CLIProxyAPI OAuth 凭据池 | 原生文件选择器 + `cc.codex.manager.cliproxy-auth.v1` Keychain | 显式导入 `codex`/`claude`/`antigravity`/`kimi`/`xai` 当前理解格式；DTO 不含账户、路径、token、fingerprint；identity 只用于本地防串号，不是联网验真 |
 | OAuth 运行时投影 | 随机私有 auth-dir + checkpoint | 启动时投影到 `0700`/`0600` 文件，允许内核原地 refresh；正常停止先做 provider/identity/CAS checkpoint 再清理；pending 崩溃证据 fail closed，确认无 orphan 后才恢复 |
 | 日志与控制面 | 生成配置 fail closed | `commercial-mode:true`，request/debug/file log/usage stats 关闭；Management API、OAuth callback、动态插件不向 WebView 开放 |
@@ -65,4 +65,4 @@
 - 导入依赖 App Server 当前的 `chatgptAuthTokens` 协议，该协议变更时会 fail closed。导入时必须有可用 access token；为避免触发 refresh token 轮换，不在导入探测中单独验证 refresh token。
 - OTel metrics 是聚合数据；当前 Codex metrics 缺少稳定的逐 conversation 关联时，本应用不会把 histogram/count 展开为虚假的单次请求。
 - 浏览器 demo 不自动联网；自动更新检查仅属于桌面后端。
-- CLIProxyAPI 上游 release 缺少 detached signature、Developer ID、公证、SBOM 与可复现 provenance；双 SHA-256 只能证明下载与同一 GitHub 信任域发布信息一致。当前未完成真实上游 E2E、安装发布验收；任意外部上游 redirect/DNS/IP 约束不足仍是发布 No-Go。
+- CLIProxyAPI 上游 release 缺少 detached signature、Developer ID、公证、SBOM 与可复现 provenance；内置 SHA-256 只用于拒绝与已审核资产不同的下载字节。内测固定 `v7.2.145` 精确摘要；真实 OAuth E2E 和首次正式发布观测仍待完成，不把上游供应链增强项作为内测门禁。
