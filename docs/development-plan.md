@@ -77,6 +77,9 @@
 - [ ] 尚未取得从已安装的可信旧签名版本到 `v0.6.1` 的真实检查、下载、验签、安装、重启 updater E2E 证据
 - [x] `v0.6.2` 已从 exact source `aef4e5613204b98248b4e6b626f314de830f6cfa` 完成签名发布与公开复验；CI run `33375924913`、release run `33376995242`、published verification run `33378924067` 均成功，Release ID `379643986` 与九项资产已核对
 - [ ] 尚未取得从已安装的可信旧签名版本到 `v0.6.2` 的真实检查、下载、验签、安装、重启 updater E2E 证据
+- [x] `v0.6.5` 中英文界面、设备语言默认判断、手动切换和双语用户向 Release note 已定版为发布候选
+- [ ] `v0.6.5` 的 exact-SHA CI、受保护签名、公证、九资产草稿复验、人工 Publish 和 published-mode 公开复验尚待完成
+- [ ] 尚未取得从已安装的可信旧签名版本到 `v0.6.5` 的真实检查、下载、验签、安装、重启 updater E2E 证据
 
 ## 后续阶段
 
@@ -105,6 +108,7 @@
 - [x] `v0.6.0` 总览、官方订阅缓存、CLI Schema 诊断与构建信息已完成签名、公证、九资产草稿复验、人工 Publish 和 published-mode 公开复验
 - [x] `v0.6.1` OAuth-only 本地代理、固定 CLIProxyAPI 审核基线与外部 provider 直连已完成签名、公证、九资产草稿复验、人工 Publish 和 published-mode 公开复验
 - [x] `v0.6.2` 修复本地代理 OAuth 导入参数契约，取消选择保持无修改，重导入保留旧标签，并显示经过限定的原生错误；已完成签名、公证、九资产草稿复验、人工 Publish 和 published-mode 公开复验
+- [x] `v0.6.5` 增加完整简体中文/English 界面、设备语言默认判断和本地手动切换；候选说明以中英双语面向用户描述软件更新
 - [ ] 用用户授权的真实 CLIProxyAPI OAuth 凭据完成 OAuth → loopback → Codex CLI Responses E2E、费用确认与恢复直连验收
 - [ ] 从已安装的可信签名旧版本真实检查、下载、验签、安装、重启到最新稳定版本，完成 updater E2E 验收
 - [ ] 为运行中配置漂移、退出前恢复、崩溃恢复设计受管 config state machine；在此之前网关不会自动接管 Codex

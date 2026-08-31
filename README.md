@@ -10,7 +10,7 @@ Codex Manager is an unofficial, local-first desktop app for understanding and ma
 
 **[Download for macOS (Apple silicon) →](https://github.com/ewsun22/codex-manager/releases/latest)**
 
-![Codex Manager dashboard](output/playwright/desktop-overview.png)
+![Codex Manager dashboard](output/playwright/desktop-overview-en.png)
 
 ## Download
 
