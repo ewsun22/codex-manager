@@ -11,7 +11,9 @@ import {
 type GatewayNotice = (tone: "success" | "error" | "info", message: string) => void;
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "操作未完成，请刷新后重试。";
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  return "操作未完成，请刷新后重试。";
 }
 
 function stateLabel(status: CodexGatewayStatus | null): string {
@@ -134,7 +136,11 @@ export function CodexGatewayView({ onNotice }: { onNotice: GatewayNotice }) {
   const importOauthProfile = async () => {
     setBusy("oauth-import");
     try {
-      const outcome = await invokeBackend<ProxyAuthImportOutcome>(COMMANDS.importProxyAuthProfile);
+      const outcome = await invokeBackend<ProxyAuthImportOutcome | null>(COMMANDS.importProxyAuthProfile);
+      if (!outcome) {
+        onNotice("info", "未选择认证文件，未作任何修改。");
+        return;
+      }
       await refresh();
       onNotice("success", outcome.action === "updated" ? `OAuth 档案“${outcome.profile.label}”已更新。` : `OAuth 档案“${outcome.profile.label}”已导入。`);
     } catch (error) {

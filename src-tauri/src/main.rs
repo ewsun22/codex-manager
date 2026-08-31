@@ -924,7 +924,7 @@ fn list_proxy_auth_profiles(
 async fn import_proxy_auth_profile(
     app: AppHandle,
     state: State<'_, AppState>,
-    label: String,
+    label: Option<String>,
 ) -> Result<Option<proxy_auth::ImportOutcome>, String> {
     let Some(path) = pick_proxy_auth_file(&app).await? else {
         return Ok(None);
@@ -941,7 +941,7 @@ async fn import_proxy_auth_profile(
     tauri::async_runtime::spawn_blocking(move || {
         let source = auth_switch::read_native_import(&path)?;
         store
-            .import(&source, Some(&label))
+            .import(&source, label.as_deref())
             .map(Some)
             .map_err(display_error)
     })
@@ -3788,12 +3788,12 @@ mod tests {
             );
         }
         let dto = serde_json::to_value(BuildInfo {
-            version: "0.6.1".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
             build_time: env!("CODEX_MANAGER_BUILD_TIME").into(),
             commit_sha: option_env!("CODEX_MANAGER_COMMIT_SHA").map(str::to_owned),
         })
         .unwrap();
-        assert_eq!(dto["version"], "0.6.1");
+        assert_eq!(dto["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(dto["buildTime"], env!("CODEX_MANAGER_BUILD_TIME"));
         assert!(dto.get("commitSha").is_some());
     }

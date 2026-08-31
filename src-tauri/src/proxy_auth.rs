@@ -241,7 +241,9 @@ impl ProxyAuthStore {
     /// boundary. Re-importing the same provider identity updates one profile.
     pub fn import(&self, source: &[u8], label: Option<&str>) -> Result<ImportOutcome> {
         let secret = validated_secret(source)?;
-        let label = normalize_label(label)?;
+        let label = label
+            .map(|value| normalize_label(Some(value)))
+            .transpose()?;
         let _guard = self.lock()?;
         let mut index = self.read_index()?;
         let now = Utc::now();
@@ -261,7 +263,9 @@ impl ProxyAuthStore {
             } else {
                 "updated"
             };
-            record.label = label;
+            if let Some(label) = label {
+                record.label = label;
+            }
             record.updated_at = now;
             record.revision = next_revision(record.revision)?;
             if let Err(error) = self.write_index(&index) {
@@ -279,7 +283,7 @@ impl ProxyAuthStore {
 
         let record = ProfileRecord {
             id: Uuid::new_v4().to_string(),
-            label,
+            label: label.unwrap_or(normalize_label(None)?),
             provider: secret.provider.clone(),
             identity_fingerprint: secret.identity_fingerprint.to_string(),
             enabled: secret.source_enabled,
@@ -1548,6 +1552,31 @@ mod tests {
                 .revision,
             2
         );
+    }
+
+    #[test]
+    fn import_without_a_webview_label_uses_a_safe_native_default() {
+        let store = store();
+        let outcome = store
+            .import(&codex_fixture("acct-a", "access-a", "refresh-a"), None)
+            .unwrap();
+        assert_eq!(outcome.profile.label, "CLIProxyAPI OAuth");
+    }
+
+    #[test]
+    fn reimport_without_a_webview_label_preserves_the_existing_label() {
+        let store = store();
+        store
+            .import(
+                &codex_fixture("acct-a", "access-a", "refresh-a"),
+                Some("个人订阅"),
+            )
+            .unwrap();
+        let outcome = store
+            .import(&codex_fixture("acct-a", "access-b", "refresh-b"), None)
+            .unwrap();
+        assert_eq!(outcome.action, "updated");
+        assert_eq!(outcome.profile.label, "个人订阅");
     }
 
     #[test]

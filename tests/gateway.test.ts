@@ -160,6 +160,27 @@ test("代理 OAuth DTO 与 Codex 配置快照不回传 token 或原始认证文�
   assert.doesNotMatch(JSON.stringify(config), /access[_-]?token|refresh[_-]?token|authorization|bearer/i);
 });
 
+test("代理 OAuth 导入契约允许 WebView 省略标签并处理空结果", async () => {
+  const proxySource = readFileSync(new URL("../src/app/codex-gateway.tsx", import.meta.url), "utf8");
+  const mainSource = readFileSync(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
+  const command = mainSource.slice(
+    mainSource.indexOf("async fn import_proxy_auth_profile("),
+    mainSource.indexOf("fn set_proxy_auth_profile_enabled("),
+  );
+
+  assert.match(command, /label: Option<String>/);
+  assert.match(command, /\.import\(&source, label\.as_deref\(\)\)/);
+  assert.match(proxySource, /ProxyAuthImportOutcome \| null/);
+  assert.match(proxySource, /if \(!outcome\)/);
+  assert.match(proxySource, /typeof error === "string"/);
+
+  const imported = await invokeDemo<{ profile: { label: string }; action: string }>(
+    COMMANDS.importProxyAuthProfile,
+  );
+  assert.equal(imported.profile.label, "新 OAuth 档案");
+  assert.equal(imported.action, "created");
+});
+
 test("首页代理快捷控制仅复制 endpoint，支持可访问的启停状态", () => {
   const source = readFileSync(new URL("../src/app/codex-gateway.tsx", import.meta.url), "utf8");
   const quickControl = source.slice(source.indexOf("export function CodexGatewayQuickControl"), source.indexOf("export function CodexGatewayView"));
