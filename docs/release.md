@@ -75,6 +75,13 @@ Release note 采用 `docs/release-notes/v<VERSION>.md` 的固定章节。CI 通�
 - 本版本修复本地代理 CLIProxyAPI OAuth 导入：原生文件选择取消不再报错或修改状态，Tauri 命令允许省略 WebView 标签，新增导入默认标签，重导入无标签时保留既有自定义标签，并将限定后的原生错误传回界面。英文/简体中文 README、截图、隐私、安全、架构、能力矩阵、开发计划、供应链、版本 note、Release 正文与 `latest.json.notes` 已在发布前同步；GitHub Description、Topics、平台范围和 `LICENSE` 记录为 `no change`。
 - 真实 CLIProxyAPI OAuth → loopback → Codex Responses、供应商费用、隔离环境 sidecar 网络/磁盘观测，以及从可信旧签名版本安装更新到 `v0.6.2` 仍未 `accepted`；签名发布与公开资产复验不外推为这些业务链验收。
 
+## 2026-08-31 v0.6.5 已发布事实
+
+- `v0.6.5` 已从 exact source `0655147fe8674bcbd7d6f4ee6e0b82f592b4028d` 完成签名稳定发布。主线 CI run `33395340986`、受保护签名 release run `33396400013` 与公开后只读复验 run `33398200086` 均成功；GitHub Release ID 为 `379783150`，发布时间为 `2026-08-31T13:39:19Z`。
+- Release 为 `draft=false`、`prerelease=false`，tag、Release、`releases/latest` 与 `latest.json` 均绑定同一 exact source。九项正式资产已先按草稿 asset ID 回下载验证，再从正式 tag URL 与 `latest.json` alias 匿名回下载，SHA-256、updater 签名、Developer ID、Hardened Runtime、secure timestamp、app/DMG 双 notary `Accepted`、stapling、Gatekeeper、provenance 与 attestation 全部通过；该状态为 `published publicly verified`。
+- 本版本增加完整简体中文和 English 界面：中文设备默认使用简体中文，其他设备默认使用 English；顶部语言切换会保存在本机，也可恢复跟随设备。数字、日期和金额按界面语言显示，项目名、模型名、路径和用户内容保持来源文本。英文/简体中文 README、对应截图、应用版本、双语 Release 正文与 `latest.json.notes` 已在发布前同步；下载入口、支持平台、安全/隐私政策、GitHub Description/Topics 与许可证记录为 `no change`。
+- 真实 CLIProxyAPI OAuth → loopback → Codex Responses、供应商费用、隔离环境 sidecar 网络/磁盘观测，以及从可信旧签名版本安装更新到 `v0.6.5` 仍未 `accepted`；本次 `published publicly verified` 不外推为 updater E2E 或这些业务链验收。
+
 ## Unsigned Community Build 发布
 
 1. 只使用 `main` 当前 commit 的成功 `CI` run 所上传的 `codex-manager-macos-unsigned` artifact，不使用本机历史产物。
