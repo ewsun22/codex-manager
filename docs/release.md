@@ -67,6 +67,14 @@ Release note 采用 `docs/release-notes/v<VERSION>.md` 的固定章节。CI 通�
 - 用户可见面已同步英文与简体中文 README、最新本地代理截图、隐私与安全策略、架构、能力矩阵、开发计划、供应链说明和版本 note。GitHub Description、Topics、平台范围、`LICENSE` 与第三方许可事实记录为 `no change`。
 - 真实 CLIProxyAPI OAuth → loopback → Codex Responses、供应商费用、隔离环境 sidecar 网络/磁盘观测，以及从可信旧签名版本安装更新到 `v0.6.1` 仍未 `accepted`；签名发布与公开资产复验不外推为这些业务链验收。
 
+## 2026-08-31 v0.6.2 已发布事实
+
+- `v0.6.2` 已从 exact source `aef4e5613204b98248b4e6b626f314de830f6cfa` 完成签名稳定发布。主线 CI run `33375924913`、受保护签名 release run `33376995242` 与公开后只读复验 run `33378924067` 均成功；GitHub Release ID 为 `379643986`，发布时间为 `2026-08-31T09:40:44Z`。
+- Release 为 `draft=false`、`prerelease=false`，tag、Release、`releases/latest` 与 `latest.json` 均绑定同一 exact source。九项正式资产已核对：`BUILD-PROVENANCE.json`、`codex-manager-v0.6.2-aarch64.app.tar.gz`、对应 `.sig`、`codex-manager-v0.6.2-aarch64.dmg`、licenses ZIP、SBOM ZIP、`latest.json`、签名 SHA-256 清单和 `SIGNING-EVIDENCE.json`。
+- 签名 workflow 的无秘密构建、Developer ID/Hardened Runtime、app/DMG 双 notary `Accepted`、stapling、Gatekeeper、updater 验签、SBOM、provenance、attestation、资产按 ID 回下载与凭据清理均通过；公开后复验又从正式 tag URL 匿名回下载并重跑完整门禁。该状态为 `published publicly verified`。
+- 本版本修复本地代理 CLIProxyAPI OAuth 导入：原生文件选择取消不再报错或修改状态，Tauri 命令允许省略 WebView 标签，新增导入默认标签，重导入无标签时保留既有自定义标签，并将限定后的原生错误传回界面。英文/简体中文 README、截图、隐私、安全、架构、能力矩阵、开发计划、供应链、版本 note、Release 正文与 `latest.json.notes` 已在发布前同步；GitHub Description、Topics、平台范围和 `LICENSE` 记录为 `no change`。
+- 真实 CLIProxyAPI OAuth → loopback → Codex Responses、供应商费用、隔离环境 sidecar 网络/磁盘观测，以及从可信旧签名版本安装更新到 `v0.6.2` 仍未 `accepted`；签名发布与公开资产复验不外推为这些业务链验收。
+
 ## Unsigned Community Build 发布
 
 1. 只使用 `main` 当前 commit 的成功 `CI` run 所上传的 `codex-manager-macos-unsigned` artifact，不使用本机历史产物。
