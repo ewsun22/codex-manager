@@ -39,7 +39,7 @@ test("首页等价估算固定显示两位小数，明细格式仍允许四位�
 
 test("活动界面具备语义切换、说明与上下两处分页控件", async () => {
   const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
-  assert.match(appSource, /role="tablist" aria-label="活动记录视图"/);
+  assert.match(appSource, /role="tablist" aria-label=\{t\("活动记录视图"\)\}/);
   assert.match(appSource, /event\.key === "ArrowRight" \|\| event\.key === "ArrowLeft"/);
   assert.match(appSource, /tabIndex=\{\(query\.view \?\? "turns"\) === "turns" \? 0 : -1\}/);
   assert.match(appSource, /数据说明/);

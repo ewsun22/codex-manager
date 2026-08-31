@@ -123,3 +123,5 @@
 ### 可选精确网络观测
 
 Phase 5 的双控制面已完成本地实现和自动化测试边界：Codex 配置使用 `auth.command`、CAS/原子事务与私有 journal；本地代理使用预编译 CLIProxyAPI、独立 OAuth 凭据和 checkpoint。仍不把完整 URL、TTFB、wire bytes 或上游账单写入活动库；usage statistics 关闭后请求计数为 `unavailable`。一次真实 OAuth E2E、首次正式发布观测和最终 `accepted` 仍是发布前工作。
+
+- [x] 双语界面（简体中文/English）、设备语言默认判断和本地手动切换

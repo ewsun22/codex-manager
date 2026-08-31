@@ -129,21 +129,21 @@ test("两个产品页拆分本地代理与 Codex 配置的信任边界", () => {
   const configSource = readFileSync(new URL("../src/app/codex-config.tsx", import.meta.url), "utf8");
   const shell = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 
-  assert.match(proxySource, /<h1>本地代理<\/h1>/);
+  assert.match(proxySource, /<h1>\{t\("本地代理"\)\}<\/h1>/);
   assert.match(proxySource, /CLIProxyAPI OAuth 档案/);
   assert.match(proxySource, /非上游联网验真/);
   assert.match(proxySource, /COMMANDS\.checkLatestCliproxyCore/);
   assert.match(proxySource, /COMMANDS\.installLatestCliproxyCore/);
   assert.doesNotMatch(proxySource, /revealCodexGatewaySetup|experimental_bearer_token/);
-  assert.match(configSource, /<h1>Codex 配置<\/h1>/);
+  assert.match(configSource, /<h1>\{t\("Codex 配置"\)\}<\/h1>/);
   assert.match(configSource, /官方直连/);
   assert.match(configSource, /本地 CLIProxyAPI/);
   assert.match(configSource, /外部 Responses 兼容代理/);
   assert.match(configSource, /支持 HTTP\(S\)，保存时不解析或访问该地址/);
   assert.doesNotMatch(configSource, /远程上游必须使用 HTTPS/);
   assert.match(configSource, /打开官方订阅/);
-  assert.match(shell, /id: "config", label: "Codex 配置"/);
-  assert.match(shell, /id: "gateway", label: "本地代理"/);
+  assert.match(shell, /id: "config", label: t\("Codex 配置"\)/);
+  assert.match(shell, /id: "gateway", label: t\("本地代理"\)/);
   assert.match(shell, /onOpenOfficialSubscription=\{\(\) => setView\("oauth"\)\}/);
 });
 

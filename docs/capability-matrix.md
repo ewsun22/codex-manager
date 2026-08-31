@@ -66,3 +66,11 @@
 - OTel metrics 是聚合数据；当前 Codex metrics 缺少稳定的逐 conversation 关联时，本应用不会把 histogram/count 展开为虚假的单次请求。
 - 浏览器 demo 不自动联网；自动更新检查仅属于桌面后端。
 - CLIProxyAPI 上游 release 缺少 detached signature、Developer ID、公证、SBOM 与可复现 provenance；内置 SHA-256 只用于拒绝与已审核资产不同的下载字节。内测固定 `v7.2.145` 精确摘要；真实 OAuth E2E 和首次正式发布观测仍待完成，不把上游供应链增强项作为内测门禁。
+
+## 界面语言
+
+| 能力 | 当前状态 | 口径 |
+| --- | --- | --- |
+| 中英文界面 | implemented | 支持简体中文和 English；首次按设备语言选择，`zh-*` 为中文，其他语言为 English |
+| 手动切换 | implemented | 顶部切换器即时生效，偏好只保存在本地 WebView |
+| 数据格式化 | implemented | 数字、日期、金额随 locale 格式化；用户数据和外部 notes 不翻译 |

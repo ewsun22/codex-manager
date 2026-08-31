@@ -156,3 +156,7 @@ React 只使用显式 Tauri commands；CLIProxyAPI 新增的能力仅限确认�
 - [Codex App Server](https://developers.openai.com/codex/app-server)
 - [Custom instructions with AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
 - [OpenAI API Pricing](https://learn.chatgpt.com/docs/pricing)
+
+## 界面语言边界
+
+React UI 通过源码级 `t()` / `tt` i18n 层提供 `zh-CN` 与 `en-US`，不扫描或改写已渲染 DOM。首次启动读取 WebView 的设备语言：`zh-*` 使用中文，其余语言使用英文；用户手动选择或恢复“跟随设备”仅写入版本化 localStorage key。语言偏好不进入 SQLite、Tauri IPC、日志或任何凭据域。数字、日期和金额格式跟随当前界面语言；项目名、模型标识、路径、外部 Release notes 和底层技术错误保持来源原文。

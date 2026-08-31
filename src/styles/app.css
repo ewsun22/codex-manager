@@ -37,6 +37,12 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; ov
 
 .main-area { min-width: 0; padding: 0 30px 32px; }
 .topbar { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid #29382f; color: #bacabf; font-size: 12px; }
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+.language-switcher { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid #304137; border-radius: 8px; background: #111b15; }
+.language-switcher button { min-height: 30px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: #9aac9e; font-size: 11px; font-weight: 700; cursor: pointer; }
+.language-switcher button:hover, .language-switcher button:focus-visible { color: #e6f0e8; background: #203126; outline: 0; }
+.language-switcher button.is-active { color: #0d1a11; background: #a6e3b3; }
+.language-switcher .language-auto { min-width: 28px; padding: 0 6px; color: #83b88f; }
 .topbar-crumb { color: #e6f1e9; font-weight: 700; }.topbar-separator { padding: 0 8px; color: #657b6b; }
 .topbar-build { display: none; margin-left: 12px; color: #849689; font-size: 10px; }
 .view-content { max-width: 1420px; margin: 0 auto; padding-top: 26px; animation: enter .2s ease-out; }
@@ -306,6 +312,8 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; ov
   .cliproxy-core-grid > div:nth-child(-n + 2) { border-bottom: 1px solid #2d4535; }
 }
 @media (max-width: 510px) {
+  .topbar-actions { gap: 6px; }
+  .language-switcher button { padding-inline: 7px; }
   .gateway-status-heading, .gateway-provider-heading, .gateway-setup-actions { align-items: stretch; flex-direction: column; }
   .gateway-heading-actions { width: 100%; grid-template-columns: 1fr 1fr; }
   .gateway-status-grid, .provider-form-fields { grid-template-columns: 1fr; }

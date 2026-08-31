@@ -179,3 +179,7 @@ Codex Manager is released under the [Apache License 2.0](LICENSE). See [THIRD_PA
 ## Disclaimer
 
 Codex Manager is an unofficial community project. **Not affiliated with or endorsed by OpenAI.** OpenAI, Codex, and related marks belong to their respective owners. Use account, provider, configuration, and local-file features at your own discretion and follow the terms and privacy policies of connected services.
+
+## Interface language
+
+The interface supports Simplified Chinese and English. On first launch it follows the device language (zh-* uses Chinese; other languages use English); use the top-bar switcher to override or return to device language. The choice is stored only in the app WebView's local preference store.

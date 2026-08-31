@@ -65,3 +65,7 @@ timeline 中只保存消息正文的 UTF-8 byte 长度。解析器和 OTel recei
 ## 用户责任
 
 项目路径、模型标识、session id 和 AGENTS 内容本身也可能是敏感信息。只应授权可信根目录；公开问题报告、截图或日志前应自行脱敏。不要在 AGENTS 文件或 Issue 中放置密钥。
+
+## 界面语言偏好
+
+界面语言和“跟随设备”选择只保存在应用 WebView 的本地存储中，不进入 SQLite、日志、备份、Tauri 后端 DTO 或任何 Keychain。语言判断只读取设备公开的浏览器 locale，不读取消息、凭据或请求内容。
