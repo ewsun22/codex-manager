@@ -91,30 +91,10 @@ test("网关 WebView 权限只开放显式命令且不引入通用网络或进�
     readFileSync(new URL("../src-tauri/capabilities/default.json", import.meta.url), "utf8"),
   ) as { permissions: string[] };
 
-  for (const command of [
-    "list-codex-providers",
-    "save-codex-provider",
-    "delete-codex-provider",
-    "get-codex-gateway-status",
-    "update-codex-gateway-port",
-    "start-codex-gateway",
-    "stop-codex-gateway",
-    "check-latest-cliproxy-core",
-    "install-latest-cliproxy-core",
-    "get-codex-config-snapshot",
-    "save-codex-config-profile",
-    "delete-codex-config-profile",
-    "preview-codex-config-profile",
-    "apply-codex-config-profile",
-    "restore-codex-config",
-    "list-proxy-auth-profiles",
-    "import-proxy-auth-profile",
-    "set-proxy-auth-profile-enabled",
-    "delete-proxy-auth-profile",
-    "restore-proxy-auth-profile",
-  ]) {
-    assert.ok(capability.permissions.includes(`allow-${command}`));
-  }
+  const expectedCommands = Object.values(COMMANDS)
+    .map((command) => `allow-${command.replaceAll("_", "-")}`)
+    .sort();
+  assert.deepEqual(capability.permissions.filter((permission) => permission.startsWith("allow-")).sort(), expectedCommands);
   assert.equal(
     capability.permissions.some((permission) => /^(shell|http|process|opener|dialog):/.test(permission)),
     false,
