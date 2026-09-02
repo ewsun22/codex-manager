@@ -208,8 +208,10 @@ export function CodexGatewayView({ onNotice }: { onNotice: GatewayNotice }) {
   const stopGateway = async () => {
     setBusy("stop");
     try {
-      setStatus(await invokeBackend<CodexGatewayStatus>(COMMANDS.stopCodexGateway));
+      const nextStatus = await invokeBackend<CodexGatewayStatus>(COMMANDS.stopCodexGateway);
+      setStatus(nextStatus);
       onNotice("info", t("CLIProxyAPI 反代已停止。若 Codex 当前仍指向本地代理，请到“Codex 配置”恢复直连。"));
+      await refresh();
     } catch (error) { onNotice("error", tt`网关未停止：${errorMessage(error)}`); } finally { setBusy(null); }
   };
 

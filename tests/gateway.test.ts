@@ -180,6 +180,17 @@ test("首页代理快捷控制仅复制 endpoint，支持可访问的启停状�
   assert.doesNotMatch(source, /全局提示词|插件与市场|会话管理/);
 });
 
+test("停止本地代理后重新读取 OAuth checkpoint 状态", () => {
+  const source = readFileSync(new URL("../src/app/codex-gateway.tsx", import.meta.url), "utf8");
+  const start = source.lastIndexOf("const stopGateway = async");
+  const stopGateway = source.slice(start, source.indexOf("\n\n  return", start));
+  const stop = stopGateway.indexOf("await invokeBackend<CodexGatewayStatus>(COMMANDS.stopCodexGateway)");
+  const keepStoppedStatus = stopGateway.indexOf("setStatus(nextStatus)");
+  const refreshCheckpoint = stopGateway.indexOf("await refresh()");
+
+  assert.ok(stop >= 0 && stop < keepStoppedStatus && keepStoppedStatus < refreshCheckpoint);
+});
+
 test("CLIProxyAPI 内核版本与桌面应用独立检查和更新", async () => {
   const checked = await invokeDemo<CodexGatewayStatus>(COMMANDS.checkLatestCliproxyCore);
   assert.equal(checked.latestVersion, "7.2.145");
