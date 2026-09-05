@@ -82,11 +82,14 @@ Release note 采用 `docs/release-notes/v<VERSION>.md` 的固定章节。CI 通�
 - 本版本增加完整简体中文和 English 界面：中文设备默认使用简体中文，其他设备默认使用 English；顶部语言切换会保存在本机，也可恢复跟随设备。数字、日期和金额按界面语言显示，项目名、模型名、路径和用户内容保持来源文本。英文/简体中文 README、对应截图、应用版本、双语 Release 正文与 `latest.json.notes` 已在发布前同步；下载入口、支持平台、安全/隐私政策、GitHub Description/Topics 与许可证记录为 `no change`。
 - 真实 CLIProxyAPI OAuth → loopback → Codex Responses、供应商费用、隔离环境 sidecar 网络/磁盘观测，以及从可信旧签名版本安装更新到 `v0.6.5` 仍未 `accepted`；本次 `published publicly verified` 不外推为 updater E2E 或这些业务链验收。
 
-## 2026-09-06 v0.6.6 定版与发布边界
+## 2026-09-06 v0.6.6 已发布事实
 
-- v0.6.6 定版任务用量与保留期、AGENTS 草稿和确认框、活动筛选、原生代理稳定性、有界变更优先扫描及文档检查；来源是已提交并通过 CI 的 S1–S6 本地切片。
-- [发布准备与用户可见面检查](validation/release-v0.6.6.md) 和 [完整版本说明](release-notes/v0.6.6.md) 同步进入发布源码；正式签名、草稿和公开后状态由对应 workflow 证据确认，不能预先写为完成。
-- 用户在真实 OAuth 未验收已披露后明确授权本次 Release，按 [SECURITY.md](../SECURITY.md) 的 v0.6.6 限定例外发布。真实账户、费用和配置往返不在本次执行范围；旧版 updater 安装明确 skipped by user。
+- `v0.6.6` 已从 exact source `036728e5e427a254750146843bc0ff64466c5b78` 完成签名稳定发布。主线 [CI run 33983542347](https://github.com/ewsun22/codex-manager/actions/runs/33983542347)、受保护 [release run 33983544027](https://github.com/ewsun22/codex-manager/actions/runs/33983544027) 与独立 [published verification run 33984628418](https://github.com/ewsun22/codex-manager/actions/runs/33984628418) 全部成功。
+- [GitHub Release](https://github.com/ewsun22/codex-manager/releases/tag/v0.6.6) ID 为 `383337639`，发布时间 `2026-09-05T18:36:57Z`（北京时间 2026-09-06 02:36:57），`draft=false`、`prerelease=false`。tag、Release、`releases/latest` 和 updater `latest.json` 均绑定该版本与同一 source。
+- 九项正式资产已核对：`BUILD-PROVENANCE.json`、`codex-manager-v0.6.6-aarch64.app.tar.gz`、对应 `.sig`、`codex-manager-v0.6.6-aarch64.dmg`、licenses ZIP、SBOM ZIP、`latest.json`、签名 SHA-256 清单和 `SIGNING-EVIDENCE.json`。先按草稿 asset ID 回下载，再按正式 tag URL 与 latest alias 匿名回下载；SHA-256、updater 签名、Developer ID、Hardened Runtime、secure timestamp、app/DMG 双 notary `Accepted`、stapling、Gatekeeper、provenance 与 attestation 全部通过。状态为 `published publicly verified`，原始公开证明见 [验证 JSON](validation/release-v0.6.6-verification.json)。
+- 发布前已核对 signing-input SHA-256 `8bf29d8445aa4415539da5962618606cba9d491d2b9bff6a110b6e09742412fb`、版本/source/run/target 以及远端 main；仅批准本次 `release` Environment。签名 job 在上传前清理临时 `.p12`、Keychain 和列表快照；本地隔离 QA 与开发服务器已退出，临时签名输入下载已删除，保留非秘密 JSON 验证证据。
+- 本版定版任务用量与保留期、AGENTS 草稿及确认框、活动筛选、原生代理稳定性、有界变更优先扫描和文档检查。双语 README、真实 v0.6.6 debug 验证截图、当前能力/架构/计划、安全/隐私/供应链、版本说明和 updater 摘要已在同一发布源同步，详见 [发布准备与用户可见面检查](validation/release-v0.6.6.md)。GitHub Description/Topics、平台、动态下载链接、网站/商店和许可证记录为 `no change`；完整 Release 正文与 [tag 时版本说明](release-notes/v0.6.6.md) 一致，摘要来自同一说明。
+- 用户在真实 OAuth 未验收已披露后明确授权本次 Release，按 [SECURITY.md](../SECURITY.md) 的 v0.6.6 限定例外发布。隔离桌面 8 项与实际允许关闭、浏览器 5 个确认动作已通过；审核版 CLIProxyAPI 空池监听/请求拒绝/停止清理已观测。真实 OAuth 成功 Responses、费用、真实 checkpoint 和配置往返仍未业务验收；旧版 updater 安装明确为 `skipped by user`，不能从签名发布或公开验证外推为 `accepted`。
 
 ## Unsigned Community Build 发布
 

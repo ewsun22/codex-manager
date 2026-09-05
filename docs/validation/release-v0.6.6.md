@@ -34,3 +34,9 @@
 `implemented` / `tested`：定版与本地检查完成。`published`：本文在源码定版时不提前宣称发布完成。`observed`：人工桌面和空池内核已有证据。`accepted`：真实 OAuth 业务仍未验收；旧版 updater 为 `skipped by user`。后续发布结果单独记录，不改写 tag 时状态。
 
 `deployment_decision=project-authorized`：本次用户明确授权提交、推送和 Release，覆盖 v0.6.6 的既有签名稳定发布流程；不扩展为真实账户调用、配置切换或本机安装升级。
+
+## 后续公开验证结果
+
+`v0.6.6` 已于 `2026-09-05T18:36:57Z` 公开，Release ID `383337639`，tag source 为 `036728e5e427a254750146843bc0ff64466c5b78`。主线 CI `33983542347`、签名/草稿工作流 `33983544027`、独立公开复验 `33984628418` 均成功；九项资产、真实签名/公证/Gatekeeper、updater、provenance/attestation 和匿名 latest 下载已验证。[原始证明 JSON](release-v0.6.6-verification.json) 保留 exact asset ID、大小、摘要和验证结果。
+
+本段仅补记发布后已发生的事实，不修改不可变 tag 或 Release 正文/摘要。`published` 为已公开并复验，`cleanup` 为签名材料与本次测试进程已清理；真实 OAuth `accepted` 缺口和 updater `skipped by user` 保持不变。证据文档单独提交，不重复触发构建或签名发布。

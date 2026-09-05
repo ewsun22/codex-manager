@@ -15,7 +15,7 @@
 
 S1–S4 已提交并推送为 `0f4d9ed8122c1d2041ae4dbfb9b985f3b848f961`，主线 CI 通过；没有新签名发布。具体结果及限制见 [S1–S4 验证记录](validation/reliability-s1-s4.md)、[S5–S6 验证记录](validation/reliability-s5-s6.md) 与 [真实业务验收条件](validation/real-e2e-boundaries.md)。
 
-v0.6.6 定版沿用上述实现与验证证据，用户在真实 OAuth 未验收已披露的前提下明确授权签名发布。发布结果以 [发布记录](release.md) 的 exact source、run、资产和公开验证为准；不能从版本号推断已公开或已业务验收。
+v0.6.6 已从 `036728e5e427a254750146843bc0ff64466c5b78` 完成签名稳定发布，CI `33983542347`、release `33983544027` 与独立公开复验 `33984628418` 均成功，Release ID 为 `383337639`。用户在真实 OAuth 未验收已披露的前提下明确授权本次发布；该状态为 `published publicly verified`，真实 OAuth 仍未业务验收，旧版 updater 按用户要求跳过。完整证据见 [发布记录](release.md)。
 
 ## Phase 0：可行性探针 — completed
 
