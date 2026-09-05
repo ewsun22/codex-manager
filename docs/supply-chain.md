@@ -15,11 +15,11 @@
 
 实现基于 OpenAI 官方 Responses、Codex config reference 与 App Server 契约 clean-room 编写。若未来直接复用上游任何代码或测试数据，必须先逐文件确认 provenance/许可证，更新 `THIRD_PARTY_NOTICES.md`、SBOM 与许可证清单，并重新运行依赖与供应链审计；AI Toolbox 根 MIT 不构成其嵌套来源的自动许可结论。
 
-`v0.6.0` 首页 API 接入卡只把本机已安装 EasyCLIProxyAPI 的公开可见界面用作信息层级参考；该已发布版本没有复制或运行其源码、资源、样式、图标、品牌、协议转换或生命周期实现。后续未发布切片研究了 EasyCLIProxyAPI 固定 commit `79b50b7a2b76607e6ccd01966f4b6d4430a31dcd` 的 sidecar 产品行为，但 clean-room 实现自己的下载、校验、目录、进程和 UI 逻辑；EasyCLIProxyAPI 仍不是构建/运行依赖或派生代码来源。
+`v0.6.0` 首页 API 接入卡只把本机已安装 EasyCLIProxyAPI 的公开可见界面用作信息层级参考；该已发布版本没有复制或运行其源码、资源、样式、图标、品牌、协议转换或生命周期实现。v0.6.1 实现时研究了 EasyCLIProxyAPI 固定 commit `79b50b7a2b76607e6ccd01966f4b6d4430a31dcd` 的 sidecar 产品行为，但 clean-room 实现自己的下载、校验、目录、进程和 UI 逻辑；EasyCLIProxyAPI 仍不是构建/运行依赖或派生代码来源。
 
 ## CLIProxyAPI 运行时依赖
 
-未发布反代切片把 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 作为用户显式下载的独立预编译运行时，协议与桌面主体分别版本化；本仓库不编译、链接、复制或修改其 Go 源码，也不把二进制打入 Codex Manager 安装包。审计基线为 `v7.2.145`、tag commit `d9cea8904b14fbbebb77ef26e98ef08f6b48a724`，上游使用 MIT License。
+v0.6.1 起把 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 作为用户显式下载的独立预编译运行时，协议与桌面主体分别版本化；本仓库不编译、链接、复制或修改其 Go 源码，也不把二进制打入 Codex Manager 安装包。审计基线为 `v7.2.145`、tag commit `d9cea8904b14fbbebb77ef26e98ef08f6b48a724`，上游使用 MIT License。
 
 内测安装器不请求 GitHub `releases/latest`，也不在运行时解析上游 `checksums.txt`。它只按 OS/arch 选择代码中已审核锁定的 `v7.2.145` 精确资产名与 SHA-256，从官方 tag URL 下载并校验。下载、解压和文件类型有界，安装使用应用私有 staging，失败保留旧 core。确认和安装必须由用户显式触发，不能由后台静默执行。
 
@@ -27,7 +27,7 @@
 
 安全审计还确认 CLIProxyAPI OAuth callback 可绑定全网卡、OAuth token 会写入 auth-dir，Management API 可读取原始配置/认证文件并发起通用请求，且预编译版存在无法由当前配置关闭的后台版本请求。本集成只允许由原生层导入并隔离保存 CLIProxyAPI OAuth 档案，运行时投影到随机私有 auth-dir；Management API 与 OAuth callback 不向 WebView 开放，配置仍强制 loopback、`commercial-mode` 和日志/管理/插件关闭。
 
-本地代理只承载 CLIProxyAPI OAuth 凭据池，不承担任意外部 Base URL 的通用转发；外部 API Key 供应商由 Codex 配置直接管理。首次正式发布前需在隔离环境完成一次网络与磁盘边界观测，后续仅在内核版本或配置边界变化时重复。
+本地代理只承载 CLIProxyAPI OAuth 凭据池，不承担任意外部 Base URL 的通用转发；外部 API Key 供应商由 Codex 配置直接管理。2026-09-06 已完成审核版内核的隔离空池网络与磁盘观测，证据见 [S5–S6 记录](validation/reliability-s5-s6.md)；真实 OAuth 成功与 5xx 未验收，后续仅在内核版本或配置边界变化时重复已通过的空池检查。
 
 正式签名发布的 `verify-release.sh` 可检查 `.app`/`.dmg`、SBOM、许可证、notices 和资产摘要；内测 prerelease 只需应用测试、secret scan、固定 CLIProxyAPI 版本摘要和产物完整性，不要求上游 SBOM 或 provenance。
 
@@ -50,7 +50,7 @@ Tauri updater 的公钥可提交，私钥/密码不得进入仓库、缓存、ar
 
 2026-08-29 当前依赖图的 `npm audit` 与 `cargo audit` 都报告 0 vulnerabilities；18 条 Cargo warning 已进入上述显式 allowlist。allowlist 是有理由、有目标图断言的发布门禁，不代表这些维护性风险已消失；每次公开发布仍需重新执行并审查变化。
 
-## 未发布验收工具
+## v0.6.6 验收工具
 
 调试 `desktop-qa` feature 直接复用工作区已有 `rusqlite` 版本来构造人工迁移前数据库，没有新增 crate 版本或第三方运行时；默认构建不启用该依赖入口，release + QA 明确拒绝编译。`npm run docs:check` 默认离线，扩充双语版本/平台/下载入口和本地链接/资产检查，联网 URL 检查须显式使用 `--check-external`。
 

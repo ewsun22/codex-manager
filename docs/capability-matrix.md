@@ -24,7 +24,7 @@
 | CLI Schema 兼容性 | 不负责 | 不负责 | 不负责 | 短生命周期 Schema probe；最近版本、状态和指纹持久化 | 非采集源；不附着 Desktop 内部 App Server，不影响 rollout 主采集 |
 | 官方订阅缓存 | 不负责 | 不负责 | 不负责 | 账户/套餐/额度读取后白名单摘要 | cache-first；仅 macOS Keychain，作为白名单 DTO供当前页面读取；cache miss/手动刷新才解析可信 CLI；超过 6 小时或刷新失败显式 stale |
 
-## 未发布：双控制面与 CLIProxyAPI 独立内核
+## 双控制面与 CLIProxyAPI 独立内核
 
 | 能力 | 数据/运行来源 | 当前结论 |
 |---|---|---|
@@ -54,7 +54,7 @@
 
 `unobserved` 表示来源没有可靠终态，不等同成功、失败或仍在运行。`unavailable` 表示该来源没有提供可验证字段，不是零值。API 等价价格可以部分覆盖：未识别模型或字段不完整的调用计入未覆盖数量，不参与金额估算。
 
-未发布源码进一步约束任务完整性：任务出现异常 token 快照后，任务用量保持 `unavailable`，此前有效调用仍可作为部分观测进入模型交互和估价。缺失的调用模型、provider、effort 在活动和计价中采用一致的任务回退规则，不覆盖调用显式值；整批与逐批读取的估价输入保持一致。模型与推理级别筛选候选覆盖所选视图的全部已采集记录，不受当前页限制。
+v0.6.6 进一步约束任务完整性：任务出现异常 token 快照后，任务用量保持 `unavailable`，此前有效调用仍可作为部分观测进入模型交互和估价。缺失的调用模型、provider、effort 在活动和计价中采用一致的任务回退规则，不覆盖调用显式值；整批与逐批读取的估价输入保持一致。模型与推理级别筛选候选覆盖所选视图的全部已采集记录，不受当前页限制。
 
 保留期适用于首次导入、重建与周期维护；过期且已观测终态的任务及其关联元数据事务化删除，并更新活动 revision。未观测终态或没有可用时间戳的任务暂予保留。AGENTS 编辑增加未保存保护与迟到读取隔离；本地代理状态在页面可见时刷新，但进程存活状态仍不代表真实上游请求验收。
 
@@ -69,7 +69,7 @@
 - 导入依赖 App Server 当前的 `chatgptAuthTokens` 协议，该协议变更时会 fail closed。导入时必须有可用 access token；为避免触发 refresh token 轮换，不在导入探测中单独验证 refresh token。
 - OTel metrics 是聚合数据；当前 Codex metrics 缺少稳定的逐 conversation 关联时，本应用不会把 histogram/count 展开为虚假的单次请求。
 - 浏览器 demo 不自动联网；自动更新检查仅属于桌面后端。
-- CLIProxyAPI 上游 release 缺少 detached signature、Developer ID、公证、SBOM 与可复现 provenance；内置 SHA-256 只用于拒绝与已审核资产不同的下载字节。内测固定 `v7.2.145` 精确摘要；真实 OAuth E2E 和首次正式发布观测仍待完成，不把上游供应链增强项作为内测门禁。
+- CLIProxyAPI 上游 release 缺少 detached signature、Developer ID、公证、SBOM 与可复现 provenance；内置 SHA-256 只用于拒绝与已审核资产不同的下载字节。内测固定 `v7.2.145` 精确摘要；隔离空池观测已完成，真实 OAuth E2E 仍待完成，不把上游供应链增强项作为内测门禁。
 
 ## 界面语言
 
@@ -79,7 +79,7 @@
 | 手动切换 | implemented | 顶部切换器即时生效，偏好只保存在本地 WebView |
 | 数据格式化 | implemented | 数字、日期、金额随 locale 格式化；用户数据和外部 notes 不翻译 |
 
-## 未发布：调度和验收边界
+## v0.6.6 调度和验收边界
 
 变更文件优先且不依赖全目录枚举；历史发现与单文件续读保留跨轮进度，队列溢出以周期 reconciliation 补偿。冷启动历史顺序不再承诺全局 mtime 优先，活动展示仍按观测时间查询。规模基准只代表人工暖缓存目录发现和增量 checkpoint，不代表真实会话全量解析或 UI 延迟。
 

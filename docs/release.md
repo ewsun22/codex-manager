@@ -82,6 +82,12 @@ Release note 采用 `docs/release-notes/v<VERSION>.md` 的固定章节。CI 通�
 - 本版本增加完整简体中文和 English 界面：中文设备默认使用简体中文，其他设备默认使用 English；顶部语言切换会保存在本机，也可恢复跟随设备。数字、日期和金额按界面语言显示，项目名、模型名、路径和用户内容保持来源文本。英文/简体中文 README、对应截图、应用版本、双语 Release 正文与 `latest.json.notes` 已在发布前同步；下载入口、支持平台、安全/隐私政策、GitHub Description/Topics 与许可证记录为 `no change`。
 - 真实 CLIProxyAPI OAuth → loopback → Codex Responses、供应商费用、隔离环境 sidecar 网络/磁盘观测，以及从可信旧签名版本安装更新到 `v0.6.5` 仍未 `accepted`；本次 `published publicly verified` 不外推为 updater E2E 或这些业务链验收。
 
+## 2026-09-06 v0.6.6 定版与发布边界
+
+- v0.6.6 定版任务用量与保留期、AGENTS 草稿和确认框、活动筛选、原生代理稳定性、有界变更优先扫描及文档检查；来源是已提交并通过 CI 的 S1–S6 本地切片。
+- [发布准备与用户可见面检查](validation/release-v0.6.6.md) 和 [完整版本说明](release-notes/v0.6.6.md) 同步进入发布源码；正式签名、草稿和公开后状态由对应 workflow 证据确认，不能预先写为完成。
+- 用户在真实 OAuth 未验收已披露后明确授权本次 Release，按 [SECURITY.md](../SECURITY.md) 的 v0.6.6 限定例外发布。真实账户、费用和配置往返不在本次执行范围；旧版 updater 安装明确 skipped by user。
+
 ## Unsigned Community Build 发布
 
 1. 只使用 `main` 当前 commit 的成功 `CI` run 所上传的 `codex-manager-macos-unsigned` artifact，不使用本机历史产物。

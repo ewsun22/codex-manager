@@ -75,9 +75,9 @@ Codex 配置应用需要用户明确确认；不会改写 `auth.json`。正式�
 | --- | --- |
 | ![项目与 AGENTS](output/playwright/final-desktop-project-agents.png) | ![本地 CLIProxyAPI 与 OAuth 档案](output/playwright/codex-gateway-desktop.png) |
 
-## 未发布的可靠性改进
+## v0.6.6 可靠性改进
 
-以下改动已进入当前工作源码，尚未随新的桌面版本发布：
+v0.6.6 源码包含以下可靠性修复。稳定下载以最新且完成公开验证的 Release 为准，源码定版不代表已经发布：
 
 - 异常 token 快照出现后，任务总用量保持 `unavailable`；此前有效调用仍参与明确标注覆盖范围的部分 API 等价估算。缺失的调用元数据在活动和计价查询中使用一致的跨批次回退规则。
 - 保留期同时约束首次导入、重建和定期维护。未观测到终态或缺少可用时间戳的任务暂予保留；不影响源 rollout 文件或凭据。
@@ -87,7 +87,11 @@ Codex 配置应用需要用户明确确认；不会改写 `auth.json`。正式�
 - 变更的 rollout 文件进入有界优先队列，后台发现跨预算续扫，保证旧文件仍可被处理。
 - 桌面 WebView 使用应用内确认对话框，覆盖 AGENTS 未保存修改、创建/恢复、Codex 配置变更和本地代理 OAuth 档案移除。
 
-实施与验证边界见[未发布说明](docs/release-notes/unreleased.md)。
+实施与验证边界见 [v0.6.6 版本说明](docs/release-notes/v0.6.6.md)。
+
+v0.6.6 源码在隔离 debug 桌面中运行的真实截图，使用人工数据；这是验证画面，不代表已安装签名发布包。
+
+![AGENTS confirmation / AGENTS 确认框](output/playwright/final-release-v0.6.6-confirmation.png)
 
 ## 平台支持
 
@@ -148,7 +152,7 @@ Codex 配置页面聚焦供应商、网关与配置预览，已移除未开放�
 - `tested`：Release/复验 workflow、自动化测试、构建、签名、公证、stapling 和公开资产检查按发布证据通过。
 - `published`：只有非 draft、非 prerelease 且完成 published-mode 复验的 GitHub Release 才属于稳定通道。
 - `observed`：本地 mock/loopback、桌面/浏览器 demo 和公开 Release 复验已有证据。
-- `accepted`：至少一次真实 CLIProxyAPI OAuth → loopback → Codex Responses E2E、费用确认、事务性配置应用/恢复，以及从可信旧签名应用升级安装仍是独立验收工作。
+- `accepted`：隔离桌面和浏览器确认流程已验证；真实 CLIProxyAPI OAuth → loopback → Codex Responses、费用确认和配置往返仍未完成业务验收。v0.6.6 的旧版 updater 安装测试已由用户明确跳过。
 - `cleanup`：Release job 会在上传前删除临时签名材料；本地测试凭据/配置仍需操作者清理。
 
 各版本的 source SHA、workflow、资产和验收限制见[发布运行手册](docs/release.md)。版本化 note 保留 tag 时的门禁快照，后续公开复验证据单独记录。早期 `v0.5.0-beta.1` 仍是 unsigned community prerelease，不是稳定下载。

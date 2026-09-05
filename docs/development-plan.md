@@ -2,7 +2,7 @@
 
 状态日期：2026-09-06。`implemented`、`verified locally`、`packaged`、`signed`、`notarized`、`released` 和 `updater E2E accepted` 是不同边界。
 
-## 当前未发布可靠性切片
+## v0.6.6 可靠性切片
 
 - [x] S1：任务用量完整性传播、跨批次缺失元数据回退、首次导入/重建/常驻保留期维护及删除水位。
 - [x] S2：AGENTS 草稿与读取顺序保护、保存期间锁定、原生错误脱敏、写入和刷新结果分别反馈。
@@ -14,6 +14,8 @@
 - [x] S6 updater 范围决定：用户明确跳过旧版升级安装测试，状态为 skipped by user，不是 accepted。
 
 S1–S4 已提交并推送为 `0f4d9ed8122c1d2041ae4dbfb9b985f3b848f961`，主线 CI 通过；没有新签名发布。具体结果及限制见 [S1–S4 验证记录](validation/reliability-s1-s4.md)、[S5–S6 验证记录](validation/reliability-s5-s6.md) 与 [真实业务验收条件](validation/real-e2e-boundaries.md)。
+
+v0.6.6 定版沿用上述实现与验证证据，用户在真实 OAuth 未验收已披露的前提下明确授权签名发布。发布结果以 [发布记录](release.md) 的 exact source、run、资产和公开验证为准；不能从版本号推断已公开或已业务验收。
 
 ## Phase 0：可行性探针 — completed
 
@@ -96,14 +98,14 @@ S1–S4 已提交并推送为 `0f4d9ed8122c1d2041ae4dbfb9b985f3b848f961`，主�
 
 ## 后续阶段
 
-### Phase 5：Codex 供应商与 CLIProxyAPI sidecar — stable baseline + unreleased migration
+### Phase 5：Codex 供应商与 CLIProxyAPI sidecar — stable baseline + acceptance boundaries
 
 - [x] 供应商非秘密元数据使用统一 SQLite store；API Key 使用应用专用 macOS Keychain，WebView DTO 只返回 `hasApiKey`
 - [x] 新增表格优先的“供应商与反代”界面，并把既有 OAuth/认证档案/额度入口明确命名为“官方订阅”
 - [x] `v0.5.1` 将供应商工作流重组为“Codex 配置管理”卡片与弹窗；保留 Keychain-only、显式启动和原生确认边界，模型测试只给出不发送请求的说明，通用配置或自动接管开关保持禁用
 - [x] 显式启动/停止固定 IPv4 loopback 的 CLIProxyAPI 本地代理；运行配置与 OAuth auth-dir 使用随机私有目录和受限文件权限
 - [x] 只支持 `/v1/responses` 与 `/v1/responses/compact`；不把官方 OAuth token 放入反代池
-- [x] `v0.5.0` 初始内嵌网关曾限制 HTTPS 公网与 loopback HTTP；未发布切片删除该转发路径后，外部 HTTP(S) endpoint 改由 Codex 直连，保存时不再做 DNS/私网门禁，仍拒绝 userinfo、query 和 fragment
+- [x] `v0.5.0` 初始内嵌网关曾限制 HTTPS 公网与 loopback HTTP；v0.6.1 删除该转发路径后，外部 HTTP(S) endpoint 改由 Codex 直连，保存时不再做 DNS/私网门禁，仍拒绝 userinfo、query 和 fragment
 - [x] Codex 配置使用 `auth.command`、CAS/原子事务和私有 journal 应用/恢复；不改写 `auth.json`
 - [x] `v0.6.0` 总览紧凑化：最近活动仅显示一条，首页 API 等价估算显示两位小数（数据口径不变）
 - [x] `v0.6.0` 总览增加本地代理的非秘密快捷状态与显式开启/关闭；不展示 API Key/OAuth token
@@ -140,6 +142,6 @@ S1–S4 已提交并推送为 `0f4d9ed8122c1d2041ae4dbfb9b985f3b848f961`，主�
 
 ### 可选精确网络观测
 
-Phase 5 的双控制面已完成本地实现和自动化测试边界：Codex 配置使用 `auth.command`、CAS/原子事务与私有 journal；本地代理使用预编译 CLIProxyAPI、独立 OAuth 凭据和 checkpoint。仍不把完整 URL、TTFB、wire bytes 或上游账单写入活动库；usage statistics 关闭后请求计数为 `unavailable`。一次真实 OAuth E2E、首次正式发布观测和最终 `accepted` 仍是发布前工作。
+Phase 5 的双控制面已完成本地实现和自动化测试边界：Codex 配置使用 `auth.command`、CAS/原子事务与私有 journal；本地代理使用预编译 CLIProxyAPI、独立 OAuth 凭据和 checkpoint。仍不把完整 URL、TTFB、wire bytes 或上游账单写入活动库；usage statistics 关闭后请求计数为 `unavailable`。隔离空池内核观测已完成；真实 OAuth E2E 和该能力最终 `accepted` 仍未完成，v0.6.6 按 [SECURITY.md 的限定例外](../SECURITY.md#发布安全门内测精简版) 发布并保持这一披露。
 
 - [x] 双语界面（简体中文/English）、设备语言默认判断和本地手动切换

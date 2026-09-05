@@ -75,9 +75,9 @@ All screenshots use synthetic, sanitized demo data.
 | --- | --- |
 | ![Projects and AGENTS](output/playwright/final-desktop-project-agents.png) | ![Local CLIProxyAPI and OAuth profiles](output/playwright/codex-gateway-desktop.png) |
 
-## Unreleased reliability improvements
+## v0.6.6 reliability improvements
 
-The following changes are implemented in the working source and have not been published in a new desktop release:
+The v0.6.6 source includes the following reliability fixes. The stable download is the latest verified public Release; source versioning alone does not indicate publication.
 
 - Task totals remain `unavailable` after an invalid token snapshot; earlier valid calls still contribute to explicitly partial API-equivalent estimates. Missing call metadata uses the same fallback for activity and pricing across incremental batches.
 - Retention also applies during initial import, rebuild and scheduled maintenance. Tasks without an observed terminal state or a usable timestamp are retained; source rollout files and credentials are unaffected.
@@ -87,7 +87,11 @@ The following changes are implemented in the working source and have not been pu
 - Changed rollout files receive priority within bounded queues; background discovery resumes across scan budgets so older files remain reachable.
 - In-app confirmations protect unsaved AGENTS edits, AGENTS creation/restoration, Codex configuration changes and local proxy OAuth profile removal in the desktop WebView.
 
-Implementation and validation boundaries are recorded in [unreleased notes](docs/release-notes/unreleased.md).
+Implementation and validation boundaries are recorded in the [v0.6.6 release notes](docs/release-notes/v0.6.6.md).
+
+The v0.6.6 source in an isolated debug desktop, using synthetic data; this is a validation screenshot, not a claim of signed-package installation.
+
+![AGENTS confirmation / AGENTS 确认框](output/playwright/final-release-v0.6.6-confirmation.png)
 
 ## Supported platforms
 
@@ -159,7 +163,7 @@ The stable channel points to the latest non-draft, non-prerelease macOS arm64 Re
 - `tested`: release and verification workflows, automated tests, build, signing, notarization, stapling, and published asset checks passed according to release evidence.
 - `published`: only a non-draft, non-prerelease GitHub Release that has passed published-mode verification is treated as stable.
 - `observed`: local mock/loopback, desktop/browser demo, and public release verification are observed evidence.
-- `accepted`: one real CLIProxyAPI OAuth → loopback → Codex Responses E2E, cost confirmation, transactional configuration apply/recovery, and upgrade installation from a trusted older signed app remain separate acceptance work.
+- `accepted`: the isolated desktop and browser confirmation paths have been verified. Real CLIProxyAPI OAuth → loopback → Codex Responses, cost confirmation, and configuration round-trip acceptance remain outstanding; the old-client updater installation test was explicitly skipped for v0.6.6.
 - `cleanup`: release jobs remove temporary signing materials before upload; local test credentials/configuration must still be cleaned by the operator.
 
 See the [current release runbook and evidence summary](docs/release.md) for version-specific source SHAs, runs, assets, and acceptance limits. Versioned notes preserve their tag-time gate state; later public verification is recorded separately. The earlier `v0.5.0-beta.1` remains an unsigned community pre-release and is not the stable download.

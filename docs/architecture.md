@@ -2,7 +2,7 @@
 
 ## 产品边界
 
-Codex Manager 是独立的 Tauri 2 桌面应用，不是 Codex 插件、系统代理或通用 API 网关。未发布切片把旧 Rust 进程内 Responses 转发器替换为默认停止、独立版本、IPv4 loopback-only 的 CLIProxyAPI 预编译 sidecar；官方订阅仍是独立的受信任 CLI/App Server/Keychain 边界。macOS 是首发平台；规范化、存储、价格、项目发现和 AGENTS 解析放在 Rust/SQLite 边界内，为后续 Windows 适配保留平台接口。
+Codex Manager 是独立的 Tauri 2 桌面应用，不是 Codex 插件、系统代理或通用 API 网关。v0.6.1 已把旧 Rust 进程内 Responses 转发器替换为默认停止、独立版本、IPv4 loopback-only 的 CLIProxyAPI 预编译 sidecar；官方订阅仍是独立的受信任 CLI/App Server/Keychain 边界。macOS 是首发平台；规范化、存储、价格、项目发现和 AGENTS 解析放在 Rust/SQLite 边界内，为后续 Windows 适配保留平台接口。
 
 ```text
 Codex Desktop / CLI
@@ -38,7 +38,7 @@ Native confirm ─ temporary Codex provider snippet; no automatic config/auth mu
 - canonical path 必须仍位于允许目录；拒绝符号链接和非普通文件。
 - 以设备/文件身份、UTF-8 byte offset 和 parser resume state 增量读取。
 - 单行上限 4 MiB；EOF 未完成行不提交，但仍计入读取预算；超长未结束行不从中间 checkpoint，避免把攻击者选定的后缀当成新事件。
-- 未发布 S5 使用有界变更队列及跨轮目录游标：连续三个变更文件名额后保留一个后台名额，后台在单文件续读和历史发现之间交替；名额计数不因一轮预算结束而重置。发现每轮最多 4,096 个 entry、累计 100 ms，处理最多 4,096 个文件；整轮仍受 20 秒、256 MiB、200,000 events 限制，单文件批次仍限制 32 MiB / 20,000 events。
+- v0.6.6 的 S5 使用有界变更队列及跨轮目录游标：连续三个变更文件名额后保留一个后台名额，后台在单文件续读和历史发现之间交替；名额计数不因一轮预算结束而重置。发现每轮最多 4,096 个 entry、累计 100 ms，处理最多 4,096 个文件；整轮仍受 20 秒、256 MiB、200,000 events 限制，单文件批次仍限制 32 MiB / 20,000 events。
 - 初次发现按 `sessions` 根优先于 `archived_sessions` 进行，不再为全局 mtime 排序收集全部文件；冷启动未变化的历史文件不保证最新优先。实际文件变更可插入下一优先名额，历史最终覆盖不依赖每次从目录起点重扫。深度上限仍为 16；目录句柄上限 17，变更及续读队列各最多 1,024 个去重路径。
 - 文件截断或身份变化时，仅重建该来源的可重建投影。
 - watcher 保留一个合并唤醒槽及独立有界路径 inbox；访问类事件忽略，文件变化优先处理，目录变化、队列溢出或事件错误请求 reconciliation。60 秒单调 deadline 不会被持续写入推迟；仍有工作时 250 ms 后继续有预算扫描，发现游标不被重复请求重置，达到预算显示 `partial/degraded`。完整周期仍覆盖丢失的事件。
@@ -107,7 +107,7 @@ CLIProxyAPI Management API 与 OAuth callback 不向 WebView 开放：OAuth 档�
 
 ## 存储与并发
 
-### 未发布的完整性与增量一致性修复
+### v0.6.6 完整性与增量一致性修复
 
 任务级 token 可用性同时取决于已观测调用和解析器的任务完整性标记。任务出现异常快照后，活动汇总不再把此前的部分调用提升为完整任务用量；有效调用仍可用于模型交互明细和有覆盖边界的估价。调用发生时明确记录的模型、provider、effort 保持原值；缺失字段在活动与成本查询中统一回退到对应任务，避免读取批次边界改变估价输入。查询修复可补全已有数据的缺失字段；已有非空调用模型保持原值，不追溯重判旧版本保存的字段，也不重写源 rollout。
 
@@ -143,7 +143,7 @@ SQLite 位于平台应用数据目录，启用 WAL、foreign keys、busy timeout
 
 ## 前端与 IPC
 
-未发布的可靠性切片为项目/AGENTS 读取增加请求序号，迟到响应不能覆盖当前文件；未保存内容保留基准 SHA，离开前通过应用内确认对话框明确放弃，文件、项目、主导航与原生关闭路径异步等待同一决定；不依赖 macOS WebView 缺失的 `window.confirm` 实现。创建与恢复 AGENTS、Codex 配置应用/恢复/删除和本地代理 OAuth 档案移除也使用应用内确认；受限后端已有的原生确认继续保留。写入期间禁止继续编辑或导航。写入结果与修订/页面后续刷新分别反馈，刷新失败保留已成功写入的状态和可恢复内容。经过后端限定的字符串错误与 `Error` 通过统一转换提供操作提示，不回传原始凭据或任意网络响应。
+v0.6.6 可靠性修复为项目/AGENTS 读取增加请求序号，迟到响应不能覆盖当前文件；未保存内容保留基准 SHA，离开前通过应用内确认对话框明确放弃，文件、项目、主导航与原生关闭路径异步等待同一决定；不依赖 macOS WebView 缺失的 `window.confirm` 实现。创建与恢复 AGENTS、Codex 配置应用/恢复/删除和本地代理 OAuth 档案移除也使用应用内确认；受限后端已有的原生确认继续保留。写入期间禁止继续编辑或导航。写入结果与修订/页面后续刷新分别反馈，刷新失败保留已成功写入的状态和可恢复内容。经过后端限定的字符串错误与 `Error` 通过统一转换提供操作提示，不回传原始凭据或任意网络响应。
 
 主窗口限定授予 `core:window:allow-destroy`，供 Tauri `onCloseRequested` 在未保存保护允许关闭后完成其原有窗口销毁流程；不增加 shell、process、通用文件或 dialog 插件权限。新增 `get_activity_facets` 也须出现在构建命令表和主窗口精确 allow 权限中。
 

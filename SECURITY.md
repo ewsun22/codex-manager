@@ -44,10 +44,10 @@
 - 账户白名单快照虽然不含 credential，仍可能包含 email 和额度信息；它与认证档案 secret 使用不同的 Keychain service/account，删除应用数据或退出官方账户不会自动等价于删除该快照，后续应提供用户可见的显式清理入口。
 - 官方 Codex 可能按用户自己的 `cli_auth_credentials_store` 设置把活动凭据保存在 OS credential store 或 `~/.codex/auth.json`。多档案切换不会改写该设置，只支持 file 模式；keyring/auto 会拒绝切换。切换活动文件会影响共享该缓存的 CLI 与 IDE 扩展。
 - 当前轮换是用户确认后的整账户显式切换，不是请求级调度；不会检测限额后后台自动换号，也不会迁移正在运行的会话。
-- Codex 配置页面只管理 `model`、`model_provider` 和一个 provider table，使用 `model_providers.<id>.auth.command` 调用当前 app binary 的 allowlisted opaque secret ref；私有 journal 支持 CAS/原子应用与恢复，文件漂移拒绝覆盖。`verified` 只代表写后文件复核，不代表 Codex 成功请求上游。真实 CLIProxyAPI OAuth E2E、异常请求无正文落盘、实际 socket 仅 loopback、崩溃恢复与旧内核回滚尚未 `accepted`。
+- Codex 配置页面只管理 `model`、`model_provider` 和一个 provider table，使用 `model_providers.<id>.auth.command` 调用当前 app binary 的 allowlisted opaque secret ref；私有 journal 支持 CAS/原子应用与恢复，文件漂移拒绝覆盖。`verified` 只代表写后文件复核，不代表 Codex 成功请求上游。真实 CLIProxyAPI OAuth E2E、上游 5xx、崩溃恢复与旧内核回滚尚未 `accepted`；2026-09-06 的隔离空池观测已验证 IPv4 loopback、人工 4xx 请求未落盘标记和正常停止清理，详见 [S5–S6 记录](docs/validation/reliability-s5-s6.md)。
 - 每次 sidecar 使用随机 runtime session；正常停止会 kill/wait 自己持有的 child 并删除整个 session，下次 stopped 状态会清理崩溃遗留配置，启动前的端口独占检查会拒绝把旧 `/healthz` 误认成新 child。但 macOS 在应用被 `SIGKILL` 时没有可靠 parent-death signal，旧 CLIProxyAPI 仍可能存活；在持久化 ownership/PID/启动时间并可安全回收前，本应用只 fail closed，不按进程名广泛 kill。
 - CLIProxyAPI `v7.2.145` 上游 Release 的 Developer ID、公证、detached signature、SBOM 和可复现 provenance 不由本项目继承；当前内测使用代码内置的精确资产 SHA-256 拒绝字节漂移，后续在审阅新版本后更新基线。上游构建可能拉取 mutable model catalog，属于已知供应链限制和后续优化项，不再作为内测发布阻断。
-- 预编译 CLIProxyAPI 的 OAuth callback 可能绑定全网卡，且存在无法由当前配置关闭的 Antigravity 外部版本请求。因此本应用不开放其 Management API/OAuth callback；导入的 OAuth 文件仅由原生层投影到私有 auth-dir。首个正式版本需完成一次隔离环境网络与磁盘观测；后续每版不重复执行，除非内核版本或配置边界发生变化。
+- 预编译 CLIProxyAPI 的 OAuth callback 可能绑定全网卡，且存在无法由当前配置关闭的 Antigravity 外部版本请求。因此本应用不开放其 Management API/OAuth callback；导入的 OAuth 文件仅由原生层投影到私有 auth-dir。2026-09-06 已完成一次隔离空凭据池的网络与磁盘观测；该证据不覆盖真实 OAuth 成功路径，后续每版不重复已通过的空池观测，除非内核版本或配置边界发生变化。
 - 当前没有远程撤回机制。桌面版会在启动后按需检查并按配置间隔自动检查更新；自动检查不下载、不安装、不重启。在线更新会将完整更新包读入内存后验签；严格下载字节上限是后续加固项。
 - 签名发布已拆成 secret-free build、无 Release 写权限的受保护 sign、无 Apple/updater secret 的 draft 三个 job；sign/draft 不执行 build artifact 携带的 signer 或 verifier。sign 先下载固定版本 Tauri signer并核对 SHA-512，updater 私钥只在紧邻签名命令的独立 step 注入并在命令后 unset；验签使用 exact checkout 中仅依赖 Node 标准密码库的 Minisign/Ed25519 verifier，transfer 只携带公开 updater key。临时证书/Keychain 在任何上传前清理。draft 只允许 exact source/Release/asset digest 调和，所有资产按 ID 回下载复验；人工发布后另由只读 workflow 匿名验证正式 tag URL 和 latest alias。发布人员已报告 updater 私钥存在独立离线备份，首次发布前仍须复核实际恢复介质。
 
@@ -60,6 +60,8 @@
 内测 prerelease 只要求针对当前 exact SHA 完成应用测试、secret scan、CLIProxyAPI `v7.2.145` 精确版本与 SHA-256 校验、产物完整性检查，并明确披露 `unsigned/unnotarized` 状态；不再把 SBOM、许可证全集、上游 provenance、跨进程完美回收或每个 provider 的真实网络链路作为内测阻断条件。内测包不得进入稳定 updater 通道。
 
 正式 macOS 发布仍要求 Developer ID、Hardened Runtime、Apple notarization、stapling、Gatekeeper 和 updater 签名；这些是平台分发要求，不等同于 CLIProxyAPI 上游必须具备 Developer ID、SBOM 或可复现构建。正式发布前至少完成一次真实 CLIProxyAPI OAuth → loopback → Codex Responses E2E，并记录停止、凭据 checkpoint 和失败清理结果。未完成的真实 E2E 只能标为 `tested locally`/`unaccepted`，不能写成 `accepted`。
+
+v0.6.6 的限定发布例外：用户在已明确获知真实 OAuth 尚未验收后，授权“提交，推送，releases”。本次按已披露限制执行签名发布，不把真实 OAuth 业务标为 `accepted`，也不以发布授权代替真实账户、配置切换或计费调用授权；旧版 updater 安装测试按用户要求跳过。平台签名、公证、Gatekeeper、updater 签名和草稿/公开资产复验门禁不变。这个例外仅适用于 v0.6.6，不自动改变以后版本的发布条件。
 
 ## 调试验收入口
 
