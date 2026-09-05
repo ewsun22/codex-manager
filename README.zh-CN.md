@@ -20,6 +20,8 @@ Codex Manager 是一个非官方、本地优先的桌面应用，用于在本机
 
 如果 Codex Manager 能改善你的工作流，欢迎为仓库点 Star 以关注后续版本。
 
+**v0.6.6 已知问题：** 接近 512 MiB 的旧数据库可能在迁移 14 时失败，导致无法启动。v0.6.7 源码已改为固定 1 GiB 数据库预算；请勿以删除旧数据库作为解决办法。详见[诊断与验证](docs/validation/startup-migration-capacity.md)。
+
 ## 为什么需要 Codex Manager？
 
 随着 Codex 使用变复杂，有价值的信息分散在 CLI、本地 rollout 文件、配置、账户状态和项目说明中。用户很难快速回答某个任务使用了什么模型和 reasoning effort、观察到了多少 token、哪些项目有 `AGENTS.md`，以及当前使用哪个账户或供应商。
@@ -75,7 +77,11 @@ Codex 配置应用需要用户明确确认；不会改写 `auth.json`。正式�
 | --- | --- |
 | ![项目与 AGENTS](output/playwright/final-desktop-project-agents.png) | ![本地 CLIProxyAPI 与 OAuth 档案](output/playwright/codex-gateway-desktop.png) |
 
-## v0.6.6 可靠性改进
+## v0.6.7 升级启动修复
+
+v0.6.7 将 SQLite 固定数据库预算从 512 MiB 提高到 1 GiB，并按实际页大小计算页数上限，使此次接近旧上限的 v13 数据库能够创建迁移 14 的索引，无需删除已有数据。容量回归测试及私有副本迁移通过；修复版的本机安装与启动验证由用户操作，仍未验收。详见 [v0.6.7 版本说明](docs/release-notes/v0.6.7.md)。
+
+## 此前 v0.6.6 可靠性改进
 
 v0.6.6 源码包含以下可靠性修复。稳定下载以最新且完成公开验证的 Release 为准，源码定版不代表已经发布：
 
@@ -152,7 +158,7 @@ Codex 配置页面聚焦供应商、网关与配置预览，已移除未开放�
 - `tested`：Release/复验 workflow、自动化测试、构建、签名、公证、stapling 和公开资产检查按发布证据通过。
 - `published`：只有非 draft、非 prerelease 且完成 published-mode 复验的 GitHub Release 才属于稳定通道。
 - `observed`：本地 mock/loopback、桌面/浏览器 demo 和公开 Release 复验已有证据。
-- `accepted`：隔离桌面和浏览器确认流程已验证；真实 CLIProxyAPI OAuth → loopback → Codex Responses、费用确认和配置往返仍未完成业务验收。v0.6.6 的旧版 updater 安装测试已由用户明确跳过。
+- `accepted`：隔离桌面和浏览器确认流程已验证；真实 CLIProxyAPI OAuth → loopback → Codex Responses、费用确认和配置往返仍未完成业务验收。v0.6.6 的旧版 updater 安装测试已由用户明确跳过；v0.6.7 的本机安装和启动验收由用户操作，尚未完成。
 - `cleanup`：Release job 会在上传前删除临时签名材料；本地测试凭据/配置仍需操作者清理。
 
 各版本的 source SHA、workflow、资产和验收限制见[发布运行手册](docs/release.md)。版本化 note 保留 tag 时的门禁快照，后续公开复验证据单独记录。早期 `v0.5.0-beta.1` 仍是 unsigned community prerelease，不是稳定下载。

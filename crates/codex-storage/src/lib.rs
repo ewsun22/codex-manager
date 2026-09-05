@@ -11,7 +11,7 @@ use std::{
     path::Path,
 };
 
-const MAX_DATABASE_PAGES: u32 = 131_072;
+const MAX_DATABASE_BYTES: u64 = 1024 * 1024 * 1024;
 const DEFAULT_OTEL_EVENT_LIMIT: i64 = 100_000;
 pub const MAX_OTEL_BATCH_EVENTS: usize = 256;
 const MAX_OTEL_ATTRIBUTES_BYTES: usize = 8 * 1024;
@@ -19,6 +19,8 @@ const MAX_OTEL_TEXT_BYTES: usize = 512;
 
 #[cfg(test)]
 mod activity_tests;
+#[cfg(test)]
+mod migration_capacity_tests;
 
 pub struct Store {
     conn: Connection,
@@ -337,6 +339,10 @@ pub struct OtelBatchResult {
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_with_capacity(path, MAX_DATABASE_BYTES)
+    }
+
+    fn open_with_capacity(path: &Path, capacity_bytes: u64) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).context("创建应用数据目录失败")?;
             #[cfg(unix)]
@@ -349,10 +355,12 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
-        // Bound the complete local database, not only the high-volume OTel
-        // table. SQLite rejects a write atomically with SQLITE_FULL once this
-        // ceiling is reached, keeping existing metadata readable.
-        conn.pragma_update(None, "max_page_count", MAX_DATABASE_PAGES)?;
+        // Reserve a fixed 1 GiB database budget, including schema indexes.
+        // The former 512 MiB budget prevented v13 databases near that size
+        // from creating the v14 index. Never grow this limit on each open.
+        // WAL and SQLite temporary files are outside this page budget.
+        let page_size: u64 = conn.pragma_query_value(None, "page_size", |row| row.get(0))?;
+        conn.pragma_update(None, "max_page_count", (capacity_bytes / page_size).max(1))?;
         let store = Self {
             conn,
             otel_event_limit: DEFAULT_OTEL_EVENT_LIMIT,

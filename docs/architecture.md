@@ -179,3 +179,7 @@ React UI 通过源码级 `t()` / `tt` i18n 层提供 `zh-CN` 与 `en-US`，不�
 ## 调试桌面验收
 
 `desktop-qa` 是显式启用的 debug-only Cargo feature；release 与该 feature 同时启用时编译失败，默认产品入口不包含 QA 启动流程。隔离 Builder 使用人工 SQLite、Codex home、项目文件和非持久 WebView store，禁用认证 backend，只注册活动/项目/AGENTS 等必要安全命令；不注册账户、配置应用、代理、updater、设置修改或 CLI probe，不加载 updater。人工 DOM 驱动通过真实 Tauri IPC 进行保存/CAS/筛选和窗口生命周期验收，不替代真实 OAuth 或 updater 测试。
+
+## 数据库容量与升级
+
+v0.6.7 源码将 SQLite 主数据库预算由默认页大小下的 512 MiB 改为固定 1 GiB，按 `page_size` 换算 `max_page_count`，不随重启递增。预算包含表及索引，不包含 WAL 和临时文件。迁移 SQL 与版本记录仍在同一事务，失败不清库、不提前删除活动。v0.6.6 的迁移 14 会新增 timeline 索引，接近旧上限的数据库可能因 `SQLITE_FULL` 无法启动；实测与限制见[升级容量验证](validation/startup-migration-capacity.md)。

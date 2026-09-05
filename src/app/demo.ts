@@ -624,7 +624,7 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
         settings,
         capability,
         buildInfo: {
-          version: "0.6.6",
+          version: "0.6.7",
           buildTime: observedAt,
           commitSha: null,
         },

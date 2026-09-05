@@ -165,3 +165,9 @@ xcrun stapler validate path/to/CodexManager.dmg
 ## 回滚
 
 保留 artifact、manifest、SBOM 和 commit provenance。发现问题时撤下 beta 下载入口并公告受影响版本，不要覆盖原 tag/asset/SHA。在线更新只接受更高 SemVer；回滚代码也必须发布为新的更高版本，例如将 `0.1.2` 的回退代码发布为 `0.1.3`。
+
+## v0.6.7 升级启动补丁
+
+用户明确授权提交、推送并发布 v0.6.7，本机更新由用户操作。本版将 SQLite 主数据库预算从 512 MiB 调整为固定 1 GiB，并按实际页大小计算，修复此次旧库迁移 14 的容量失败。容量事务回滚、重试及原始旧库私有副本验证见[故障记录](validation/startup-migration-capacity.md)，用户可见面检查及后续发布证据见[发布记录](validation/release-v0.6.7.md)。
+
+源代码定版不表示已公开；签名、公证、草稿复验和独立公开复验仍须分别完成。本机安装和启动验收保留为用户待执行，真实 OAuth 业务仍未验收，采用 [SECURITY.md](../SECURITY.md) 记录的本版限定发布例外。不得重写 v0.6.6 tag、资产或历史 note。

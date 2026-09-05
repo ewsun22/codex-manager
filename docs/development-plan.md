@@ -2,6 +2,13 @@
 
 状态日期：2026-09-06。`implemented`、`verified locally`、`packaged`、`signed`、`notarized`、`released` 和 `updater E2E accepted` 是不同边界。
 
+## v0.6.7：旧库升级容量修复
+
+- [x] 复现 v0.6.6 的 migration 14 / `SQLITE_FULL` 启动崩溃，完成固定 1 GiB、按页大小计算的预算修复。
+- [x] 人工容量边界回归与真实旧库私有副本迁移通过，未删除原始数据库。
+- [ ] v0.6.7 签名发布及公开资产复验。
+- [ ] 本机安装后的真实启动验收：用户明确自行更新，代理不替换安装包。证据见[升级容量验证](validation/startup-migration-capacity.md)。
+
 ## v0.6.6 可靠性切片
 
 - [x] S1：任务用量完整性传播、跨批次缺失元数据回退、首次导入/重建/常驻保留期维护及删除水位。

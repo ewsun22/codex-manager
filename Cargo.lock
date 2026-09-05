@@ -482,7 +482,7 @@ dependencies = [
 
 [[package]]
 name = "codex-core"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "chrono",
  "serde",
@@ -493,7 +493,7 @@ dependencies = [
 
 [[package]]
 name = "codex-manager-desktop"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "anyhow",
  "axum",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "codex-storage"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "anyhow",
  "chrono",

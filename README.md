@@ -20,6 +20,8 @@ The latest non-draft, non-prerelease GitHub Release is the stable macOS arm64 do
 
 If Codex Manager makes your workflow easier, consider starring the repository to follow future releases.
 
+**Known issue in v0.6.6:** upgrading a database near 512 MiB can fail at migration 14 and prevent startup. The v0.6.7 source fixes this with a fixed 1 GiB database budget. Existing databases must not be deleted as a workaround. See [diagnosis and validation](docs/validation/startup-migration-capacity.md).
+
 ## Why Codex Manager?
 
 As Codex usage grows, useful context is spread across the CLI, local rollout files, configuration, account state, and project instructions. It becomes difficult to answer which model and reasoning effort a task used, how many tokens were observed, which projects have an `AGENTS.md`, and which account or provider is active.
@@ -75,7 +77,11 @@ All screenshots use synthetic, sanitized demo data.
 | --- | --- |
 | ![Projects and AGENTS](output/playwright/final-desktop-project-agents.png) | ![Local CLIProxyAPI and OAuth profiles](output/playwright/codex-gateway-desktop.png) |
 
-## v0.6.6 reliability improvements
+## v0.6.7 upgrade startup fix
+
+Version 0.6.7 increases the fixed SQLite database budget from 512 MiB to 1 GiB and calculates the page limit from the actual page size. This lets the observed near-limit v13 database create the migration-14 index without deleting existing data. Capacity regression tests and migration of a private copy passed; installing the fixed build and verifying startup on the user’s machine remain user-operated and unaccepted. See the [v0.6.7 release notes](docs/release-notes/v0.6.7.md).
+
+## Previous v0.6.6 reliability improvements
 
 The v0.6.6 source includes the following reliability fixes. The stable download is the latest verified public Release; source versioning alone does not indicate publication.
 
@@ -163,7 +169,7 @@ The stable channel points to the latest non-draft, non-prerelease macOS arm64 Re
 - `tested`: release and verification workflows, automated tests, build, signing, notarization, stapling, and published asset checks passed according to release evidence.
 - `published`: only a non-draft, non-prerelease GitHub Release that has passed published-mode verification is treated as stable.
 - `observed`: local mock/loopback, desktop/browser demo, and public release verification are observed evidence.
-- `accepted`: the isolated desktop and browser confirmation paths have been verified. Real CLIProxyAPI OAuth → loopback → Codex Responses, cost confirmation, and configuration round-trip acceptance remain outstanding; the old-client updater installation test was explicitly skipped for v0.6.6.
+- `accepted`: the isolated desktop and browser confirmation paths have been verified. Real CLIProxyAPI OAuth → loopback → Codex Responses, cost confirmation, and configuration round-trip acceptance remain outstanding; the old-client updater installation test was explicitly skipped for v0.6.6. Installation and startup acceptance of v0.6.7 are left to the user and remain pending.
 - `cleanup`: release jobs remove temporary signing materials before upload; local test credentials/configuration must still be cleaned by the operator.
 
 See the [current release runbook and evidence summary](docs/release.md) for version-specific source SHAs, runs, assets, and acceptance limits. Versioned notes preserve their tag-time gate state; later public verification is recorded separately. The earlier `v0.5.0-beta.1` remains an unsigned community pre-release and is not the stable download.
