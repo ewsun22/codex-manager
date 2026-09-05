@@ -1,0 +1,88 @@
+{
+  "checks": [
+    {
+      "evidence": [
+        "get_codex_account",
+        "start_codex_login",
+        "list_auth_profiles",
+        "import_auth_profile",
+        "apply_codex_config_profile",
+        "restore_codex_config",
+        "list_proxy_auth_profiles",
+        "install_latest_cliproxy_core",
+        "start_codex_gateway",
+        "stop_codex_gateway",
+        "check_for_update",
+        "install_pending_update",
+        "update_settings",
+        "probe_codex"
+      ],
+      "name": "unsafe_commands_have_no_handlers",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "fixtureRows": 60,
+        "model": "qa-rare-model"
+      },
+      "name": "cross_page_model_filter_uses_native_sqlite",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "path": "<artificial-qa-root>/project/AGENTS.md",
+        "shaChanged": true
+      },
+      "name": "agents_ui_save_and_readback",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "cancelPreservedDisk": true,
+        "confirmedRestoredBeforeSha": "687aeb04778ec95a0b2dcf197c63e042cae3e375f5f52fa11238265ac2532e55"
+      },
+      "name": "agents_restore_real_dialog_cancel_and_confirm",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "cancelKeptFileAbsent": true,
+        "chainIncludesCreatedFile": true,
+        "confirmedPath": "<artificial-qa-root>/empty-project/AGENTS.md"
+      },
+      "name": "agents_create_real_dialog_cancel_and_confirm",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "draftPreserved": true,
+        "externalContentPreserved": true
+      },
+      "name": "agents_external_conflict_keeps_disk_and_draft",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "cancelledThroughActualButton": true,
+        "dialogVisible": true
+      },
+      "name": "dirty_navigation_real_dialog_cancel_keeps_view_and_draft",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "cancelledThroughActualButton": true,
+        "dialogVisible": true
+      },
+      "name": "native_close_requested_real_dialog_cancel_keeps_draft",
+      "passed": true
+    }
+  ],
+  "closeLifecycle": {
+    "allowed": "verified through exact-PID macOS accessibility click on actual confirmation button; native Destroyed event recorded",
+    "cancelled": "verified through real dialog"
+  },
+  "mode": "real-tauri-desktop-artificial-data",
+  "state": "passed",
+  "windowDestroyed": true
+}

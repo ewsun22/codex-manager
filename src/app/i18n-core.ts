@@ -35,6 +35,17 @@ let currentLocale: Locale = typeof window === "undefined" ? "zh-CN" : resolveLoc
 
 /** Chinese source copy is the stable message key for this two-locale catalog. */
 const englishCatalog: Record<string, string> = {
+  "取消": "Cancel",
+  "应用 Codex 配置？": "Apply Codex configuration?",
+  "恢复 Codex 配置？": "Restore Codex configuration?",
+  "删除配置档案？": "Delete configuration profile?",
+  "删除外部供应商？": "Delete external provider?",
+  "移除 OAuth 档案？": "Remove OAuth profile?",
+  "放弃未保存修改？": "Discard unsaved changes?",
+  "放弃修改并继续": "Discard and continue",
+  "创建文件": "Create file",
+  "恢复 AGENTS 版本": "Restore AGENTS revision",
+  "当前未保存修改仅会在操作成功后被替换。": "Unsaved changes will only be replaced after the operation succeeds.",
   "账户状态尚未复核，请手动刷新。": "Account status has not yet been verified. Refresh it manually.",
   "正在保存 AGENTS 修改，请等待完成后再离开。": "AGENTS changes are being saved. Wait for completion before leaving.",
   "AGENTS 有未保存修改。放弃这些修改并继续？": "AGENTS has unsaved changes. Discard them and continue?",

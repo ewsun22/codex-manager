@@ -1,0 +1,209 @@
+{
+  "arch": "aarch64",
+  "os": "macos",
+  "results": [
+    {
+      "current": [
+        {
+          "checkpointLatencyMs": 1.114792,
+          "discoveredEntries": 0,
+          "filesChecked": 1,
+          "roundDurationMs": 1.114792
+        },
+        {
+          "checkpointLatencyMs": 0.8295,
+          "discoveredEntries": 0,
+          "filesChecked": 1,
+          "roundDurationMs": 0.8295
+        },
+        {
+          "checkpointLatencyMs": 1.068375,
+          "discoveredEntries": 0,
+          "filesChecked": 1,
+          "roundDurationMs": 1.068375
+        },
+        {
+          "checkpointLatencyMs": 1.188917,
+          "discoveredEntries": 0,
+          "filesChecked": 1,
+          "roundDurationMs": 1.188917
+        },
+        {
+          "checkpointLatencyMs": 1.226166,
+          "discoveredEntries": 0,
+          "filesChecked": 1,
+          "roundDurationMs": 1.226166
+        }
+      ],
+      "fileCount": 1000,
+      "legacy": [
+        {
+          "checkpointLatencyMs": 4.492166,
+          "discoveredEntries": 1001,
+          "filesChecked": 1000,
+          "roundDurationMs": 103.54466599999999
+        },
+        {
+          "checkpointLatencyMs": 3.908417,
+          "discoveredEntries": 1001,
+          "filesChecked": 1000,
+          "roundDurationMs": 103.30225
+        },
+        {
+          "checkpointLatencyMs": 3.5790840000000004,
+          "discoveredEntries": 1001,
+          "filesChecked": 1000,
+          "roundDurationMs": 100.30095899999999
+        },
+        {
+          "checkpointLatencyMs": 4.362334,
+          "discoveredEntries": 1001,
+          "filesChecked": 1000,
+          "roundDurationMs": 100.468625
+        },
+        {
+          "checkpointLatencyMs": 3.9592919999999996,
+          "discoveredEntries": 1001,
+          "filesChecked": 1000,
+          "roundDurationMs": 101.287875
+        }
+      ]
+    },
+    {
+      "current": [
+        {
+          "checkpointLatencyMs": 1.022375,
+          "discoveredEntries": 0,
+          "filesChecked": 1,
+          "roundDurationMs": 1.022375
+        },
+        {
+          "checkpointLatencyMs": 1.088041,
+          "discoveredEntries": 0,
+          "filesChecked": 1,
+          "roundDurationMs": 1.088041
+        },
+        {
+          "checkpointLatencyMs": 0.8680829999999999,
+          "discoveredEntries": 0,
+          "filesChecked": 1,
+          "roundDurationMs": 0.8680829999999999
+        },
+        {
+          "checkpointLatencyMs": 1.022459,
+          "discoveredEntries": 0,
+          "filesChecked": 1,
+          "roundDurationMs": 1.022459
+        },
+        {
+          "checkpointLatencyMs": 1.118625,
+          "discoveredEntries": 0,
+          "filesChecked": 1,
+          "roundDurationMs": 1.118625
+        }
+      ],
+      "fileCount": 10000,
+      "legacy": [
+        {
+          "checkpointLatencyMs": 36.820958,
+          "discoveredEntries": 10001,
+          "filesChecked": 10000,
+          "roundDurationMs": 1017.076125
+        },
+        {
+          "checkpointLatencyMs": 35.854,
+          "discoveredEntries": 10001,
+          "filesChecked": 10000,
+          "roundDurationMs": 1027.919042
+        },
+        {
+          "checkpointLatencyMs": 38.346375,
+          "discoveredEntries": 10001,
+          "filesChecked": 10000,
+          "roundDurationMs": 1047.124542
+        },
+        {
+          "checkpointLatencyMs": 36.815417000000004,
+          "discoveredEntries": 10001,
+          "filesChecked": 10000,
+          "roundDurationMs": 1030.278625
+        },
+        {
+          "checkpointLatencyMs": 35.851792,
+          "discoveredEntries": 10001,
+          "filesChecked": 10000,
+          "roundDurationMs": 1031.251333
+        }
+      ]
+    },
+    {
+      "current": [
+        {
+          "checkpointLatencyMs": 0.900375,
+          "discoveredEntries": 0,
+          "filesChecked": 1,
+          "roundDurationMs": 0.900375
+        },
+        {
+          "checkpointLatencyMs": 1.0485419999999999,
+          "discoveredEntries": 0,
+          "filesChecked": 1,
+          "roundDurationMs": 1.0485419999999999
+        },
+        {
+          "checkpointLatencyMs": 0.991208,
+          "discoveredEntries": 0,
+          "filesChecked": 1,
+          "roundDurationMs": 0.991208
+        },
+        {
+          "checkpointLatencyMs": 1.165208,
+          "discoveredEntries": 0,
+          "filesChecked": 1,
+          "roundDurationMs": 1.165208
+        },
+        {
+          "checkpointLatencyMs": 1.036834,
+          "discoveredEntries": 0,
+          "filesChecked": 1,
+          "roundDurationMs": 1.036834
+        }
+      ],
+      "fileCount": 50000,
+      "legacy": [
+        {
+          "checkpointLatencyMs": 204.119875,
+          "discoveredEntries": 50001,
+          "filesChecked": 50000,
+          "roundDurationMs": 6913.647209
+        },
+        {
+          "checkpointLatencyMs": 215.017125,
+          "discoveredEntries": 50001,
+          "filesChecked": 50000,
+          "roundDurationMs": 6667.539167
+        },
+        {
+          "checkpointLatencyMs": 210.670583,
+          "discoveredEntries": 50001,
+          "filesChecked": 50000,
+          "roundDurationMs": 6862.152291
+        },
+        {
+          "checkpointLatencyMs": 415.99229199999996,
+          "discoveredEntries": 50001,
+          "filesChecked": 50000,
+          "roundDurationMs": 6698.8162090000005
+        },
+        {
+          "checkpointLatencyMs": 215.05075000000002,
+          "discoveredEntries": 50001,
+          "filesChecked": 50000,
+          "roundDurationMs": 6464.008417
+        }
+      ]
+    }
+  ],
+  "samplesPerCase": 5,
+  "scope": "warm filesystem; synthetic temporary home; safe_fs + SQLite + actual JSONL checkpoint; excludes notification debounce and UI refresh"
+}

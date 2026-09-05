@@ -2146,7 +2146,7 @@ mod sidecar_tests {
     }
 
     #[tokio::test]
-    #[ignore = "downloads the current official CLIProxyAPI GitHub Release"]
+    #[ignore = "downloads and observes the reviewed official CLIProxyAPI baseline in isolation"]
     async fn official_release_download_and_extract_uses_the_real_installer() {
         let directory = tempfile::tempdir().unwrap();
         check_latest_core(directory.path()).await.unwrap();
@@ -2154,5 +2154,11 @@ mod sidecar_tests {
         let metadata = read_core_metadata(directory.path()).unwrap();
         assert_eq!(metadata.core_version, metadata.latest_version);
         assert!(find_unique_core_binary(&core_dir(directory.path())).is_ok());
+        #[cfg(target_os = "macos")]
+        super::smoke_tests::verify_isolated_core(directory.path()).await;
     }
 }
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "provider_gateway_smoke_tests.rs"]
+mod smoke_tests;

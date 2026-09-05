@@ -38,10 +38,11 @@ Native confirm ─ temporary Codex provider snippet; no automatic config/auth mu
 - canonical path 必须仍位于允许目录；拒绝符号链接和非普通文件。
 - 以设备/文件身份、UTF-8 byte offset 和 parser resume state 增量读取。
 - 单行上限 4 MiB；EOF 未完成行不提交，但仍计入读取预算；超长未结束行不从中间 checkpoint，避免把攻击者选定的后缀当成新事件。
-- 候选枚举按目录名新到旧并最多占用 5 秒，随后按活动 `sessions` 优先、同来源 mtime 新到旧、路径稳定兜底排序；整轮仍受 20 秒、256 MiB、200,000 events 等安全预算约束，但枚举或归档积压不能先耗尽整轮预算而使正在写入的会话长期饥饿。
+- 未发布 S5 使用有界变更队列及跨轮目录游标：连续三个变更文件名额后保留一个后台名额，后台在单文件续读和历史发现之间交替；名额计数不因一轮预算结束而重置。发现每轮最多 4,096 个 entry、累计 100 ms，处理最多 4,096 个文件；整轮仍受 20 秒、256 MiB、200,000 events 限制，单文件批次仍限制 32 MiB / 20,000 events。
+- 初次发现按 `sessions` 根优先于 `archived_sessions` 进行，不再为全局 mtime 排序收集全部文件；冷启动未变化的历史文件不保证最新优先。实际文件变更可插入下一优先名额，历史最终覆盖不依赖每次从目录起点重扫。深度上限仍为 16；目录句柄上限 17，变更及续读队列各最多 1,024 个去重路径。
 - 文件截断或身份变化时，仅重建该来源的可重建投影。
-- watcher 只使用一个合并信号槽，满时丢弃重复唤醒，并每 60 秒 reconciliation。每轮同时限制遍历数、字节、事件和时间，达到预算时显示 `partial/degraded`。
-- 成功扫描后后端只发送不含数据的本地刷新事件；前端以 2 秒窗口合并事件。活动页每 5 秒只读取 `ingest_files.updated_at` 与 OTel `received_at` 组成的采集水位，只在水位变化时重载当前页。后台重载不执行活动总数 `COUNT`；慢请求期间最多合并一次后续刷新，不重跑扫描或全局 bootstrap。用户点击“刷新本地数据”时会先显式执行同一有预算的 reconciliation，扫描完成后在保留表格的同时刷新当前活动查询与总数。
+- watcher 保留一个合并唤醒槽及独立有界路径 inbox；访问类事件忽略，文件变化优先处理，目录变化、队列溢出或事件错误请求 reconciliation。60 秒单调 deadline 不会被持续写入推迟；仍有工作时 250 ms 后继续有预算扫描，发现游标不被重复请求重置，达到预算显示 `partial/degraded`。完整周期仍覆盖丢失的事件。
+- 成功扫描后后端只发送不含数据的本地刷新事件；前端以 2 秒窗口合并事件。活动页每 5 秒只读取包含 ingest、OTel 及删除 revision 的采集水位，只在水位变化时重载当前页。后台重载不执行活动总数 `COUNT`；慢请求期间最多合并一次后续刷新，不重跑扫描或全局 bootstrap。用户点击“刷新本地数据”时会先显式执行同一有预算的 reconciliation，扫描完成后在保留表格的同时刷新当前活动查询与总数。
 - 活动查询依托 logical fingerprint 索引以 anti-join 选出每个逻辑记录的稳定代表，避免每次刷新对全表做 `ROW_NUMBER` 窗口排序；列表或总览数据与其采集水位在同一个 SQLite 只读事务快照内读取，独立 OTel 写连接不能造成旧数据配新水位。总览的记录/成功/失败数使用一次聚合，但价格仍按单次 model call 分桶，不会为性能改变计价口径。
 - 启动 bootstrap 不再同步执行全量总览汇总；它先返回最新活动、项目、来源与配置，前端首屏可用后再单独请求 dashboard。汇总期间指标显示 `unavailable`/后台汇总说明，不会以 0 伪装已完成统计。
 
@@ -83,7 +84,7 @@ CLIProxyAPI 只能从文件读取运行时凭据，因此 OAuth token 的静态�
 
 CLIProxyAPI Management API 与 OAuth callback 不向 WebView 开放：OAuth 档案仅通过原生文件选择器导入并存入 `cc.codex.manager.cliproxy-auth.v1`，支持当前已理解的 provider 格式；运行时按需投影，官方 OAuth 永不进入该域。本地代理不再接受任意外部 Base URL，因此删除了该路径上的 redirect/DNS/IP 安全门；外部 endpoint 由 Codex 配置直接管理。
 
-预编译内核不是主应用签名信任链的一部分。内测固定 CLIProxyAPI `v7.2.145` 及每个资产的精确 SHA-256，用于防止下载字节漂移；上游缺少 Developer ID、公证、detached signature、SBOM 和可复现 provenance 属于已知限制，不作为内测阻断。首次正式发布前仍需一次隔离环境观测，确认 loopback、凭据清理和隐私披露边界。
+预编译内核不是主应用签名信任链的一部分。内测固定 CLIProxyAPI `v7.2.145` 及每个资产的精确 SHA-256，用于防止下载字节漂移；上游缺少 Developer ID、公证、detached signature、SBOM 和可复现 provenance 属于已知限制，不作为内测阻断。2026-09-06 已完成隔离空凭据池的 loopback、请求拒绝与停止清理观测，详见 [S5–S6 验证记录](validation/reliability-s5-s6.md)；真实 OAuth checkpoint 和上游成功业务链仍待授权验收。
 
 官方订阅页面采用 cache-first。首次成功的账户读取或用户点击刷新后，后端仅将白名单账户摘要（可含 email）、套餐、额度窗口和确认/更新时间保存到独立 macOS Keychain，并作为不含 token/原始响应的白名单 DTO 提供当前 OAuth 页面读取；后续页面访问先读取该缓存，cache miss 或刷新按钮才解析并验签可信 CLI、触发实时读取，因此 CLI 暂时缺失时仍能显示已有安全快照。快照超过 6 小时或强制刷新失败时标记为 stale，并保留上次确认时间。token、原始 App Server JSON、授权 URL 和错误正文永不进入缓存。
 
@@ -142,7 +143,7 @@ SQLite 位于平台应用数据目录，启用 WAL、foreign keys、busy timeout
 
 ## 前端与 IPC
 
-未发布的可靠性切片为项目/AGENTS 读取增加请求序号，迟到响应不能覆盖当前文件；未保存内容保留基准 SHA，离开前需要明确放弃，写入期间禁止继续编辑或导航。写入结果与修订/页面后续刷新分别反馈，刷新失败保留已成功写入的状态和可恢复内容。经过后端限定的字符串错误与 `Error` 通过统一转换提供操作提示，不回传原始凭据或任意网络响应。
+未发布的可靠性切片为项目/AGENTS 读取增加请求序号，迟到响应不能覆盖当前文件；未保存内容保留基准 SHA，离开前通过应用内确认对话框明确放弃，文件、项目、主导航与原生关闭路径异步等待同一决定；不依赖 macOS WebView 缺失的 `window.confirm` 实现。创建与恢复 AGENTS、Codex 配置应用/恢复/删除和本地代理 OAuth 档案移除也使用应用内确认；受限后端已有的原生确认继续保留。写入期间禁止继续编辑或导航。写入结果与修订/页面后续刷新分别反馈，刷新失败保留已成功写入的状态和可恢复内容。经过后端限定的字符串错误与 `Error` 通过统一转换提供操作提示，不回传原始凭据或任意网络响应。
 
 主窗口限定授予 `core:window:allow-destroy`，供 Tauri `onCloseRequested` 在未保存保护允许关闭后完成其原有窗口销毁流程；不增加 shell、process、通用文件或 dialog 插件权限。新增 `get_activity_facets` 也须出现在构建命令表和主窗口精确 allow 权限中。
 
@@ -174,3 +175,7 @@ React 只使用显式 Tauri commands；CLIProxyAPI 新增的能力仅限确认�
 ## 界面语言边界
 
 React UI 通过源码级 `t()` / `tt` i18n 层提供 `zh-CN` 与 `en-US`，不扫描或改写已渲染 DOM。首次启动读取 WebView 的设备语言：`zh-*` 使用中文，其余语言使用英文；用户手动选择或恢复“跟随设备”仅写入版本化 localStorage key。语言偏好不进入 SQLite、Tauri IPC、日志或任何凭据域。数字、日期和金额格式跟随当前界面语言；项目名、模型标识、路径、外部 Release notes 和底层技术错误保持来源原文。
+
+## 调试桌面验收
+
+`desktop-qa` 是显式启用的 debug-only Cargo feature；release 与该 feature 同时启用时编译失败，默认产品入口不包含 QA 启动流程。隔离 Builder 使用人工 SQLite、Codex home、项目文件和非持久 WebView store，禁用认证 backend，只注册活动/项目/AGENTS 等必要安全命令；不注册账户、配置应用、代理、updater、设置修改或 CLI probe，不加载 updater。人工 DOM 驱动通过真实 Tauri IPC 进行保存/CAS/筛选和窗口生命周期验收，不替代真实 OAuth 或 updater 测试。

@@ -78,3 +78,9 @@
 | 中英文界面 | implemented | 支持简体中文和 English；首次按设备语言选择，`zh-*` 为中文，其他语言为 English |
 | 手动切换 | implemented | 顶部切换器即时生效，偏好只保存在本地 WebView |
 | 数据格式化 | implemented | 数字、日期、金额随 locale 格式化；用户数据和外部 notes 不翻译 |
+
+## 未发布：调度和验收边界
+
+变更文件优先且不依赖全目录枚举；历史发现与单文件续读保留跨轮进度，队列溢出以周期 reconciliation 补偿。冷启动历史顺序不再承诺全局 mtime 优先，活动展示仍按观测时间查询。规模基准只代表人工暖缓存目录发现和增量 checkpoint，不代表真实会话全量解析或 UI 延迟。
+
+AGENTS 创建、恢复、未保存离开与窗口关闭采用应用内异步确认，在 macOS WebView 中可实际选择取消或确认。debug-only `desktop-qa` 使用真实 SQLite/Tauri IPC 与人工项目验证这些行为，但没有真实凭据、代理或 updater 能力；不能据此宣称 OAuth 或安装升级完成。

@@ -84,6 +84,9 @@ The following changes are implemented in the working source and have not been pu
 - AGENTS editing protects unsaved changes and rejects stale read results. Activity filter choices cover the selected view's full history. Write success and a subsequent refresh failure are reported separately.
 - Local proxy status refreshes while its page is visible. Slow native work runs off the UI thread, and proxy startup health checks have a bounded deadline.
 
+- Changed rollout files receive priority within bounded queues; background discovery resumes across scan budgets so older files remain reachable.
+- In-app confirmations protect unsaved AGENTS edits, AGENTS creation/restoration, Codex configuration changes and local proxy OAuth profile removal in the desktop WebView.
+
 Implementation and validation boundaries are recorded in [unreleased notes](docs/release-notes/unreleased.md).
 
 ## Supported platforms
@@ -176,6 +179,9 @@ npm run tauri:dev
 See [docs/development-plan.md](docs/development-plan.md) and [docs/validation-2026-08-27.md](docs/validation-2026-08-27.md). Browser demo data is synthetic and sanitized; it does not automatically connect to the network.
 
 ## Documentation
+
+- [Documentation checks](docs/documentation-checks.md)
+- [S5–S6 validation and boundaries](docs/validation/reliability-s5-s6.md)
 
 - [Capability matrix](docs/capability-matrix.md) — sources, fields, provenance, and unsupported claims
 - [Architecture](docs/architecture.md) — adapters, storage, deduplication, and state boundaries

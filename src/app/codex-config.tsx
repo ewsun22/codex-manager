@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { refreshAfterCommit, safeErrorMessage } from "./operations.ts";
+import { useConfirmation } from "./confirmation.tsx";
 import { invokeBackend } from "./client.ts";
 import { useI18n } from "./i18n.tsx";
 import { t, tt } from "./i18n-core.ts";
@@ -53,25 +54,31 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
   const [providerDraft, setProviderDraft] = useState<ProviderDraft | null>(null);
   const [preview, setPreview] = useState<CodexConfigPreview | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const { runAction, dialog, confirming } = useConfirmation();
+  const blocked = busy !== null || confirming;
 
   const active = useMemo(() => snapshot?.profiles.find((profile) => profile.id === snapshot.activeProfileId) ?? null, [snapshot]);
 
   const refresh = useCallback(async (report = true) => {
-    if (report) setBusy("refresh");
-    try {
-      const [nextSnapshot, nextProviders] = await Promise.all([
-        invokeBackend<CodexConfigSnapshot>(COMMANDS.getCodexConfigSnapshot),
-        invokeBackend<CodexProviderProfile[]>(COMMANDS.listCodexProviders),
-      ]);
-      setSnapshot(nextSnapshot);
-      setProviders(nextProviders);
-    } catch (error) {
-      if (!report) throw error;
-      onNotice("error", tt`Codex 配置状态不可用：${errorText(error)}`);
-    } finally {
-      if (report) setBusy(null);
-    }
-  }, [onNotice]);
+    const load = async () => {
+      if (report) setBusy("refresh");
+      try {
+        const [nextSnapshot, nextProviders] = await Promise.all([
+          invokeBackend<CodexConfigSnapshot>(COMMANDS.getCodexConfigSnapshot),
+          invokeBackend<CodexProviderProfile[]>(COMMANDS.listCodexProviders),
+        ]);
+        setSnapshot(nextSnapshot);
+        setProviders(nextProviders);
+      } catch (error) {
+        if (!report) throw error;
+        onNotice("error", tt`Codex 配置状态不可用：${errorText(error)}`);
+      } finally {
+        if (report) setBusy(null);
+      }
+    };
+    if (report) await runAction(load);
+    else await load();
+  }, [onNotice, runAction]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -108,34 +115,36 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
   const save = async (event: FormEvent) => {
     event.preventDefault();
     if (!draft) return;
-    setBusy("save");
-    try {
-      const profile = await invokeBackend<CodexConfigProfile>(COMMANDS.saveCodexConfigProfile, {
-        profile: {
-          ...draft,
-          id: draft.id ?? crypto.randomUUID(),
-          name: draft.name.trim(),
-          baseUrl: draft.baseUrl?.trim() || null,
-          model: draft.model?.trim() || null,
-          reasoningEffort: draft.reasoningEffort?.trim() || null,
-          secretRef: draft.secretRef?.trim() || null,
-          isActive: false,
-          isVerified: false,
-          createdAt: "",
-          updatedAt: "",
-        },
-      });
-      editProfile(profile);
-      const notice = await refreshAfterCommit(tt`配置档案“${profile.name}”已保存；尚未应用到 Codex。`, () => refresh(false));
-      onNotice(notice.tone, notice.message);
-    } catch (error) {
-      onNotice("error", tt`配置档案未保存：${errorText(error)}`);
-    } finally {
-      setBusy(null);
-    }
+    await runAction(async () => {
+      setBusy("save");
+      try {
+        const profile = await invokeBackend<CodexConfigProfile>(COMMANDS.saveCodexConfigProfile, {
+          profile: {
+            ...draft,
+            id: draft.id ?? crypto.randomUUID(),
+            name: draft.name.trim(),
+            baseUrl: draft.baseUrl?.trim() || null,
+            model: draft.model?.trim() || null,
+            reasoningEffort: draft.reasoningEffort?.trim() || null,
+            secretRef: draft.secretRef?.trim() || null,
+            isActive: false,
+            isVerified: false,
+            createdAt: "",
+            updatedAt: "",
+          },
+        });
+        editProfile(profile);
+        const notice = await refreshAfterCommit(tt`配置档案“${profile.name}”已保存；尚未应用到 Codex。`, () => refresh(false));
+        onNotice(notice.tone, notice.message);
+      } catch (error) {
+        onNotice("error", tt`配置档案未保存：${errorText(error)}`);
+      } finally {
+        setBusy(null);
+      }
+    });
   };
 
-  const showPreview = async (profile: CodexConfigProfile) => {
+  const showPreview = (profile: CodexConfigProfile) => runAction(async () => {
     setBusy(`preview:${profile.id}`);
     try {
       setPreview(await invokeBackend<CodexConfigPreview>(COMMANDS.previewCodexConfigProfile, { profileId: profile.id }));
@@ -144,10 +153,9 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
     } finally {
       setBusy(null);
     }
-  };
+  });
 
-  const apply = async (profile: CodexConfigProfile) => {
-    if (!window.confirm(tt`应用“${profile.name}”到 Codex 配置？应用只管理模型、provider 与对应 provider table；原配置会保存在本地事务日志中以供恢复。`)) return;
+  const apply = (profile: CodexConfigProfile) => runAction(async () => {
     setBusy(`apply:${profile.id}`);
     try {
       const result = await invokeBackend<CodexConfigApplyResult>(COMMANDS.applyCodexConfigProfile, { profileId: profile.id, expectedRevision: snapshot?.activeRevision ?? undefined });
@@ -158,10 +166,9 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
     } finally {
       setBusy(null);
     }
-  };
+  }, { title: t("应用 Codex 配置？"), message: tt`应用“${profile.name}”到 Codex 配置？应用只管理模型、provider 与对应 provider table；原配置会保存在本地事务日志中以供恢复。`, confirmLabel: t("应用") });
 
-  const restore = async () => {
-    if (!window.confirm(t("恢复 Codex 配置到本工具接管前的状态？若外部已修改配置，恢复会要求你先刷新确认。"))) return;
+  const restore = () => runAction(async () => {
     setBusy("restore");
     try {
       const result = await invokeBackend<CodexConfigApplyResult>(COMMANDS.restoreCodexConfig, { expectedRevision: snapshot?.activeRevision ?? undefined });
@@ -173,10 +180,9 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
     } finally {
       setBusy(null);
     }
-  };
+  }, { title: t("恢复 Codex 配置？"), message: t("恢复 Codex 配置到本工具接管前的状态？若外部已修改配置，恢复会要求你先刷新确认。"), confirmLabel: t("恢复") });
 
-  const remove = async (profile: CodexConfigProfile) => {
-    if (!window.confirm(tt`删除配置档案“${profile.name}”？不会删除任何 Keychain 凭据。`)) return;
+  const remove = (profile: CodexConfigProfile) => runAction(async () => {
     setBusy(`remove:${profile.id}`);
     try {
       await invokeBackend<boolean>(COMMANDS.deleteCodexConfigProfile, { profileId: profile.id });
@@ -189,7 +195,7 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
     } finally {
       setBusy(null);
     }
-  };
+  }, { title: t("删除配置档案？"), message: tt`删除配置档案“${profile.name}”？不会删除任何 Keychain 凭据。`, confirmLabel: t("删除"), destructive: true });
 
   const editProvider = (provider: CodexProviderProfile) => {
     setProviderDraft({ id: provider.id, name: provider.name, baseUrl: provider.baseUrl, model: provider.model, reasoningEffort: provider.reasoningEffort, apiKey: "" });
@@ -199,21 +205,22 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
   const saveProvider = async (event: FormEvent) => {
     event.preventDefault();
     if (!providerDraft) return;
-    setBusy("save-provider");
-    try {
-      const saved = await invokeBackend<CodexProviderProfile>(COMMANDS.saveCodexProvider, {
-        input: { ...providerDraft, name: providerDraft.name.trim(), baseUrl: providerDraft.baseUrl.trim(), model: providerDraft.model.trim(), apiKey: providerDraft.apiKey?.trim() || undefined },
-      });
-      editProvider(saved);
-      const notice = await refreshAfterCommit(tt`外部供应商“${saved.name}”已保存。Codex 将直接访问其 endpoint，不经过 CLIProxyAPI。`, () => refresh(false));
-      onNotice(notice.tone, notice.message);
-    } catch (error) {
-      onNotice("error", tt`外部供应商未保存：${errorText(error)}`);
-    } finally { setBusy(null); }
+    await runAction(async () => {
+      setBusy("save-provider");
+      try {
+        const saved = await invokeBackend<CodexProviderProfile>(COMMANDS.saveCodexProvider, {
+          input: { ...providerDraft, name: providerDraft.name.trim(), baseUrl: providerDraft.baseUrl.trim(), model: providerDraft.model.trim(), apiKey: providerDraft.apiKey?.trim() || undefined },
+        });
+        editProvider(saved);
+        const notice = await refreshAfterCommit(tt`外部供应商“${saved.name}”已保存。Codex 将直接访问其 endpoint，不经过 CLIProxyAPI。`, () => refresh(false));
+        onNotice(notice.tone, notice.message);
+      } catch (error) {
+        onNotice("error", tt`外部供应商未保存：${errorText(error)}`);
+      } finally { setBusy(null); }
+    });
   };
 
-  const deleteProvider = async (provider: CodexProviderProfile) => {
-    if (!window.confirm(tt`删除外部供应商“${provider.name}”及其 Keychain API Key？此操作不可恢复。`)) return;
+  const deleteProvider = (provider: CodexProviderProfile) => runAction(async () => {
     setBusy(`delete-provider:${provider.id}`);
     try {
       await invokeBackend<CodexProviderProfile[]>(COMMANDS.deleteCodexProvider, { providerId: provider.id });
@@ -223,12 +230,12 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
     } catch (error) {
       onNotice("error", tt`外部供应商未删除：${errorText(error)}`);
     } finally { setBusy(null); }
-  };
+  }, { title: t("删除外部供应商？"), message: tt`删除外部供应商“${provider.name}”及其 Keychain API Key？此操作不可恢复。`, confirmLabel: t("删除"), destructive: true });
 
   return <div className="view-content config-view">
     <div className="gateway-page-heading">
       <div className="gateway-heading-copy"><p className="eyebrow">CODEX ROUTING</p><h1>{t("Codex 配置")}</h1><p>{t("在官方直连、本地 CLIProxyAPI 与外部 Responses 兼容代理间切换。配置档案只保存端点引用和非敏感模型字段；官方 OAuth 账户始终在“官方订阅”单独管理。")}</p></div>
-      <div className="gateway-heading-actions"><button type="button" className="button button-secondary" onClick={() => void refresh()} disabled={busy !== null}>{busy === "refresh" ? t("刷新中…") : t("刷新")}</button><button type="button" className="button button-secondary" onClick={() => void restore()} disabled={busy !== null || !snapshot?.activeProfileId}>{busy === "restore" ? t("恢复中…") : t("恢复")}</button></div>
+      <div className="gateway-heading-actions"><button type="button" className="button button-secondary" onClick={() => void refresh()} disabled={blocked}>{busy === "refresh" ? t("刷新中…") : t("刷新")}</button><button type="button" className="button button-secondary" onClick={() => void restore()} disabled={blocked || !snapshot?.activeProfileId}>{busy === "restore" ? t("恢复中…") : t("恢复")}</button></div>
     </div>
 
     <section className={`panel config-route-panel state-${snapshot?.state === "active" || snapshot?.state === "official-direct" ? "healthy" : snapshot?.state === "drifted" || snapshot?.state === "recovery-required" ? "degraded" : "disabled"}`} aria-live="polite">
@@ -236,19 +243,20 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
     </section>
 
     <section className="config-kind-grid" aria-label={t("创建配置档案")}>
-      {kinds.map((kind) => <article className="panel config-kind-card" key={kind.id}><div><p className="gateway-section-kicker">{kind.id}</p><h2>{kind.name}</h2><p>{kind.hint}</p></div><button type="button" className="button button-secondary" onClick={() => { setDraft(newDraft(kind.id)); setProviderDraft(null); setPreview(null); }} disabled={kind.id === "external-compatible" && externalProviders.length === 0}>{t("新建档案")}</button></article>)}
+      {kinds.map((kind) => <article className="panel config-kind-card" key={kind.id}><div><p className="gateway-section-kicker">{kind.id}</p><h2>{kind.name}</h2><p>{kind.hint}</p></div><button type="button" className="button button-secondary" onClick={() => { setDraft(newDraft(kind.id)); setProviderDraft(null); setPreview(null); }} disabled={blocked || kind.id === "external-compatible" && externalProviders.length === 0}>{t("新建档案")}</button></article>)}
     </section>
 
-    <section className="panel config-profile-panel" aria-labelledby="config-profiles-heading"><div className="gateway-provider-heading"><div><p className="gateway-section-kicker">{t("档案列表")}</p><h2 id="config-profiles-heading">{t("可切换路由")}</h2><p>{t("应用前可预览受管字段。检测到外部修改时会停止覆盖，避免误写用户配置。")}</p></div></div><div className="config-profile-list">{snapshot?.profiles.length ? snapshot.profiles.map((profile) => <article className={`config-profile-row${profile.isActive ? " is-active" : ""}`} key={profile.id}><div><strong>{profile.name}</strong><small>{kindLabel(profile.kind)} · {profile.baseUrl ?? t("官方默认连接")}</small></div><span className={`state-pill state-${profile.isActive ? "healthy" : profile.isVerified ? "disabled" : "unavailable"}`}>{profile.isActive ? t("当前") : profile.isVerified ? t("文件已复核") : t("未应用复核")}</span><div className="config-profile-actions"><button type="button" className="button button-secondary" onClick={() => void showPreview(profile)} disabled={busy !== null}>{t("预览")}</button><button type="button" className="button button-primary" onClick={() => void apply(profile)} disabled={busy !== null || profile.isActive}>{busy === `apply:${profile.id}` ? t("应用中…") : profile.isActive ? t("当前路由") : t("应用")}</button><button type="button" className="button button-secondary" onClick={() => editProfile(profile)} disabled={busy !== null}>{t("编辑")}</button><button type="button" className="button button-secondary" onClick={() => void remove(profile)} disabled={busy !== null || profile.isActive}>{t("删除")}</button></div></article>) : <div className="empty-state"><strong>{t("还没有配置档案")}</strong><p>{t("从上方选择一种路由创建档案。创建不会立即改写 Codex。")}</p></div>}</div></section>
+    <section className="panel config-profile-panel" aria-labelledby="config-profiles-heading"><div className="gateway-provider-heading"><div><p className="gateway-section-kicker">{t("档案列表")}</p><h2 id="config-profiles-heading">{t("可切换路由")}</h2><p>{t("应用前可预览受管字段。检测到外部修改时会停止覆盖，避免误写用户配置。")}</p></div></div><div className="config-profile-list">{snapshot?.profiles.length ? snapshot.profiles.map((profile) => <article className={`config-profile-row${profile.isActive ? " is-active" : ""}`} key={profile.id}><div><strong>{profile.name}</strong><small>{kindLabel(profile.kind)} · {profile.baseUrl ?? t("官方默认连接")}</small></div><span className={`state-pill state-${profile.isActive ? "healthy" : profile.isVerified ? "disabled" : "unavailable"}`}>{profile.isActive ? t("当前") : profile.isVerified ? t("文件已复核") : t("未应用复核")}</span><div className="config-profile-actions"><button type="button" className="button button-secondary" onClick={() => void showPreview(profile)} disabled={blocked}>{t("预览")}</button><button type="button" className="button button-primary" onClick={() => void apply(profile)} disabled={blocked || profile.isActive}>{busy === `apply:${profile.id}` ? t("应用中…") : profile.isActive ? t("当前路由") : t("应用")}</button><button type="button" className="button button-secondary" onClick={() => editProfile(profile)} disabled={blocked}>{t("编辑")}</button><button type="button" className="button button-secondary" onClick={() => void remove(profile)} disabled={blocked || profile.isActive}>{t("删除")}</button></div></article>) : <div className="empty-state"><strong>{t("还没有配置档案")}</strong><p>{t("从上方选择一种路由创建档案。创建不会立即改写 Codex。")}</p></div>}</div></section>
 
     <section className="panel config-official-entry"><div><p className="gateway-section-kicker">{t("官方身份")}</p><h2>{t("官方 OAuth 账户与额度")}</h2><p>{t("账户切换、登录和额度只在“官方订阅”工作台处理，不与本地 CLIProxyAPI OAuth 混用。")}</p></div><button type="button" className="button button-secondary" onClick={onOpenOfficialSubscription}>{t("打开官方订阅")}</button></section>
 
-    <section className="panel gateway-provider-panel" aria-labelledby="external-providers-heading"><div className="gateway-provider-heading"><div><p className="gateway-section-kicker">{t("外部直连")}</p><h2 id="external-providers-heading">{t("Responses 兼容供应商")}</h2><p>{t("外部 API Key 保存在系统 Keychain。应用对应“外部兼容代理”档案后，Codex 直接访问该 endpoint，不经过 CLIProxyAPI。")}</p></div><button type="button" className="button button-primary" onClick={() => { setProviderDraft(emptyProviderDraft); setDraft(null); }} disabled={busy !== null}>{t("新增供应商")}</button></div><div className="config-provider-list">{providers.length ? providers.map((provider) => <article className="config-profile-row" key={provider.id}><div><strong>{provider.name}</strong><small>{provider.baseUrl} · {provider.model} · {provider.reasoningEffort}</small></div><span className={`state-pill state-${provider.hasApiKey ? "disabled" : "unavailable"}`}>{provider.hasApiKey ? t("Keychain 已保存") : t("缺少 Key")}</span><div className="config-profile-actions"><button type="button" className="button button-secondary" onClick={() => editProvider(provider)} disabled={busy !== null}>{t("编辑")}</button><button type="button" className="button button-secondary" onClick={() => void deleteProvider(provider)} disabled={busy !== null}>{busy === `delete-provider:${provider.id}` ? t("删除中…") : t("删除")}</button></div></article>) : <div className="empty-state"><strong>{t("还没有外部供应商")}</strong><p>{t("新增一个 Responses 兼容 endpoint 后，再创建外部兼容配置档案。")}</p></div>}</div></section>
+    <section className="panel gateway-provider-panel" aria-labelledby="external-providers-heading"><div className="gateway-provider-heading"><div><p className="gateway-section-kicker">{t("外部直连")}</p><h2 id="external-providers-heading">{t("Responses 兼容供应商")}</h2><p>{t("外部 API Key 保存在系统 Keychain。应用对应“外部兼容代理”档案后，Codex 直接访问该 endpoint，不经过 CLIProxyAPI。")}</p></div><button type="button" className="button button-primary" onClick={() => { setProviderDraft(emptyProviderDraft); setDraft(null); }} disabled={blocked}>{t("新增供应商")}</button></div><div className="config-provider-list">{providers.length ? providers.map((provider) => <article className="config-profile-row" key={provider.id}><div><strong>{provider.name}</strong><small>{provider.baseUrl} · {provider.model} · {provider.reasoningEffort}</small></div><span className={`state-pill state-${provider.hasApiKey ? "disabled" : "unavailable"}`}>{provider.hasApiKey ? t("Keychain 已保存") : t("缺少 Key")}</span><div className="config-profile-actions"><button type="button" className="button button-secondary" onClick={() => editProvider(provider)} disabled={blocked}>{t("编辑")}</button><button type="button" className="button button-secondary" onClick={() => void deleteProvider(provider)} disabled={blocked}>{busy === `delete-provider:${provider.id}` ? t("删除中…") : t("删除")}</button></div></article>) : <div className="empty-state"><strong>{t("还没有外部供应商")}</strong><p>{t("新增一个 Responses 兼容 endpoint 后，再创建外部兼容配置档案。")}</p></div>}</div></section>
 
-    {draft ? <form className="panel config-editor" onSubmit={(event) => void save(event)}><div className="gateway-provider-heading"><div><p className="gateway-section-kicker">{draft.id ? t("编辑档案") : t("新建档案")}</p><h2>{kindLabel(draft.kind)}</h2><p>{t("代理凭据只能从已保存的 Keychain 供应商或安装级本地凭据中选择，不允许手工输入 token。")}</p></div><button type="button" className="button button-secondary" onClick={() => { setDraft(null); setPreview(null); }}>{t("关闭")}</button></div><div className="provider-form-fields"><label><span>{t("名称")}</span><input value={draft.name} required maxLength={80} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label><span>{t("类型")}</span><select value={draft.kind} onChange={(event) => setDraft(newDraft(event.target.value as CodexConfigProfileKind))}>{kinds.map((kind) => <option value={kind.id} key={kind.id}>{kind.name}</option>)}</select></label>{draft.kind === "local-cliproxy" ? <label><span>Base URL</span><input value={draft.baseUrl ?? ""} readOnly aria-readonly="true" /></label> : null}{draft.kind === "external-compatible" ? <label><span>{t("外部供应商")}</span><select value={draft.secretRef ?? ""} required onChange={(event) => { const provider = externalProviders.find((item) => `external-provider:${item.id}` === event.target.value); setDraft({ ...draft, secretRef: event.target.value, baseUrl: provider?.baseUrl ?? "", model: provider?.model ?? "", reasoningEffort: provider?.reasoningEffort ?? "" }); }}>{externalProviders.map((provider) => <option key={provider.id} value={`external-provider:${provider.id}`}>{provider.name} · {provider.baseUrl}</option>)}</select></label> : null}{draft.kind === "local-cliproxy" ? <><label><span>{t("模型")}</span><input value={draft.model ?? ""} required onChange={(event) => setDraft({ ...draft, model: event.target.value })} placeholder="gpt-5.6-sol" /></label><label><span>{t("推理等级")}</span><select value={draft.reasoningEffort ?? ""} onChange={(event) => setDraft({ ...draft, reasoningEffort: event.target.value })}><option value="">{t("由 Codex 默认决定")}</option>{efforts.map((level) => <option key={level} value={level}>{level}</option>)}</select></label></> : null}</div><div className="provider-form-actions"><button type="submit" className="button button-primary" disabled={busy !== null || draft.kind === "external-compatible" && !draft.secretRef}>{busy === "save" ? t("保存中…") : t("保存档案")}</button></div></form> : null}
+    {draft ? <form className="panel config-editor" onSubmit={(event) => void save(event)}><div className="gateway-provider-heading"><div><p className="gateway-section-kicker">{draft.id ? t("编辑档案") : t("新建档案")}</p><h2>{kindLabel(draft.kind)}</h2><p>{t("代理凭据只能从已保存的 Keychain 供应商或安装级本地凭据中选择，不允许手工输入 token。")}</p></div><button type="button" className="button button-secondary" onClick={() => { setDraft(null); setPreview(null); }}>{t("关闭")}</button></div><div className="provider-form-fields"><label><span>{t("名称")}</span><input value={draft.name} required maxLength={80} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label><span>{t("类型")}</span><select value={draft.kind} onChange={(event) => setDraft(newDraft(event.target.value as CodexConfigProfileKind))}>{kinds.map((kind) => <option value={kind.id} key={kind.id}>{kind.name}</option>)}</select></label>{draft.kind === "local-cliproxy" ? <label><span>Base URL</span><input value={draft.baseUrl ?? ""} readOnly aria-readonly="true" /></label> : null}{draft.kind === "external-compatible" ? <label><span>{t("外部供应商")}</span><select value={draft.secretRef ?? ""} required onChange={(event) => { const provider = externalProviders.find((item) => `external-provider:${item.id}` === event.target.value); setDraft({ ...draft, secretRef: event.target.value, baseUrl: provider?.baseUrl ?? "", model: provider?.model ?? "", reasoningEffort: provider?.reasoningEffort ?? "" }); }}>{externalProviders.map((provider) => <option key={provider.id} value={`external-provider:${provider.id}`}>{provider.name} · {provider.baseUrl}</option>)}</select></label> : null}{draft.kind === "local-cliproxy" ? <><label><span>{t("模型")}</span><input value={draft.model ?? ""} required onChange={(event) => setDraft({ ...draft, model: event.target.value })} placeholder="gpt-5.6-sol" /></label><label><span>{t("推理等级")}</span><select value={draft.reasoningEffort ?? ""} onChange={(event) => setDraft({ ...draft, reasoningEffort: event.target.value })}><option value="">{t("由 Codex 默认决定")}</option>{efforts.map((level) => <option key={level} value={level}>{level}</option>)}</select></label></> : null}</div><div className="provider-form-actions"><button type="submit" className="button button-primary" disabled={blocked || draft.kind === "external-compatible" && !draft.secretRef}>{busy === "save" ? t("保存中…") : t("保存档案")}</button></div></form> : null}
 
-    {providerDraft ? <form className="panel config-editor" onSubmit={(event) => void saveProvider(event)}><div className="gateway-provider-heading"><div><p className="gateway-section-kicker">{t("外部直连")}</p><h2>{providerDraft.id ? t("编辑外部供应商") : t("新增外部供应商")}</h2><p>{t("API Key 只写入系统 Keychain。保存后必须创建并应用“外部兼容代理”档案，Codex 才会直接使用此 endpoint。")}</p></div><button type="button" className="button button-secondary" onClick={() => setProviderDraft(null)}>{t("关闭")}</button></div><div className="provider-form-fields"><label><span>{t("名称")}</span><input value={providerDraft.name} maxLength={80} required onChange={(event) => setProviderDraft({ ...providerDraft, name: event.target.value })} placeholder={t("例如：公司 OpenAI 中转")} /></label><label><span>Base URL</span><input value={providerDraft.baseUrl} required onChange={(event) => setProviderDraft({ ...providerDraft, baseUrl: event.target.value })} placeholder={t("http://192.168.1.20:8317/v1 或 https://api.example.com/v1")} /></label><label><span>{t("模型")}</span><input value={providerDraft.model} maxLength={128} required onChange={(event) => setProviderDraft({ ...providerDraft, model: event.target.value })} placeholder="gpt-5.6-sol" /></label><label><span>{t("推理等级")}</span><select value={providerDraft.reasoningEffort} onChange={(event) => setProviderDraft({ ...providerDraft, reasoningEffort: event.target.value as CodexReasoningEffort })}>{efforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select></label><label className="provider-key-field"><span>API Key</span><input type="password" autoComplete="off" value={providerDraft.apiKey ?? ""} onChange={(event) => setProviderDraft({ ...providerDraft, apiKey: event.target.value })} placeholder={providerDraft.id ? t("留空以保留现有 Key") : t("仅写入系统 Keychain")} /></label></div><p className="provider-form-note">{t("支持 HTTP(S)，保存时不解析或访问该地址；公网 endpoint 建议使用 HTTPS。URL 中不允许用户名、密码、query 或 fragment。")}</p><div className="provider-form-actions"><button type="button" className="button button-secondary" onClick={() => setProviderDraft(emptyProviderDraft)} disabled={busy !== null}>{t("清空")}</button><button type="submit" className="button button-primary" disabled={busy !== null}>{busy === "save-provider" ? t("保存中…") : t("保存供应商")}</button></div></form> : null}
+    {providerDraft ? <form className="panel config-editor" onSubmit={(event) => void saveProvider(event)}><div className="gateway-provider-heading"><div><p className="gateway-section-kicker">{t("外部直连")}</p><h2>{providerDraft.id ? t("编辑外部供应商") : t("新增外部供应商")}</h2><p>{t("API Key 只写入系统 Keychain。保存后必须创建并应用“外部兼容代理”档案，Codex 才会直接使用此 endpoint。")}</p></div><button type="button" className="button button-secondary" onClick={() => setProviderDraft(null)}>{t("关闭")}</button></div><div className="provider-form-fields"><label><span>{t("名称")}</span><input value={providerDraft.name} maxLength={80} required onChange={(event) => setProviderDraft({ ...providerDraft, name: event.target.value })} placeholder={t("例如：公司 OpenAI 中转")} /></label><label><span>Base URL</span><input value={providerDraft.baseUrl} required onChange={(event) => setProviderDraft({ ...providerDraft, baseUrl: event.target.value })} placeholder={t("http://192.168.1.20:8317/v1 或 https://api.example.com/v1")} /></label><label><span>{t("模型")}</span><input value={providerDraft.model} maxLength={128} required onChange={(event) => setProviderDraft({ ...providerDraft, model: event.target.value })} placeholder="gpt-5.6-sol" /></label><label><span>{t("推理等级")}</span><select value={providerDraft.reasoningEffort} onChange={(event) => setProviderDraft({ ...providerDraft, reasoningEffort: event.target.value as CodexReasoningEffort })}>{efforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select></label><label className="provider-key-field"><span>API Key</span><input type="password" autoComplete="off" value={providerDraft.apiKey ?? ""} onChange={(event) => setProviderDraft({ ...providerDraft, apiKey: event.target.value })} placeholder={providerDraft.id ? t("留空以保留现有 Key") : t("仅写入系统 Keychain")} /></label></div><p className="provider-form-note">{t("支持 HTTP(S)，保存时不解析或访问该地址；公网 endpoint 建议使用 HTTPS。URL 中不允许用户名、密码、query 或 fragment。")}</p><div className="provider-form-actions"><button type="button" className="button button-secondary" onClick={() => setProviderDraft(emptyProviderDraft)} disabled={blocked}>{t("清空")}</button><button type="submit" className="button button-primary" disabled={blocked}>{busy === "save-provider" ? t("保存中…") : t("保存供应商")}</button></div></form> : null}
 
     {preview ? <section className="panel config-preview-panel"><div className="gateway-provider-heading"><div><p className="gateway-section-kicker">{t("应用预览")}</p><h2>{t("受管配置字段")}</h2><p>{preview.managedFields.join(" · ")}</p></div><button type="button" className="button button-secondary" onClick={() => setPreview(null)}>{t("关闭")}</button></div><pre>{preview.configSnippet}</pre></section> : null}
+    {dialog}
   </div>;
 }

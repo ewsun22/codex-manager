@@ -49,3 +49,9 @@ Tauri updater 的公钥可提交，私钥/密码不得进入仓库、缓存、ar
 同一次 sign 的 sealed artifact 可通过 exact `resume_run_id` 与 `resume_release_id` 恢复，但 `RELEASE-INTENT.json`、source、Release identity 和所有已有 asset digest 必须完全一致；不自动删除、覆盖或重新签名。只读 `verify-release.yml` 不含 Apple secret、`contents: write` 或发布动作，可分别复验 existing draft 与人工发布后的公开 Release。
 
 2026-08-29 当前依赖图的 `npm audit` 与 `cargo audit` 都报告 0 vulnerabilities；18 条 Cargo warning 已进入上述显式 allowlist。allowlist 是有理由、有目标图断言的发布门禁，不代表这些维护性风险已消失；每次公开发布仍需重新执行并审查变化。
+
+## 未发布验收工具
+
+调试 `desktop-qa` feature 直接复用工作区已有 `rusqlite` 版本来构造人工迁移前数据库，没有新增 crate 版本或第三方运行时；默认构建不启用该依赖入口，release + QA 明确拒绝编译。`npm run docs:check` 默认离线，扩充双语版本/平台/下载入口和本地链接/资产检查，联网 URL 检查须显式使用 `--check-external`。
+
+已审核 CLIProxyAPI 的显式 ignored smoke 测试复用生产下载、校验、配置、健康和停止代码，安装到测试临时目录；不编译 Go、不改变审核基线，也不把内核打进应用包。真实空认证池观测与真实 OAuth 业务验收分别记录。

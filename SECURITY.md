@@ -60,3 +60,7 @@
 内测 prerelease 只要求针对当前 exact SHA 完成应用测试、secret scan、CLIProxyAPI `v7.2.145` 精确版本与 SHA-256 校验、产物完整性检查，并明确披露 `unsigned/unnotarized` 状态；不再把 SBOM、许可证全集、上游 provenance、跨进程完美回收或每个 provider 的真实网络链路作为内测阻断条件。内测包不得进入稳定 updater 通道。
 
 正式 macOS 发布仍要求 Developer ID、Hardened Runtime、Apple notarization、stapling、Gatekeeper 和 updater 签名；这些是平台分发要求，不等同于 CLIProxyAPI 上游必须具备 Developer ID、SBOM 或可复现构建。正式发布前至少完成一次真实 CLIProxyAPI OAuth → loopback → Codex Responses E2E，并记录停止、凭据 checkpoint 和失败清理结果。未完成的真实 E2E 只能标为 `tested locally`/`unaccepted`，不能写成 `accepted`。
+
+## 调试验收入口
+
+`desktop-qa` 仅允许 debug 构建；release 同时启用该 feature 会编译失败。其独立 Builder 仅注册人工数据验收所需的活动、项目和 AGENTS 命令，认证 backend 禁用，不加载 updater，真实账户、配置应用、代理、设置修改和 CLI probe 均无 handler。不得把该入口扩展为生产配置或凭据绕过手段。默认发行构建保持现有命令权限与三个凭据信任域。

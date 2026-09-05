@@ -84,6 +84,9 @@ Codex 配置应用需要用户明确确认；不会改写 `auth.json`。正式�
 - AGENTS 编辑保护未保存修改并拒绝迟到的读取结果。活动筛选候选覆盖所选视图的全部历史。写入成功与后续状态刷新失败分别反馈。
 - 本地代理页面可见时持续校验状态。耗时原生操作移出 UI 线程，代理启动健康检查具有明确的超时上限。
 
+- 变更的 rollout 文件进入有界优先队列，后台发现跨预算续扫，保证旧文件仍可被处理。
+- 桌面 WebView 使用应用内确认对话框，覆盖 AGENTS 未保存修改、创建/恢复、Codex 配置变更和本地代理 OAuth 档案移除。
+
 实施与验证边界见[未发布说明](docs/release-notes/unreleased.md)。
 
 ## 平台支持
@@ -165,6 +168,9 @@ npm run tauri:dev
 详见 [docs/development-plan.md](docs/development-plan.md) 和 [docs/validation-2026-08-27.md](docs/validation-2026-08-27.md)。浏览器 demo 使用人工构造的脱敏数据，不会自动联网。
 
 ## 文档
+
+- [文档自动检查](docs/documentation-checks.md)
+- [S5–S6 验证与边界](docs/validation/reliability-s5-s6.md)
 
 - [能力矩阵](docs/capability-matrix.md) — 来源、字段、provenance 和不支持的宣称
 - [架构说明](docs/architecture.md) — adapter、存储、去重和状态边界

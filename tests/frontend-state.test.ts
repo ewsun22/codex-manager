@@ -39,16 +39,16 @@ test("晚到的项目/文件读取及失败都不能覆盖当前选择", async (
   assert.deepEqual(committed, ["project B"]);
 });
 
-test("AGENTS 取消离开保留草稿，外部新快照不会覆盖内容或 CAS 基准", () => {
+test("AGENTS 取消离开保留草稿，外部新快照不会覆盖内容或 CAS 基准", async () => {
   const draft = new AgentsDraft();
   draft.open(snapshot());
   draft.edit("# unsaved", false);
-  assert.equal(draft.canLeave(false, () => false), false);
+  assert.equal(await draft.canLeave(false, () => false), false);
   draft.open(snapshot("# external", "external"));
   assert.equal(draft.content, "# unsaved");
   assert.equal(draft.snapshot?.sha256, "base");
   assert.equal(draft.dirty, true);
-  assert.equal(draft.canLeave(false, () => true), true);
+  assert.equal(await draft.canLeave(false, () => true), true);
   assert.equal(draft.content, "# base");
   draft.open(snapshot("# next", "next", "/fixture-b/AGENTS.md"));
   assert.equal(draft.content, "# next");
@@ -60,7 +60,7 @@ test("AGENTS 写入期间拒绝输入与导航，失败保留草稿，成功更�
   draft.edit("# submitted", false);
   let asked = false;
   draft.edit("# typed while saving", true);
-  assert.equal(draft.canLeave(true, () => { asked = true; return true; }), false);
+  assert.equal(await draft.canLeave(true, () => { asked = true; return true; }), false);
   assert.equal(asked, false);
   assert.equal(draft.content, "# submitted");
   let refreshed = false;

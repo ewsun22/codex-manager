@@ -1,5 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(all(feature = "desktop-qa", not(debug_assertions)))]
+compile_error!("desktop-qa is only available in debug builds");
+#[cfg(all(feature = "desktop-qa", debug_assertions))]
+mod desktop_qa;
+
 mod account;
 mod agents;
 mod auth_profiles;
@@ -12,6 +17,9 @@ mod projects;
 mod provider_gateway;
 mod proxy_auth;
 mod safe_fs;
+mod scanner;
+#[cfg(test)]
+mod scanner_tests;
 
 use anyhow::{Context, anyhow};
 use chrono::{Duration as ChronoDuration, Utc};
@@ -32,7 +40,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Mutex, mpsc},
     thread,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -40,13 +48,10 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 use uuid::Uuid;
 
 const MAX_JSONL_LINE_BYTES: usize = 4 * 1024 * 1024;
-const MAX_ROLLOUT_FILES: usize = 200_000;
-const MAX_SCAN_ENTRIES: usize = 250_000;
 const MAX_SCAN_BYTES_PER_ROUND: u64 = 256 * 1024 * 1024;
 const MAX_SCAN_EVENTS_PER_ROUND: usize = 200_000;
 const MAX_SCAN_BYTES_PER_FILE_BATCH: u64 = 32 * 1024 * 1024;
 const MAX_SCAN_EVENTS_PER_FILE_BATCH: usize = 20_000;
-const MAX_SCAN_DISCOVERY_DURATION: Duration = Duration::from_secs(5);
 const MAX_SCAN_DURATION: Duration = Duration::from_secs(20);
 const WATCH_RECONCILE_INTERVAL: Duration = Duration::from_secs(60);
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(350);
@@ -65,6 +70,7 @@ struct AppState {
     database_path: PathBuf,
     data_dir: PathBuf,
     scan_gate: Mutex<()>,
+    scan_scheduler: Mutex<scanner::ScanScheduler>,
     retention_maintenance: Mutex<Option<(i64, Instant)>>,
     otel: Mutex<Option<otel::ServerHandle>>,
     otel_error: Mutex<Option<String>>,
@@ -115,7 +121,7 @@ struct AuthProfileOperationResult {
 }
 
 enum WatchSignal {
-    Reconcile,
+    Wake,
     Stop,
 }
 
@@ -135,38 +141,6 @@ struct ScanBudget {
     bytes: u64,
     events: usize,
     warning: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum RolloutSource {
-    ActiveSessions,
-    ArchivedSessions,
-}
-
-impl RolloutSource {
-    fn directory(self) -> &'static str {
-        match self {
-            Self::ActiveSessions => "sessions",
-            Self::ArchivedSessions => "archived_sessions",
-        }
-    }
-}
-
-#[derive(Debug)]
-struct RolloutCandidate {
-    path: PathBuf,
-    source: RolloutSource,
-    modified_at: SystemTime,
-}
-
-fn sort_rollout_candidates(candidates: &mut Vec<RolloutCandidate>) {
-    candidates.sort_by(|left, right| {
-        left.source
-            .cmp(&right.source)
-            .then_with(|| right.modified_at.cmp(&left.modified_at))
-            .then_with(|| left.path.cmp(&right.path))
-    });
-    candidates.dedup_by(|left, right| left.path == right.path);
 }
 
 impl ScanBudget {
@@ -2341,106 +2315,108 @@ fn maintain_retention(state: &AppState, force: bool) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanStats {
+    discovered_entries: usize,
+    files_checked: usize,
+    priority_files: usize,
+    continuation_files: usize,
+    changed_files: usize,
+    pending: bool,
+}
+
+#[derive(Default)]
+struct FileScanResult {
+    changed: bool,
+    needs_continuation: bool,
+}
+
 fn scan_all(state: &AppState) -> Result<(), String> {
-    let _gate = state.scan_gate.lock().map_err(lock_err)?;
-    let settings = get_settings_inner(state)?;
-    // Install/advance the cutoff before ingest. Store applies that cutoff in
-    // every ingest transaction so initial import and rebuild cannot revive
-    // expired metadata between maintenance rounds.
-    maintain_retention(state, false)?;
-    let homes = settings.codex_homes;
-    let mut files = Vec::new();
-    let mut visited = 0_usize;
-    let mut warning = None;
-    let mut budget = ScanBudget::new();
-    for home in homes {
-        for source in [
-            RolloutSource::ActiveSessions,
-            RolloutSource::ArchivedSessions,
-        ] {
-            let root = Path::new(&home).join(source.directory());
-            if !fs::symlink_metadata(&root)
-                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
-            {
-                continue;
-            }
-            let walker = walkdir::WalkDir::new(root)
-                .follow_links(false)
-                .max_depth(16)
-                .sort_by(|left, right| right.file_name().cmp(left.file_name()))
-                .into_iter()
-                .filter_entry(is_safe_walk_entry);
-            for entry in walker {
-                visited = visited.saturating_add(1);
-                if visited > MAX_SCAN_ENTRIES
-                    || budget.started.elapsed() >= MAX_SCAN_DISCOVERY_DURATION
-                {
-                    warning = Some(format!(
-                        "rollout 扫描已达遍历/时间预算（visited={visited}）；本轮结果为 partial，下次 reconciliation 会继续。"
-                    ));
-                    break;
-                }
-                let Ok(entry) = entry else {
-                    continue;
-                };
-                if files.len() >= MAX_ROLLOUT_FILES {
-                    warning = Some(format!(
-                        "rollout 文件超过 {MAX_ROLLOUT_FILES} 个安全上限；本轮结果为 partial，请缩小 Codex home 范围。"
-                    ));
-                    break;
-                }
-                if entry.file_type().is_file()
-                    && entry.path().extension().and_then(|value| value.to_str()) == Some("jsonl")
-                {
-                    files.push(RolloutCandidate {
-                        path: entry.path().to_path_buf(),
-                        source,
-                        modified_at: entry
-                            .metadata()
-                            .ok()
-                            .and_then(|metadata| metadata.modified().ok())
-                            .unwrap_or(SystemTime::UNIX_EPOCH),
-                    });
-                }
-            }
-            if warning.is_some() {
-                break;
-            }
-        }
-        if warning.is_some() {
-            break;
+    let stats = scan_scheduled(state, true, None)?;
+    if stats.pending {
+        if let Some(watcher) = state.watcher.lock().map_err(lock_err)?.as_ref() {
+            let _ = watcher.signal.try_send(WatchSignal::Wake);
         }
     }
-    sort_rollout_candidates(&mut files);
-    for candidate in files {
-        if budget.exhausted() {
-            warning.get_or_insert_with(|| {
-                format!(
-                    "rollout 扫描已达本轮资源预算（bytes={} events={}）；已提交的 checkpoint 保持有效。",
-                    budget.bytes, budget.events
-                )
-            });
-            break;
-        }
-        if let Err(error) = scan_file_unlocked(state, &candidate.path, &mut budget) {
-            let path = candidate.path.to_string_lossy().to_string();
-            let message = safe_error_label(&error);
-            state
-                .store
-                .lock()
-                .map_err(lock_err)?
-                .mark_ingest_error(&path, &message)
-                .map_err(display_error)?;
-        }
-    }
-    if warning.is_none() {
-        warning = budget.warning.take();
-    }
-    *state.scan_warning.lock().map_err(lock_err)? = warning;
     Ok(())
 }
 
-fn scan_file_unlocked(state: &AppState, path: &Path, round: &mut ScanBudget) -> Result<(), String> {
+fn scan_scheduled(
+    state: &AppState,
+    request_reconciliation: bool,
+    inbox: Option<&Mutex<scanner::ChangeInbox>>,
+) -> Result<ScanStats, String> {
+    let _gate = state.scan_gate.lock().map_err(lock_err)?;
+    let settings = get_settings_inner(state)?;
+    maintain_retention(state, false)?;
+    let mut scheduler = state.scan_scheduler.lock().map_err(lock_err)?;
+    scheduler.configure(&settings.codex_homes);
+    if request_reconciliation {
+        scheduler.request_reconcile();
+    }
+    if let Some(inbox) = inbox {
+        scheduler.accept(inbox.lock().map_err(lock_err)?.take());
+    }
+    scheduler.begin_round();
+    let mut budget = ScanBudget::new();
+    let mut discovery = scanner::DiscoveryBudget::new(
+        scanner::MAX_DISCOVERY_ENTRIES,
+        scanner::MAX_DISCOVERY_DURATION,
+    );
+    let mut stats = ScanStats::default();
+    while !budget.exhausted()
+        && stats.files_checked < scanner::MAX_FILES_PER_ROUND
+        && budget.remaining_bytes() > MAX_JSONL_LINE_BYTES as u64
+    {
+        // Events arriving during a large history pass can take the next dirty
+        // slot without waiting for the complete reconciliation round.
+        if let Some(inbox) = inbox {
+            scheduler.accept(inbox.lock().map_err(lock_err)?.take());
+        }
+        let Some(candidate) = scheduler.next(&mut discovery) else {
+            break;
+        };
+        stats.files_checked += 1;
+        match candidate.kind {
+            scanner::WorkKind::Changed => stats.priority_files += 1,
+            scanner::WorkKind::Continuation => stats.continuation_files += 1,
+            scanner::WorkKind::Reconciliation => {}
+        }
+        match scan_file_unlocked(state, &candidate.path, &mut budget) {
+            Ok(result) => {
+                stats.changed_files += usize::from(result.changed);
+                if result.needs_continuation {
+                    scheduler.continue_file(candidate.path);
+                }
+            }
+            Err(error) => {
+                let path = candidate.path.to_string_lossy().to_string();
+                let message = safe_error_label(&error);
+                state
+                    .store
+                    .lock()
+                    .map_err(lock_err)?
+                    .mark_ingest_error(&path, &message)
+                    .map_err(display_error)?;
+            }
+        }
+    }
+    stats.discovered_entries = discovery.visited;
+    stats.pending = scheduler.has_work();
+    let warning = budget.warning.or_else(|| stats.pending.then(|| format!(
+        "rollout 本轮仍有待处理记录（visited={} files={} bytes={} events={}）；结果为 partial，保留发现游标并继续公平处理历史与新增记录。",
+        stats.discovered_entries, stats.files_checked, budget.bytes, budget.events,
+    )));
+    *state.scan_warning.lock().map_err(lock_err)? = warning;
+    Ok(stats)
+}
+
+fn scan_file_unlocked(
+    state: &AppState,
+    path: &Path,
+    round: &mut ScanBudget,
+) -> Result<FileScanResult, String> {
     let (root, relative, canonical) = rollout_location(state, path)?;
     let opened = safe_fs::open_regular_beneath(&root, &relative)?;
     let canonical_string = canonical.to_string_lossy().to_string();
@@ -2453,7 +2429,7 @@ fn scan_file_unlocked(state: &AppState, path: &Path, round: &mut ScanBudget) -> 
         .plan_ingest(&canonical_string, Some(&identity), size)
         .map_err(display_error)?;
     if !plan.rebuild_required && plan.checkpoint.byte_offset == size {
-        return Ok(());
+        return Ok(FileScanResult::default());
     }
 
     let start_offset = if plan.rebuild_required {
@@ -2481,17 +2457,20 @@ fn scan_file_unlocked(state: &AppState, path: &Path, round: &mut ScanBudget) -> 
     let mut saw_complete = false;
     let mut file_bytes = 0_u64;
     let mut file_events = 0_usize;
+    let mut needs_continuation = false;
     loop {
         if round.exhausted()
             || file_bytes >= MAX_SCAN_BYTES_PER_FILE_BATCH
             || file_events >= MAX_SCAN_EVENTS_PER_FILE_BATCH
         {
+            needs_continuation = true;
             break;
         }
         let remaining = MAX_SCAN_BYTES_PER_FILE_BATCH
             .saturating_sub(file_bytes)
             .min(round.remaining_bytes());
         if remaining <= MAX_JSONL_LINE_BYTES as u64 {
+            needs_continuation = true;
             break;
         }
         match read_bounded_line(
@@ -2552,7 +2531,10 @@ fn scan_file_unlocked(state: &AppState, path: &Path, round: &mut ScanBudget) -> 
     round.bytes = round.bytes.saturating_add(file_bytes);
     round.events = round.events.saturating_add(file_events);
     if !saw_complete && !plan.rebuild_required {
-        return Ok(());
+        return Ok(FileScanResult {
+            changed: false,
+            needs_continuation,
+        });
     }
     let snapshot = normalizer.incremental_snapshot();
     let parse_unparsed = snapshot.unhandled_event_counts.values().copied().fold(
@@ -2576,7 +2558,11 @@ fn scan_file_unlocked(state: &AppState, path: &Path, round: &mut ScanBudget) -> 
                 .saturating_add(reader_unparsed)
                 .saturating_add(parse_unparsed),
         })
-        .map_err(display_error)
+        .map_err(display_error)?;
+    Ok(FileScanResult {
+        changed: next_offset != start_offset || plan.rebuild_required,
+        needs_continuation: needs_continuation && next_offset < size,
+    })
 }
 
 enum BoundedLine {
@@ -2677,29 +2663,40 @@ fn rollout_location(state: &AppState, path: &Path) -> Result<(PathBuf, PathBuf, 
     Err("采集源不在配置的 Codex home 会话目录内。".into())
 }
 
-fn is_safe_walk_entry(entry: &walkdir::DirEntry) -> bool {
-    if entry.depth() == 0 || !entry.file_type().is_dir() {
-        return true;
-    }
-    !entry.file_type().is_symlink()
-        && !entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| name.starts_with('.') && name != ".")
-}
-
 fn restart_watcher(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     let previous = state.watcher.lock().map_err(lock_err)?.take();
     drop(previous);
     let settings = get_settings_inner(&state)?;
-    // A single coalescing slot bounds memory under filesystem event floods.
-    // A periodic reconciliation remains the source of truth for dropped wakes.
     let (signal, receiver) = mpsc::sync_channel::<WatchSignal>(1);
+    let inbox = std::sync::Arc::new(Mutex::new(scanner::ChangeInbox::default()));
+    let callback_inbox = std::sync::Arc::clone(&inbox);
     let callback_signal = signal.clone();
     let mut watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
-        let _ = result;
-        let _ = callback_signal.try_send(WatchSignal::Reconcile);
+        if let Ok(event) = &result {
+            if matches!(event.kind, notify::EventKind::Access(_)) {
+                return;
+            }
+        }
+        if let Ok(mut inbox) = callback_inbox.lock() {
+            match result {
+                Ok(event) if !event.paths.is_empty() => {
+                    for path in event.paths {
+                        if path
+                            .extension()
+                            .is_some_and(|extension| extension == "jsonl")
+                            && !matches!(event.kind, notify::EventKind::Remove(_))
+                        {
+                            inbox.record_file(path);
+                        } else {
+                            inbox.request_reconcile();
+                        }
+                    }
+                }
+                _ => inbox.request_reconcile(),
+            }
+        }
+        let _ = callback_signal.try_send(WatchSignal::Wake);
     })
     .map_err(display_error)?;
     for home in settings.codex_homes {
@@ -2718,7 +2715,7 @@ fn restart_watcher(app: &AppHandle) -> Result<(), String> {
     let worker_app = app.clone();
     thread::Builder::new()
         .name("codex-manager-rollout".into())
-        .spawn(move || watcher_loop(worker_app, receiver))
+        .spawn(move || watcher_loop(worker_app, receiver, inbox))
         .map_err(display_error)?;
     *state.watcher.lock().map_err(lock_err)? = Some(WatchRuntime {
         _watcher: watcher,
@@ -2727,29 +2724,55 @@ fn restart_watcher(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn watcher_loop(app: AppHandle, receiver: mpsc::Receiver<WatchSignal>) {
+fn watcher_loop(
+    app: AppHandle,
+    receiver: mpsc::Receiver<WatchSignal>,
+    inbox: std::sync::Arc<Mutex<scanner::ChangeInbox>>,
+) {
+    // A monotonic deadline is independent of event traffic. Continuous writes
+    // cannot postpone either reconciliation or project/retention maintenance.
+    let mut reconcile_at = Instant::now() + WATCH_RECONCILE_INTERVAL;
+    let mut continue_at: Option<Instant> = None;
     loop {
-        let periodic = match receiver.recv_timeout(WATCH_RECONCILE_INTERVAL) {
-            Ok(WatchSignal::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
-            Ok(WatchSignal::Reconcile) => false,
-            Err(mpsc::RecvTimeoutError::Timeout) => true,
-        };
-        if !periodic {
-            let deadline = Instant::now() + WATCH_DEBOUNCE;
-            while Instant::now() < deadline {
-                match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        let deadline = continue_at.map_or(reconcile_at, |pending| pending.min(reconcile_at));
+        let signaled =
+            match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(WatchSignal::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                Ok(WatchSignal::Wake) => true,
+                Err(mpsc::RecvTimeoutError::Timeout) => false,
+            };
+        if signaled {
+            let debounce_until = (Instant::now() + WATCH_DEBOUNCE).min(reconcile_at);
+            while Instant::now() < debounce_until {
+                match receiver
+                    .recv_timeout(debounce_until.saturating_duration_since(Instant::now()))
+                {
                     Ok(WatchSignal::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
-                    Ok(WatchSignal::Reconcile) => {}
+                    Ok(WatchSignal::Wake) => {}
                     Err(mpsc::RecvTimeoutError::Timeout) => break,
                 }
             }
         }
+        let periodic = Instant::now() >= reconcile_at;
+        if periodic {
+            reconcile_at = Instant::now() + WATCH_RECONCILE_INTERVAL;
+        }
         if let Some(state) = app.try_state::<AppState>() {
-            if scan_all(&state).is_ok() {
-                if periodic {
-                    let _ = discover_projects_inner(&state);
+            match scan_scheduled(&state, periodic, Some(&inbox)) {
+                Ok(stats) => {
+                    continue_at = stats
+                        .pending
+                        .then(|| Instant::now() + scanner::CONTINUATION_INTERVAL);
+                    if periodic {
+                        let _ = discover_projects_inner(&state);
+                    }
+                    if stats.changed_files > 0 || periodic {
+                        let _ = app.emit("local-data-refreshed", ());
+                    }
                 }
-                let _ = app.emit("local-data-refreshed", ());
+                Err(_) => {
+                    continue_at = None;
+                }
             }
         } else {
             return;
@@ -3675,7 +3698,19 @@ fn display_error(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
+fn app_context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
+
 fn main() {
+    #[cfg(all(feature = "desktop-qa", debug_assertions))]
+    desktop_qa::run();
+    #[cfg(not(all(feature = "desktop-qa", debug_assertions)))]
+    run_app();
+}
+
+#[cfg_attr(all(feature = "desktop-qa", debug_assertions), allow(dead_code))]
+fn run_app() {
     if let Some(exit_code) = run_credential_helper() {
         std::process::exit(exit_code);
     }
@@ -3699,6 +3734,7 @@ fn main() {
                 database_path,
                 data_dir,
                 scan_gate: Mutex::new(()),
+                scan_scheduler: Mutex::new(scanner::ScanScheduler::default()),
                 retention_maintenance: Mutex::new(None),
                 otel: Mutex::new(None),
                 otel_error: Mutex::new(None),
@@ -3803,7 +3839,7 @@ fn main() {
             start_codex_gateway,
             stop_codex_gateway,
         ])
-        .run(tauri::generate_context!())
+        .run(app_context())
         .expect("Codex Manager 运行失败");
 }
 
@@ -3894,6 +3930,7 @@ mod tests {
             database_path,
             data_dir: directory.path().join("data"),
             scan_gate: Mutex::new(()),
+            scan_scheduler: Mutex::new(scanner::ScanScheduler::default()),
             retention_maintenance: Mutex::new(None),
             otel: Mutex::new(None),
             otel_error: Mutex::new(None),
@@ -4163,80 +4200,6 @@ mod tests {
         );
     }
 
-    fn rollout_candidate(path: &str, source: RolloutSource, seconds: u64) -> RolloutCandidate {
-        RolloutCandidate {
-            path: PathBuf::from(path),
-            source,
-            modified_at: SystemTime::UNIX_EPOCH + Duration::from_secs(seconds),
-        }
-    }
-
-    #[test]
-    fn rollout_candidates_prioritize_active_sessions_over_archives() {
-        let mut candidates = vec![
-            rollout_candidate(
-                "/codex/archived_sessions/rollout-archive.jsonl",
-                RolloutSource::ArchivedSessions,
-                999,
-            ),
-            rollout_candidate(
-                "/codex/sessions/2026/08/29/rollout-active.jsonl",
-                RolloutSource::ActiveSessions,
-                1,
-            ),
-        ];
-
-        sort_rollout_candidates(&mut candidates);
-
-        assert_eq!(candidates[0].source, RolloutSource::ActiveSessions);
-        assert_eq!(
-            candidates[0].path,
-            PathBuf::from("/codex/sessions/2026/08/29/rollout-active.jsonl")
-        );
-    }
-
-    #[test]
-    fn rollout_candidates_sort_newest_first_with_stable_path_tiebreaker() {
-        let mut candidates = vec![
-            rollout_candidate(
-                "/codex/sessions/rollout-z.jsonl",
-                RolloutSource::ActiveSessions,
-                10,
-            ),
-            rollout_candidate(
-                "/codex/sessions/rollout-old.jsonl",
-                RolloutSource::ActiveSessions,
-                1,
-            ),
-            rollout_candidate(
-                "/codex/sessions/rollout-new.jsonl",
-                RolloutSource::ActiveSessions,
-                20,
-            ),
-            rollout_candidate(
-                "/codex/sessions/rollout-a.jsonl",
-                RolloutSource::ActiveSessions,
-                10,
-            ),
-        ];
-
-        sort_rollout_candidates(&mut candidates);
-
-        let paths = candidates
-            .iter()
-            .map(|candidate| candidate.path.as_path())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            paths,
-            vec![
-                Path::new("/codex/sessions/rollout-new.jsonl"),
-                Path::new("/codex/sessions/rollout-a.jsonl"),
-                Path::new("/codex/sessions/rollout-z.jsonl"),
-                Path::new("/codex/sessions/rollout-old.jsonl"),
-            ]
-        );
-    }
-
     #[test]
     fn scanner_resumes_after_partial_line_without_double_counting() {
         let directory = tempfile::tempdir().unwrap();
@@ -4265,6 +4228,7 @@ mod tests {
             database_path,
             data_dir: directory.path().join("data"),
             scan_gate: Mutex::new(()),
+            scan_scheduler: Mutex::new(scanner::ScanScheduler::default()),
             retention_maintenance: Mutex::new(None),
             otel: Mutex::new(None),
             otel_error: Mutex::new(None),
@@ -4418,6 +4382,7 @@ mod tests {
             database_path,
             data_dir: root.join("data"),
             scan_gate: Mutex::new(()),
+            scan_scheduler: Mutex::new(scanner::ScanScheduler::default()),
             retention_maintenance: Mutex::new(None),
             otel: Mutex::new(None),
             otel_error: Mutex::new(None),

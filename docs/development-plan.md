@@ -8,10 +8,12 @@
 - [x] S2：AGENTS 草稿与读取顺序保护、保存期间锁定、原生错误脱敏、写入和刷新结果分别反馈。
 - [x] S3：原生耗时任务隔离、代理健康检查硬超时、状态查询与安装/运行目录恢复隔离。
 - [x] S4：全量活动筛选候选、视图条件清理、可见页面共享代理状态校验。
-- [ ] S5：人工规模基准、变更文件优先处理、扫描预算续扫；本轮未实施。
-- [ ] S6：扩充自动文档链接/资产检查和真实桌面、OAuth、updater 业务验收；本轮仅完成适用文档同步及 Chrome demo 验证。
+- [x] S5：变更文件优先、有界发现游标与公平续扫，完成 1k/10k/50k 人工规模基准。
+- [x] S6 本地部分：文档链接/资产/双语事实自动检查、隔离真实桌面验收，以及审核版 CLIProxyAPI 空凭据池的启动/请求拒绝/停止观测。
+- [ ] S6 真实 OAuth 业务部分：仍待指定认证档案、模型及费用上限；不把空凭据池健康检查写为真实 Responses 验收。
+- [x] S6 updater 范围决定：用户明确跳过旧版升级安装测试，状态为 skipped by user，不是 accepted。
 
-S1–S4 已完成本地自动化与人工数据浏览器验证，源码提交和推送已获授权，未打包签名或发布。具体结果及限制见 [S1–S4 验证记录](validation/reliability-s1-s4.md)。
+S1–S4 已提交并推送为 `0f4d9ed8122c1d2041ae4dbfb9b985f3b848f961`，主线 CI 通过；没有新签名发布。具体结果及限制见 [S1–S4 验证记录](validation/reliability-s1-s4.md)、[S5–S6 验证记录](validation/reliability-s5-s6.md) 与 [真实业务验收条件](validation/real-e2e-boundaries.md)。
 
 ## Phase 0：可行性探针 — completed
 
@@ -125,7 +127,8 @@ S1–S4 已完成本地自动化与人工数据浏览器验证，源码提交和
 - [ ] 为运行中配置漂移、退出前恢复、崩溃恢复设计受管 config state machine；在此之前网关不会自动接管 Codex
 - [x] 增加 pending checkpoint、provider/identity/CAS 校验和 orphan 端口确认；无法证明归属时 fail closed，不盲删或强杀遗留 child
 - [ ] 按 CLIProxyAPI 更新节奏维护固定版本与精确 SHA-256；detached signature/SBOM/provenance 和 mutable model catalog 属于后续供应链增强，不阻断内测发布
-- [ ] 在隔离环境完成一次官方预编译内核观测，验证 socket 仅 loopback、无认证为 401、4xx/5xx 不落正文、停止清理和 OAuth E2E；后续仅在内核版本或配置边界变化时重复
+- [x] 在隔离环境观测审核版官方预编译内核：socket 仅 IPv4 loopback、无认证 401、认证模型列表 200、禁用管理端点 404、人工失败请求 400、落盘文件未含人工正文标记、停止后目录和端口释放。
+- [ ] 真实 OAuth 成功 Responses 与 5xx 场景仍没有观测证据；空池 4xx 不能覆盖这些边界。后续仅在内核版本或配置边界变化时重复已通过的内核检查。
 
 本地代理只开放 CLIProxyAPI OAuth 凭据池。CLIProxyAPI 内核虽提供 OpenAI/Claude/Gemini client endpoint，本应用不开放其 Management、provider 管理 API、动态插件、自定义 header DSL、请求正文日志、官方订阅代理或后台自动换号；外部 API-key 上游由 Codex 配置直接使用，协议可用性仍需真实 OAuth E2E。
 

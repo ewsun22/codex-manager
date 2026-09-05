@@ -5,11 +5,15 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+desktop-qa = ["dep:rusqlite"]
+
 [build-dependencies]
 tauri-build = { version = "2.3.0", features = [] }
 chrono.workspace = true
 
 [dependencies]
+rusqlite = { workspace = true, optional = true }
 anyhow.workspace = true
 axum = { version = "0.8.4", features = ["json"] }
 axum-server = { version = "0.7.2", default-features = false, features = ["tls-rustls-no-provider"] }

@@ -1,0 +1,269 @@
+{
+  "date": "2026-09-05T17:44:50.984245+00:00",
+  "scope": "Google Chrome exact-tab browser demo; DOM buttons only; no native IPC or real credentials/configuration",
+  "nativeRuntime": false,
+  "frontendChanged": false,
+  "checks": [
+    {
+      "action": "apply-config",
+      "status": "passed",
+      "before": {
+        "active": "官方直连",
+        "profiles": [
+          "官方直连",
+          "本地 CLIProxyAPI"
+        ],
+        "providers": [
+          "OpenAI 中转",
+          "本机兼容上游"
+        ]
+      },
+      "dialog": {
+        "title": "应用 Codex 配置？",
+        "message": "应用“本地 CLIProxyAPI”到 Codex 配置？应用只管理模型、provider 与对应 provider table；原配置会保存在本地事务日志中以供恢复。",
+        "modal": true,
+        "visible": true,
+        "focusedButton": "取消",
+        "acceptCount": 1
+      },
+      "cancelPreserved": true,
+      "acceptedDialog": {
+        "title": "应用 Codex 配置？",
+        "message": "应用“本地 CLIProxyAPI”到 Codex 配置？应用只管理模型、provider 与对应 provider table；原配置会保存在本地事务日志中以供恢复。",
+        "modal": true,
+        "visible": true,
+        "focusedButton": "取消",
+        "acceptCount": 1
+      },
+      "acceptClicks": 1,
+      "after": {
+        "active": "本地 CLIProxyAPI",
+        "profiles": [
+          "官方直连",
+          "本地 CLIProxyAPI"
+        ],
+        "providers": [
+          "OpenAI 中转",
+          "本机兼容上游"
+        ]
+      },
+      "refreshReadback": {
+        "active": "本地 CLIProxyAPI",
+        "profiles": [
+          "官方直连",
+          "本地 CLIProxyAPI"
+        ],
+        "providers": [
+          "OpenAI 中转",
+          "本机兼容上游"
+        ]
+      }
+    },
+    {
+      "action": "restore-config",
+      "status": "passed",
+      "before": {
+        "active": "本地 CLIProxyAPI",
+        "profiles": [
+          "官方直连",
+          "本地 CLIProxyAPI"
+        ],
+        "providers": [
+          "OpenAI 中转",
+          "本机兼容上游"
+        ]
+      },
+      "dialog": {
+        "title": "恢复 Codex 配置？",
+        "message": "恢复 Codex 配置到本工具接管前的状态？若外部已修改配置，恢复会要求你先刷新确认。",
+        "modal": true,
+        "visible": true,
+        "focusedButton": "取消",
+        "acceptCount": 1
+      },
+      "cancelPreserved": true,
+      "acceptedDialog": {
+        "title": "恢复 Codex 配置？",
+        "message": "恢复 Codex 配置到本工具接管前的状态？若外部已修改配置，恢复会要求你先刷新确认。",
+        "modal": true,
+        "visible": true,
+        "focusedButton": "取消",
+        "acceptCount": 1
+      },
+      "acceptClicks": 1,
+      "after": {
+        "active": "官方直连",
+        "profiles": [
+          "官方直连",
+          "本地 CLIProxyAPI"
+        ],
+        "providers": [
+          "OpenAI 中转",
+          "本机兼容上游"
+        ]
+      },
+      "refreshReadback": {
+        "active": "官方直连",
+        "profiles": [
+          "官方直连",
+          "本地 CLIProxyAPI"
+        ],
+        "providers": [
+          "OpenAI 中转",
+          "本机兼容上游"
+        ]
+      }
+    },
+    {
+      "action": "delete-config-profile",
+      "status": "passed",
+      "before": {
+        "active": "官方直连",
+        "profiles": [
+          "官方直连",
+          "本地 CLIProxyAPI"
+        ],
+        "providers": [
+          "OpenAI 中转",
+          "本机兼容上游"
+        ]
+      },
+      "dialog": {
+        "title": "删除配置档案？",
+        "message": "删除配置档案“本地 CLIProxyAPI”？不会删除任何 Keychain 凭据。",
+        "modal": true,
+        "visible": true,
+        "focusedButton": "取消",
+        "acceptCount": 1
+      },
+      "cancelPreserved": true,
+      "acceptedDialog": {
+        "title": "删除配置档案？",
+        "message": "删除配置档案“本地 CLIProxyAPI”？不会删除任何 Keychain 凭据。",
+        "modal": true,
+        "visible": true,
+        "focusedButton": "取消",
+        "acceptCount": 1
+      },
+      "acceptClicks": 1,
+      "after": {
+        "active": "官方直连",
+        "profiles": [
+          "官方直连"
+        ],
+        "providers": [
+          "OpenAI 中转",
+          "本机兼容上游"
+        ]
+      },
+      "refreshReadback": {
+        "active": "官方直连",
+        "profiles": [
+          "官方直连"
+        ],
+        "providers": [
+          "OpenAI 中转",
+          "本机兼容上游"
+        ]
+      }
+    },
+    {
+      "action": "delete-external-provider",
+      "status": "passed",
+      "before": {
+        "active": "官方直连",
+        "profiles": [
+          "官方直连"
+        ],
+        "providers": [
+          "OpenAI 中转",
+          "本机兼容上游"
+        ]
+      },
+      "dialog": {
+        "title": "删除外部供应商？",
+        "message": "删除外部供应商“OpenAI 中转”及其 Keychain API Key？此操作不可恢复。",
+        "modal": true,
+        "visible": true,
+        "focusedButton": "取消",
+        "acceptCount": 1
+      },
+      "cancelPreserved": true,
+      "acceptedDialog": {
+        "title": "删除外部供应商？",
+        "message": "删除外部供应商“OpenAI 中转”及其 Keychain API Key？此操作不可恢复。",
+        "modal": true,
+        "visible": true,
+        "focusedButton": "取消",
+        "acceptCount": 1
+      },
+      "acceptClicks": 1,
+      "after": {
+        "active": "官方直连",
+        "profiles": [
+          "官方直连"
+        ],
+        "providers": [
+          "本机兼容上游"
+        ]
+      },
+      "refreshReadback": {
+        "active": "官方直连",
+        "profiles": [
+          "官方直连"
+        ],
+        "providers": [
+          "本机兼容上游"
+        ]
+      }
+    },
+    {
+      "action": "remove-proxy-oauth",
+      "status": "passed",
+      "cancelPreserved": true,
+      "dialogTitle": "移除 OAuth 档案？",
+      "realHtmlDialogVisible": true,
+      "defaultFocusedButton": "取消",
+      "acceptClicks": 1,
+      "after": {
+        "available": [
+          "Codex 个人账户"
+        ],
+        "removed": [
+          "Claude 备用账户 · claude"
+        ]
+      },
+      "refreshReadback": {
+        "available": [
+          "Codex 个人账户"
+        ],
+        "removed": [
+          "Claude 备用账户 · claude"
+        ]
+      },
+      "readbackRecoveredAfterTabInterruption": true
+    }
+  ],
+  "limits": [
+    "演示内存数据仅验证UI行为；不代表真实Keychain、OAuth或Codex配置业务验收。"
+  ],
+  "interruption": {
+    "action": "remove-proxy-oauth",
+    "cancelPreserved": true,
+    "confirmClicksBeforeInterruption": 1,
+    "readbackCompleted": false,
+    "reason": "exact QA tab no longer found by Chrome after confirm click; no retry mutation was issued",
+    "resolution": "Exact URL became readable again after reopening in verified Default profile. The same demo state showed the previously confirmed target already removed. No second removal was issued; expanded trash and explicit refresh confirmed the result."
+  },
+  "result": "5 actions passed: cancel preserved state, one confirm click per action, explicit refresh readback matched",
+  "sourceSha256": {
+    "src/app/confirmation-state.ts": "87c5446a146973d49fac265dfe21f69a47f582131dc2179c6dee327e82e0e71e",
+    "src/app/confirmation.tsx": "cc93a3ddfa01148aa6de1af8d8a5ff72bb6759c9ed4df8659ebd57d5e70b5488",
+    "src/app/codex-config.tsx": "f4cdf67544af0cd678e4e33911bf622194a04e5c1eeb76f7345558d6d044ffd6",
+    "src/app/codex-gateway.tsx": "e716b5e404c949181f4593f5624fb40a01028fe4562e10449cc18d6f318119f9"
+  },
+  "cleanup": {
+    "exactTabClosed": true,
+    "viteStopped": false
+  }
+}

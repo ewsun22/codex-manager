@@ -73,3 +73,7 @@ AGENTS 未保存草稿仅存在于当前页面内存，不进入 localStorage、
 ## 界面语言偏好
 
 界面语言和“跟随设备”选择只保存在应用 WebView 的本地存储中，不进入 SQLite、日志、备份、Tauri 后端 DTO 或任何 Keychain。语言判断只读取设备公开的浏览器 locale，不读取消息、凭据或请求内容。
+
+## 开发验收数据
+
+显式启用的 `desktop-qa` 调试构建只生成私有临时人工 SQLite、Codex home 与项目文件，WebView 为非持久 store，认证 backend 禁用且不提供账户/代理/updater 命令。验收记录和截图仅使用人工内容；默认发布构建不启用该入口。独立内核 smoke 观测使用空认证目录和临时随机本机 key，不调用真实模型或读取用户 Keychain。

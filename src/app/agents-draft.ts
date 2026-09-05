@@ -15,10 +15,14 @@ export class AgentsDraft {
     this.content = snapshot?.content ?? "";
   }
   discard(): void { this.content = this.snapshot?.content ?? ""; }
-  canLeave(saving: boolean, confirmDiscard: () => boolean): boolean {
+  async canLeave(saving: boolean, confirmDiscard: () => boolean | Promise<boolean>): Promise<boolean> {
     if (saving) return false;
     if (!this.dirty) return true;
-    if (!confirmDiscard()) return false;
+    const snapshot = this.snapshot;
+    const content = this.content;
+    if (!await confirmDiscard()) return false;
+    // An asynchronous answer must not discard edits made after the question.
+    if (snapshot !== this.snapshot || content !== this.content) return false;
     this.discard();
     return true;
   }

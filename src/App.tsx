@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { invokeBackend, isDesktopRuntime } from "./app/client.ts";
+import { ConfirmationAction } from "./app/confirmation-state.ts";
+import { useConfirmation } from "./app/confirmation.tsx";
 import { AgentsDraft } from "./app/agents-draft.ts";
 import { facetOptions, queryForView } from "./app/activity-filters.ts";
 import { LatestRequest, refreshAfterCommit, safeErrorMessage } from "./app/operations.ts";
@@ -757,12 +759,14 @@ function ProjectList({
   onSelect,
   onDiscover,
   discovering,
+  blocked,
 }: {
   projects: ProjectSummary[];
   selectedPath: string | null;
   onSelect: (project: ProjectSummary) => void;
   onDiscover: () => void;
   discovering: boolean;
+  blocked: boolean;
 }) {
   return (
     <section className="panel project-list-panel" aria-labelledby="projects-heading">
@@ -775,7 +779,7 @@ function ProjectList({
             <span><i className="agents-file-indicator no-agents-file" aria-hidden="true" />{t("无 AGENTS.md")}</span>
           </div>
         </div>
-        <button type="button" className="button button-secondary" onClick={onDiscover} disabled={discovering}>
+        <button type="button" className="button button-secondary" onClick={onDiscover} disabled={blocked}>
           {discovering ? t("扫描中…") : t("重新发现")}
         </button>
       </div>
@@ -816,6 +820,7 @@ function AgentsEditor({
   snapshot,
   revisions,
   busy,
+  writing,
   canSave,
   canCreate,
   onOpen,
@@ -829,6 +834,7 @@ function AgentsEditor({
   snapshot: AgentsFileSnapshot | null;
   revisions: AgentsRevision[];
   busy: boolean;
+  writing: boolean;
   canSave: boolean;
   canCreate: boolean;
   onOpen: (path: string) => void;
@@ -853,7 +859,7 @@ function AgentsEditor({
         </div>
         <div className="agents-header-actions">
           {snapshot ? <span className={`state-pill ${snapshot.writable && canSave ? "state-healthy" : "state-unavailable"}`}>{snapshot.writable && canSave ? t("可编辑") : t("未授权或只读")}</span> : null}
-          {canCreate ? <button type="button" className="button button-secondary" onClick={onCreate} disabled={busy}>{busy ? t("创建中…") : t("创建项目级 AGENTS.md")}</button> : null}
+          {canCreate ? <button type="button" className="button button-secondary" onClick={onCreate} disabled={busy}>{writing ? t("创建中…") : t("创建项目级 AGENTS.md")}</button> : null}
         </div>
       </div>
 
@@ -899,14 +905,14 @@ function AgentsEditor({
               <div className="editor-actions">
                 <span className={changed ? "changed-indicator" : "muted"}>{changed ? t("存在未保存修改") : t("已与磁盘快照一致")}</span>
                 <button type="button" className="button button-secondary" onClick={() => onContentChange(snapshot.content)} disabled={!changed || busy}>{t("放弃修改")}</button>
-                <button type="button" className="button button-primary" onClick={() => onSave(content, snapshot)} disabled={!changed || !snapshot.writable || !canSave || busy}>{busy ? t("保存中…") : t("安全保存")}</button>
+                <button type="button" className="button button-primary" onClick={() => onSave(content, snapshot)} disabled={!changed || !snapshot.writable || !canSave || busy}>{writing ? t("保存中…") : t("安全保存")}</button>
               </div>
             </>
           ) : (
             <EmptyState
               title={t("此项目没有项目级 AGENTS.md")}
               detail={canCreate ? t("可在已授权的项目根目录中显式创建 AGENTS.md；创建后才会进入安全编辑和 revision 流程。") : t("文件不存在、位于未授权根目录、或未通过符号链接检查时，均不会显示为空白编辑器。")}
-              action={canCreate ? <button type="button" className="button button-primary" onClick={onCreate} disabled={busy}>{busy ? t("创建中…") : t("创建项目级 AGENTS.md")}</button> : undefined}
+              action={canCreate ? <button type="button" className="button button-primary" onClick={onCreate} disabled={busy}>{writing ? t("创建中…") : t("创建项目级 AGENTS.md")}</button> : undefined}
             />
           )}
         </div>
@@ -940,7 +946,7 @@ function ProjectsView({
   authorizedRoots: string[];
   onProjectsChange: (projects: ProjectSummary[]) => void;
   showNotice: (notice: Notice) => void;
-  registerNavigationGuard: (guard: () => boolean) => () => void;
+  registerNavigationGuard: (guard: () => Promise<boolean>) => () => void;
 }) {
   const [selectedProject, setSelectedProject] = useState<ProjectSummary | null>(projects[0] ?? null);
   const [chain, setChain] = useState<AgentsChain | null>(null);
@@ -956,6 +962,8 @@ function ProjectsView({
   const selectedProjectRef = useRef(selectedProject);
   selectedProjectRef.current = selectedProject;
   const savingRef = useRef(false);
+  const actions = useRef(new ConfirmationAction());
+  const { confirm, dialog, confirming } = useConfirmation();
 
   const publishSnapshot = useCallback((next: AgentsFileSnapshot | null, committed = false) => {
     if (committed) draft.current.accept(next);
@@ -963,15 +971,21 @@ function ProjectsView({
     setSnapshot(draft.current.snapshot);
     renderDraft((revision) => revision + 1);
   }, []);
-  const canLeave = useCallback(() => {
+  const discardBeforeLeaving = useCallback(async () => {
     if (savingRef.current) {
       showNotice({ tone: "info", message: t("正在保存 AGENTS 修改，请等待完成后再离开。") });
       return false;
     }
-    const allowed = draft.current.canLeave(false, () => window.confirm(t("AGENTS 有未保存修改。放弃这些修改并继续？")));
+    const allowed = await draft.current.canLeave(false, () => confirm({
+      title: t("放弃未保存修改？"),
+      message: t("AGENTS 有未保存修改。放弃这些修改并继续？"),
+      confirmLabel: t("放弃修改并继续"),
+      destructive: true,
+    }));
     if (allowed) renderDraft((revision) => revision + 1);
     return allowed;
-  }, [showNotice]);
+  }, [confirm, showNotice]);
+  const canLeave = useCallback(() => actions.current.run(discardBeforeLeaving), [discardBeforeLeaving]);
 
   useEffect(() => registerNavigationGuard(canLeave), [canLeave, registerNavigationGuard]);
   useEffect(() => {
@@ -985,7 +999,7 @@ function ProjectsView({
     let unlisten: (() => void) | undefined;
     const release = (stop: (() => void) | undefined) => { if (stop) { try { void Promise.resolve(stop()).catch(() => undefined); } catch { /* Window already closed. */ } } };
     if (isDesktopRuntime()) void import("@tauri-apps/api/window")
-      .then(({ getCurrentWindow }) => getCurrentWindow().onCloseRequested((event) => { if (!canLeave()) event.preventDefault(); }))
+      .then(({ getCurrentWindow }) => getCurrentWindow().onCloseRequested(async (event) => { if (!await canLeave()) event.preventDefault(); }))
       .then((stop) => { if (disposed) release(stop); else unlisten = stop; })
       .catch(() => undefined);
     return () => { disposed = true; window.removeEventListener("beforeunload", beforeUnload); release(unlisten); reads.current.invalidate(); discoveryRead.current.invalidate(); };
@@ -1016,14 +1030,14 @@ function ProjectsView({
 
   useEffect(() => { if (selectedProject) void loadChain(selectedProject); }, [loadChain, selectedProject]);
 
-  const selectProject = (project: ProjectSummary | null) => {
-    if (project === selectedProject || !canLeave()) return;
+  const selectProject = (project: ProjectSummary | null) => actions.current.run(async () => {
+    if (project === selectedProject || !await discardBeforeLeaving()) return false;
     reads.current.invalidate();
     setChain(null); publishSnapshot(null); setRevisions([]); setLoading(Boolean(project));
     setSelectedProject(project);
-  };
-  const openFile = async (path: string) => {
-    if (!canLeave()) return;
+    return true;
+  });
+  const loadFile = async (path: string) => {
     publishSnapshot(null); setRevisions([]); setLoading(true);
     const result = await reads.current.run(() => Promise.all([
       invokeBackend<AgentsFileSnapshot>(COMMANDS.openAgentsFile, { path }),
@@ -1033,16 +1047,21 @@ function ProjectsView({
     if (result.status === "failed") showNotice({ tone: "error", message: tt`无法打开文件：${appError(result.error)}` });
     setLoading(false);
   };
+  const openFile = (path: string) => actions.current.run(async () => {
+    if (!await discardBeforeLeaving()) return false;
+    void loadFile(path);
+    return true;
+  });
   const beginSave = () => { reads.current.invalidate(); savingRef.current = true; setSaving(true); };
   const finishSave = () => { savingRef.current = false; setSaving(false); };
   const refreshRevisions = async (path: string) => setRevisions(await invokeBackend<AgentsRevision[]>(COMMANDS.listAgentsRevisions, { path }));
 
-  const save = async (content: string, current: AgentsFileSnapshot) => {
-    if (!selectedProject || savingRef.current) return;
+  const save = (content: string, current: AgentsFileSnapshot) => actions.current.run(async () => {
+    if (!selectedProject || savingRef.current) return false;
     const authorizedRoot = authorizedRootFor(current.path, authorizedRoots);
     if (!authorizedRoot) {
       showNotice({ tone: "error", message: t("该文件不位于已授权根目录内，应用不会发送写入请求。") });
-      return;
+      return false;
     }
     beginSave();
     try {
@@ -1051,18 +1070,24 @@ function ProjectsView({
       });
       publishSnapshot(result.snapshot, true);
       showNotice(await refreshAfterCommit(tt`已原子保存，并创建 revision ${result.revisionId}。`, () => refreshRevisions(result.snapshot.path)));
-    } catch (error) { showNotice({ tone: "error", message: tt`保存被拒绝或发生外部冲突：${appError(error)}` }); }
+      return true;
+    } catch (error) { showNotice({ tone: "error", message: tt`保存被拒绝或发生外部冲突：${appError(error)}` }); return false; }
     finally { finishSave(); }
-  };
+  });
 
-  const createProjectAgents = async () => {
-    if (!selectedProject || savingRef.current || !canLeave()) return;
+  const createProjectAgents = () => actions.current.run(async () => {
+    if (!selectedProject || savingRef.current) return false;
     const authorizedRoot = authorizedRootFor(selectedProject.canonicalPath, authorizedRoots);
     if (!authorizedRoot) {
       showNotice({ tone: "error", message: t("项目根目录不在授权范围内，应用不会创建文件。") });
-      return;
+      return false;
     }
-    if (!window.confirm(tt`将在项目根目录创建 AGENTS.md：\n${selectedProject.canonicalPath}\n\n继续吗？`)) return;
+    const confirmed = await confirm({
+      title: t("创建项目级 AGENTS.md"),
+      message: tt`将在项目根目录创建 AGENTS.md：\n${selectedProject.canonicalPath}\n\n继续吗？` + (draft.current.dirty ? "\n\n" + t("当前未保存修改仅会在操作成功后被替换。") : ""),
+      confirmLabel: t("创建文件"),
+    });
+    if (!confirmed) return false;
     beginSave();
     try {
       const input: CreateAgentsFileInput = {
@@ -1078,28 +1103,36 @@ function ProjectsView({
         ]);
         setChain(nextChain); onProjectsChange(nextProjects);
       }));
-    } catch (error) { showNotice({ tone: "error", message: tt`创建被拒绝或未完成：${appError(error)}` }); }
+      return true;
+    } catch (error) { showNotice({ tone: "error", message: tt`创建被拒绝或未完成：${appError(error)}` }); return false; }
     finally { finishSave(); }
-  };
+  });
 
-  const restore = async (revision: AgentsRevision) => {
-    if (!snapshot || savingRef.current || !canLeave()) return;
-    if (!window.confirm(tt`恢复 ${formatDate(revision.createdAt)} 的 revision？当前磁盘内容会先由后端进行冲突校验。`)) return;
+  const restore = (revision: AgentsRevision) => actions.current.run(async () => {
+    if (!snapshot || savingRef.current) return false;
+    const confirmed = await confirm({
+      title: t("恢复 AGENTS 版本"),
+      message: tt`恢复 ${formatDate(revision.createdAt)} 的 revision？当前磁盘内容会先由后端进行冲突校验。` + `\n${snapshot.path}` + (draft.current.dirty ? "\n\n" + t("当前未保存修改仅会在操作成功后被替换。") : ""),
+      confirmLabel: t("恢复此版本"),
+      destructive: true,
+    });
+    if (!confirmed) return false;
     beginSave();
     try {
       const result = await invokeBackend<{ snapshot: AgentsFileSnapshot; revisionId: string }>(COMMANDS.restoreAgentsRevision, { revisionId: revision.id, expectedSha256: snapshot.sha256 });
       publishSnapshot(result.snapshot, true);
       showNotice(await refreshAfterCommit(tt`已恢复 revision，并创建 ${result.revisionId}。`, () => refreshRevisions(result.snapshot.path)));
-    } catch (error) { showNotice({ tone: "error", message: tt`恢复被拒绝或发生外部冲突：${appError(error)}` }); }
+      return true;
+    } catch (error) { showNotice({ tone: "error", message: tt`恢复被拒绝或发生外部冲突：${appError(error)}` }); return false; }
     finally { finishSave(); }
-  };
+  });
 
   const discover = async () => {
-    if (savingRef.current || !canLeave()) return;
+    if (!await actions.current.run(discardBeforeLeaving)) return;
     setDiscovering(true);
     const result = await discoveryRead.current.run(() => invokeBackend<ProjectSummary[]>(COMMANDS.discoverProjects), (next) => {
       onProjectsChange(next);
-      selectProject(next.find((project) => project.canonicalPath === selectedProjectRef.current?.canonicalPath) ?? next[0] ?? null);
+      void selectProject(next.find((project) => project.canonicalPath === selectedProjectRef.current?.canonicalPath) ?? next[0] ?? null);
       showNotice({ tone: "success", message: tt`项目发现完成：${formatCount(next.length)} 个项目。` });
     });
     if (result.status === "ignored") return;
@@ -1111,9 +1144,10 @@ function ProjectsView({
     <div className="view-content">
       <SectionHeader title={t("项目与 AGENTS")} subtitle={t("查看所有已观测项目，并在授权根目录内安全编辑 AGENTS.md。")} />
       <div className="projects-grid">
-        <ProjectList projects={projects} selectedPath={selectedProject?.canonicalPath ?? null} onSelect={selectProject} onDiscover={discover} discovering={discovering || saving} />
-        {loading && !chain ? <LoadingState label={t("正在解析项目层级…")} /> : <AgentsEditor chain={chain} snapshot={snapshot} revisions={revisions} busy={loading || saving} canSave={Boolean(snapshot && authorizedRootFor(snapshot.path, authorizedRoots))} canCreate={canCreate} content={draft.current.content} onContentChange={(content) => { draft.current.edit(content, savingRef.current); renderDraft((revision) => revision + 1); }} onOpen={(path) => void openFile(path)} onSave={(content, current) => void save(content, current)} onRestore={(revision) => void restore(revision)} onCreate={() => void createProjectAgents()} />}
+        <ProjectList projects={projects} selectedPath={selectedProject?.canonicalPath ?? null} onSelect={(project) => { void selectProject(project); }} onDiscover={discover} discovering={discovering} blocked={discovering || saving || confirming} />
+        {loading && !chain ? <LoadingState label={t("正在解析项目层级…")} /> : <AgentsEditor chain={chain} snapshot={snapshot} revisions={revisions} busy={loading || saving || confirming} writing={saving} canSave={Boolean(snapshot && authorizedRootFor(snapshot.path, authorizedRoots))} canCreate={canCreate} content={draft.current.content} onContentChange={(content) => { draft.current.edit(content, savingRef.current || actions.current.pending); renderDraft((revision) => revision + 1); }} onOpen={(path) => void openFile(path)} onSave={(content, current) => void save(content, current)} onRestore={(revision) => void restore(revision)} onCreate={() => void createProjectAgents()} />}
       </div>
+      {dialog}
     </div>
   );
 }
@@ -1588,12 +1622,18 @@ export function App() {
   const { locale } = useI18n();
   const navItems = getNavItems();
   const [view, setView] = useState<View>("overview");
-  const navigationGuard = useRef<() => boolean>(() => true);
-  const registerNavigationGuard = useCallback((guard: () => boolean) => {
+  const navigationGuard = useRef<() => Promise<boolean>>(async () => true);
+  const navigationPending = useRef(false);
+  const registerNavigationGuard = useCallback((guard: () => Promise<boolean>) => {
     navigationGuard.current = guard;
-    return () => { if (navigationGuard.current === guard) navigationGuard.current = () => true; };
+    return () => { if (navigationGuard.current === guard) navigationGuard.current = async () => true; };
   }, []);
-  const navigate = useCallback((next: View) => { if (navigationGuard.current()) setView(next); }, []);
+  const navigate = useCallback(async (next: View) => {
+    if (navigationPending.current) return;
+    navigationPending.current = true;
+    try { if (await navigationGuard.current()) setView(next); }
+    finally { navigationPending.current = false; }
+  }, []);
   const [payload, setPayload] = useState<BootstrapPayload | null>(null);
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
   const [updateBusy, setUpdateBusy] = useState<"check" | "install" | null>(null);

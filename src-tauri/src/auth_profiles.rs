@@ -63,7 +63,10 @@ pub struct ImportOutcome {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AuthProfileError {
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(any(
+        not(target_os = "macos"),
+        all(feature = "desktop-qa", debug_assertions)
+    ))]
     #[error("认证档案功能当前仅支持 macOS Keychain。")]
     UnsupportedPlatform,
     #[error("无法访问 macOS Keychain。")]
@@ -133,10 +136,16 @@ impl KeychainBackend for MacKeychain {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(any(
+    not(target_os = "macos"),
+    all(feature = "desktop-qa", debug_assertions)
+))]
 struct UnsupportedKeychain;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(any(
+    not(target_os = "macos"),
+    all(feature = "desktop-qa", debug_assertions)
+))]
 impl KeychainBackend for UnsupportedKeychain {
     fn read(&self, _: &str) -> Result<Option<Zeroizing<Vec<u8>>>> {
         Err(AuthProfileError::UnsupportedPlatform)
@@ -157,6 +166,13 @@ pub struct AuthProfileStore {
 }
 
 impl AuthProfileStore {
+    #[cfg(all(feature = "desktop-qa", debug_assertions))]
+    pub fn disabled_for_desktop_qa() -> Self {
+        Self {
+            backend: Arc::new(UnsupportedKeychain),
+        }
+    }
+
     pub fn load() -> Self {
         #[cfg(target_os = "macos")]
         let backend: Arc<dyn KeychainBackend> = Arc::new(MacKeychain);
