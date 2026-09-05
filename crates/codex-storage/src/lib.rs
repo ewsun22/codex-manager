@@ -6,13 +6,19 @@ use codex_core::{ResumeState, Snapshot, TokenUsage};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::{BTreeSet, HashSet},
+    path::Path,
+};
 
 const MAX_DATABASE_PAGES: u32 = 131_072;
 const DEFAULT_OTEL_EVENT_LIMIT: i64 = 100_000;
 pub const MAX_OTEL_BATCH_EVENTS: usize = 256;
 const MAX_OTEL_ATTRIBUTES_BYTES: usize = 8 * 1024;
 const MAX_OTEL_TEXT_BYTES: usize = 512;
+
+#[cfg(test)]
+mod activity_tests;
 
 pub struct Store {
     conn: Connection,
@@ -59,6 +65,14 @@ pub struct ActivityFilter {
     pub effort: Option<String>,
     pub result: Option<String>,
     pub search: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityFacets {
+    pub models: Vec<String>,
+    pub efforts: Vec<String>,
+    pub revision: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -373,6 +387,10 @@ impl Store {
             13,
             include_str!("../migrations/0013_codex_config_profiles.sql"),
         )?;
+        self.apply_migration(
+            14,
+            include_str!("../migrations/0014_activity_maintenance.sql"),
+        )?;
         self.backfill_logical_fingerprints()?;
         Ok(())
     }
@@ -543,6 +561,7 @@ impl Store {
         let tx = self.conn.transaction()?;
         let namespace = source_namespace(source_path, None);
         persist_snapshot_tx(&tx, source_path, &namespace, snapshot)?;
+        apply_saved_retention_tx(&tx, &namespace)?;
         tx.commit()?;
         Ok(())
     }
@@ -558,6 +577,7 @@ impl Store {
         let namespace = source_namespace(input.path, input.file_identity);
         persist_snapshot_tx(&tx, input.path, &namespace, input.snapshot)?;
         tx.execute("INSERT INTO ingest_files(canonical_path,source_kind,byte_offset,file_identity,updated_at,last_error,resume_state_json,unparsed_events) VALUES(?1,?2,?3,?4,?5,NULL,?6,?7) ON CONFLICT(canonical_path) DO UPDATE SET source_kind=excluded.source_kind,byte_offset=excluded.byte_offset,file_identity=excluded.file_identity,updated_at=excluded.updated_at,last_error=NULL,resume_state_json=excluded.resume_state_json,unparsed_events=excluded.unparsed_events",params![input.path,input.source_kind,input.next_offset,input.file_identity,Utc::now().to_rfc3339(),serde_json::to_string(input.resume_state)?,input.unparsed_events.max(0)])?;
+        apply_saved_retention_tx(&tx, &namespace)?;
         tx.commit()?;
         Ok(())
     }
@@ -577,8 +597,8 @@ impl Store {
     }
 }
 
-fn activity_sql(filter: &ActivityFilter) -> (String, Vec<String>) {
-    let canonical = "WITH raw_turns AS (\
+fn canonical_activity_cte() -> &'static str {
+    "WITH raw_turns AS (\
 SELECT t.*,coalesce(s.public_session_id,t.session_id) AS public_session_id,\
 ROW_NUMBER() OVER (PARTITION BY coalesce(t.logical_fingerprint,'legacy:' || t.session_id || ':' || t.turn_id) \
 ORDER BY CASE WHEN t.result IN ('completed','failed','aborted') THEN 1 ELSE 0 END DESC,\
@@ -587,9 +607,15 @@ FROM turns t JOIN sessions s ON s.session_id=t.session_id),\
 canonical_turns AS (SELECT r.*,CASE WHEN r.result='running' AND (EXISTS(SELECT 1 FROM raw_turns later WHERE later.public_session_id=r.public_session_id AND later.turn_id<>r.turn_id AND coalesce(later.started_at,later.completed_at,'') > coalesce(r.started_at,r.completed_at,'')) OR NOT EXISTS(SELECT 1 FROM sessions source JOIN ingest_files f ON f.canonical_path=source.source_path WHERE source.session_id=r.session_id) OR EXISTS(SELECT 1 FROM sessions source WHERE source.session_id=r.session_id AND lower(replace(source.source_path,char(92),'/')) LIKE '%/archived_sessions/%')) THEN 'unobserved' ELSE r.result END AS canonical_result FROM raw_turns r WHERE r.canonical_rank=1),\
 raw_calls AS (SELECT c.*,coalesce(s.public_session_id,c.session_id) AS public_session_id,ROW_NUMBER() OVER (PARTITION BY coalesce(c.logical_fingerprint,'legacy:' || c.event_key) ORDER BY (c.model IS NOT NULL)+(c.effort IS NOT NULL)+(c.provider IS NOT NULL)+(c.occurred_at IS NOT NULL) DESC,c.event_key) AS canonical_rank FROM model_calls c JOIN sessions s ON s.session_id=c.session_id),\
 canonical_calls AS (SELECT * FROM raw_calls WHERE canonical_rank=1),\
-call_usage AS (SELECT public_session_id,turn_id,sum(input_tokens) AS input_tokens,sum(cached_input_tokens) AS cached_input_tokens,sum(cache_write_input_tokens) AS cache_write_input_tokens,sum(output_tokens) AS output_tokens,sum(reasoning_output_tokens) AS reasoning_output_tokens,sum(total_tokens) AS total_tokens,count(*) AS model_call_count FROM canonical_calls GROUP BY public_session_id,turn_id),\
-activity(id,event_key,source_kind,session_id,turn_id,occurred_at,cwd,model,effort,provider,result,parent_turn_result,activity_kind,timing_scope,model_call_count,duration_ms,first_visible_output_ms,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,input_available,cached_available,cache_write_available,output_available,reasoning_available,total_available,has_model_call,status_code,response_bytes,endpoint,success) AS (";
-    let turn_select = "SELECT 'turn:' || t.public_session_id || ':' || t.turn_id,NULL,'rollout',t.public_session_id,t.turn_id,coalesce(t.completed_at,t.started_at),t.cwd,t.model,t.effort,t.provider,t.canonical_result,NULL,'turn','turn',coalesce(u.model_call_count,0),t.duration_ms,t.first_visible_output_ms,coalesce(u.input_tokens,0),coalesce(u.cached_input_tokens,0),coalesce(u.cache_write_input_tokens,0),coalesce(u.output_tokens,0),coalesce(u.reasoning_output_tokens,0),coalesce(u.total_tokens,0),u.model_call_count IS NOT NULL,u.model_call_count IS NOT NULL,u.model_call_count IS NOT NULL,u.model_call_count IS NOT NULL,u.model_call_count IS NOT NULL,u.model_call_count IS NOT NULL,u.model_call_count IS NOT NULL,NULL,NULL,NULL,NULL FROM canonical_turns t LEFT JOIN call_usage u ON u.public_session_id=t.public_session_id AND u.turn_id=t.turn_id";
+call_usage AS (SELECT public_session_id,turn_id,sum(input_tokens) AS input_tokens,sum(cached_input_tokens) AS cached_input_tokens,sum(cache_write_input_tokens) AS cache_write_input_tokens,sum(output_tokens) AS output_tokens,sum(reasoning_output_tokens) AS reasoning_output_tokens,sum(total_tokens) AS total_tokens,count(*) AS model_call_count FROM canonical_calls GROUP BY public_session_id,turn_id)"
+}
+
+fn activity_sql(filter: &ActivityFilter) -> (String, Vec<String>) {
+    let canonical = format!(
+        "{},activity(id,event_key,source_kind,session_id,turn_id,occurred_at,cwd,model,effort,provider,result,parent_turn_result,activity_kind,timing_scope,model_call_count,duration_ms,first_visible_output_ms,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,input_available,cached_available,cache_write_available,output_available,reasoning_available,total_available,has_model_call,status_code,response_bytes,endpoint,success) AS (",
+        canonical_activity_cte()
+    );
+    let turn_select = "SELECT 'turn:' || t.public_session_id || ':' || t.turn_id,NULL,'rollout',t.public_session_id,t.turn_id,coalesce(t.completed_at,t.started_at),t.cwd,t.model,t.effort,t.provider,t.canonical_result,NULL,'turn','turn',coalesce(u.model_call_count,0),t.duration_ms,t.first_visible_output_ms,coalesce(u.input_tokens,0),coalesce(u.cached_input_tokens,0),coalesce(u.cache_write_input_tokens,0),coalesce(u.output_tokens,0),coalesce(u.reasoning_output_tokens,0),coalesce(u.total_tokens,0),u.model_call_count IS NOT NULL AND t.usage_confidence <> 'unavailable',u.model_call_count IS NOT NULL AND t.usage_confidence <> 'unavailable',u.model_call_count IS NOT NULL AND t.usage_confidence <> 'unavailable',u.model_call_count IS NOT NULL AND t.usage_confidence <> 'unavailable',u.model_call_count IS NOT NULL AND t.usage_confidence <> 'unavailable',u.model_call_count IS NOT NULL AND t.usage_confidence <> 'unavailable',u.model_call_count IS NOT NULL,NULL,NULL,NULL,NULL FROM canonical_turns t LEFT JOIN call_usage u ON u.public_session_id=t.public_session_id AND u.turn_id=t.turn_id";
     let call_select = "SELECT c.event_key,coalesce(c.public_event_key,c.event_key),'rollout',c.public_session_id,c.turn_id,c.occurred_at,t.cwd,coalesce(c.model,t.model),coalesce(c.effort,t.effort),coalesce(c.provider,t.provider),'accounted',t.canonical_result,'modelCall','unavailable',1,NULL,NULL,c.input_tokens,c.cached_input_tokens,c.cache_write_input_tokens,c.output_tokens,c.reasoning_output_tokens,c.total_tokens,1,1,1,1,1,1,1,NULL,NULL,NULL,NULL FROM canonical_calls c LEFT JOIN canonical_turns t ON t.public_session_id=c.public_session_id AND t.turn_id=c.turn_id";
     let otel_select = "SELECT 'otel:' || o.id,o.id,'otel',o.thread_id,o.turn_id,coalesce(o.occurred_at,o.received_at),NULL,o.model,NULL,o.provider,CASE WHEN o.status_code BETWEEN 200 AND 399 THEN 'completed' WHEN o.status_code IS NOT NULL THEN 'failed' WHEN o.success=1 THEN 'completed' WHEN o.success=0 THEN 'failed' ELSE 'unknown' END,NULL,'otelRequest','request',1,o.duration_ms,NULL,coalesce(o.input_tokens,0),coalesce(o.cached_input_tokens,0),coalesce(o.cache_write_input_tokens,0),coalesce(o.output_tokens,0),coalesce(o.reasoning_output_tokens,0),coalesce(o.total_tokens,0),o.input_tokens IS NOT NULL,o.cached_input_tokens IS NOT NULL,o.cache_write_input_tokens IS NOT NULL,o.output_tokens IS NOT NULL,o.reasoning_output_tokens IS NOT NULL,o.total_tokens IS NOT NULL,0,o.status_code,o.response_bytes,o.endpoint,o.success FROM otel_events o WHERE o.signal='logs' AND o.event_name='codex.api_request'";
     let requested_view = filter.view.as_deref().unwrap_or("turns");
@@ -788,6 +814,118 @@ fn delete_source_namespace(tx: &Transaction<'_>, path: &str) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+fn apply_saved_retention_tx(tx: &Transaction<'_>, namespace: &str) -> Result<()> {
+    let cutoff: Option<String> = tx.query_row(
+        "SELECT retention_cutoff FROM activity_maintenance WHERE singleton=1",
+        [],
+        |row| row.get(0),
+    )?;
+    if let Some(cutoff) = cutoff {
+        // Ingestion only needs to check this source. Periodic maintenance
+        // handles the complete database; do not rescan it for every file.
+        prune_retention_tx(tx, &cutoff, Some(namespace))?;
+    }
+    Ok(())
+}
+
+fn prune_retention_tx(
+    tx: &Transaction<'_>,
+    older_than: &str,
+    namespace: Option<&str>,
+) -> Result<usize> {
+    // Only an observed terminal task with a verifiable timestamp can expire.
+    // A missing completion time falls back to the start time. SQLite narrows
+    // candidates across timezone offsets; chrono verifies complete RFC3339
+    // timestamps and compares exact instants, retaining invalid/absent dates.
+    let cutoff = chrono::DateTime::parse_from_rfc3339(older_than)
+        .context("活动保留期截止时间不是有效 RFC3339 时间")?;
+    let source_scope = if namespace.is_some() {
+        " AND session_id IN (SELECT session_id FROM sessions WHERE source_namespace=?2)"
+    } else {
+        ""
+    };
+    let mut values: Vec<&dyn rusqlite::ToSql> = vec![&older_than];
+    if let Some(ref namespace) = namespace {
+        values.push(namespace);
+    }
+    let candidate_sql = format!(
+        "SELECT session_id,turn_id,coalesce(completed_at,started_at) FROM turns
+         WHERE result IN ('completed','failed','aborted')
+           AND julianday(coalesce(completed_at,started_at)) <= julianday(?1){source_scope}"
+    );
+    let mut candidates = tx.prepare(&candidate_sql)?;
+    let mut expired = Vec::new();
+    for row in candidates.query_map(values.as_slice(), |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })? {
+        let (session, turn, timestamp) = row?;
+        if chrono::DateTime::parse_from_rfc3339(&timestamp).is_ok_and(|time| time < cutoff) {
+            expired.push((session, turn));
+        }
+    }
+    let mut delete_timeline =
+        tx.prepare("DELETE FROM timeline_items WHERE session_id=?1 AND turn_id=?2")?;
+    let mut delete_turn = tx.prepare("DELETE FROM turns WHERE session_id=?1 AND turn_id=?2")?;
+    let mut turns = 0_usize;
+    for (session, turn) in expired {
+        delete_timeline.execute(params![session, turn])?;
+        turns += delete_turn.execute(params![session, turn])?;
+    }
+    let unassigned_sql = format!(
+        "SELECT event_key,occurred_at FROM timeline_items WHERE turn_id IS NULL
+         AND julianday(occurred_at) <= julianday(?1){source_scope}"
+    );
+    let mut unassigned = tx.prepare(&unassigned_sql)?;
+    let mut expired_items = Vec::new();
+    for row in unassigned.query_map(values.as_slice(), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })? {
+        let (key, timestamp) = row?;
+        if chrono::DateTime::parse_from_rfc3339(&timestamp).is_ok_and(|time| time < cutoff) {
+            expired_items.push(key);
+        }
+    }
+    let mut delete_item = tx.prepare("DELETE FROM timeline_items WHERE event_key=?1")?;
+    for key in expired_items {
+        delete_item.execute(params![key])?;
+    }
+    let orphan_scope = if namespace.is_some() {
+        " AND source_namespace=?1"
+    } else {
+        ""
+    };
+    let orphan_sql = format!(
+        "DELETE FROM sessions
+         WHERE NOT EXISTS(SELECT 1 FROM turns WHERE turns.session_id=sessions.session_id)
+           AND NOT EXISTS(SELECT 1 FROM timeline_items WHERE timeline_items.session_id=sessions.session_id){orphan_scope}"
+    );
+    if let Some(namespace) = namespace {
+        tx.execute(&orphan_sql, params![namespace])?;
+    } else {
+        tx.execute(&orphan_sql, [])?;
+    }
+    let otel = if namespace.is_none() {
+        tx.execute(
+            "DELETE FROM otel_events WHERE julianday(received_at) < julianday(?1)",
+            params![older_than],
+        )?
+    } else {
+        0
+    };
+    let removed = turns.checked_add(otel).context("活动保留期清理计数溢出")?;
+    if removed > 0 {
+        tx.execute(
+            "UPDATE activity_maintenance SET deletion_revision=deletion_revision+1 WHERE singleton=1",
+            [],
+        )?;
+    }
+    Ok(removed)
 }
 
 fn ensure_usage(usage: &TokenUsage, context: &str) -> Result<()> {
@@ -1063,6 +1201,42 @@ impl Store {
             })
         })
     }
+    /// Return all observed model/effort choices for a view, independent of the
+    /// current page, search or selected filters. Values and revision are read
+    /// in one SQLite snapshot so the UI can invalidate them consistently.
+    pub fn activity_facets(&self, view: Option<&str>) -> Result<ActivityFacets> {
+        self.read_snapshot(|conn| {
+            let filter = ActivityFilter {
+                view: view.map(str::to_owned),
+                ..ActivityFilter::default()
+            };
+            let (activity, values) = activity_sql(&filter);
+            debug_assert!(values.is_empty());
+            let sql = format!("SELECT DISTINCT model,effort FROM ({activity})");
+            let mut statement = conn.prepare(&sql)?;
+            let mut models = BTreeSet::new();
+            let mut efforts = BTreeSet::new();
+            for row in statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            })? {
+                let (model, effort) = row?;
+                if let Some(model) = model.filter(|value| !value.trim().is_empty()) {
+                    models.insert(model);
+                }
+                if let Some(effort) = effort.filter(|value| !value.trim().is_empty()) {
+                    efforts.insert(effort);
+                }
+            }
+            Ok(ActivityFacets {
+                models: models.into_iter().collect(),
+                efforts: efforts.into_iter().collect(),
+                revision: self.activity_revision_on(conn)?,
+            })
+        })
+    }
     fn query_activity_on(
         &self,
         conn: &Connection,
@@ -1116,7 +1290,12 @@ impl Store {
             [],
             |row| row.get::<_, i64>(0),
         )?;
-        Ok(format!("rollout:{rollout}|otel:{otel}"))
+        let deletions: i64 = conn.query_row(
+            "SELECT deletion_revision FROM activity_maintenance WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(format!("rollout:{rollout}|otel:{otel}|deleted:{deletions}"))
     }
     pub fn activity_totals(&self) -> Result<(i64, i64, i64)> {
         self.activity_totals_on(&self.conn)
@@ -1136,7 +1315,11 @@ impl Store {
     fn cost_inputs_on(&self, conn: &Connection) -> Result<Vec<CostInput>> {
         // Keep one row per model call: long-context pricing is determined per
         // request and cannot be reconstructed from a provider/model aggregate.
-        let mut statement=conn.prepare("SELECT provider,model,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens FROM (SELECT c.*,ROW_NUMBER() OVER(PARTITION BY coalesce(c.logical_fingerprint,'legacy:' || c.event_key) ORDER BY (c.model IS NOT NULL)+(c.effort IS NOT NULL)+(c.provider IS NOT NULL)+(c.occurred_at IS NOT NULL) DESC,c.event_key) AS canonical_rank FROM model_calls c) WHERE canonical_rank=1 ORDER BY occurred_at,event_key")?;
+        let sql = format!(
+            "{} SELECT coalesce(c.provider,t.provider),coalesce(c.model,t.model),c.input_tokens,c.cached_input_tokens,c.cache_write_input_tokens,c.output_tokens,c.reasoning_output_tokens FROM canonical_calls c LEFT JOIN canonical_turns t ON t.public_session_id=c.public_session_id AND t.turn_id=c.turn_id ORDER BY c.occurred_at,c.event_key",
+            canonical_activity_cte(),
+        );
+        let mut statement = conn.prepare(&sql)?;
         Ok(statement
             .query_map([], |row| {
                 let input: i64 = row.get(2)?;
@@ -1191,21 +1374,22 @@ impl Store {
             })?
             .collect::<rusqlite::Result<_>>()?)
     }
+    /// Save the current retention boundary and expire activity atomically.
+    /// Later ingestion applies the same boundary before committing, while its
+    /// file offset and parser resume state remain available for new events.
     pub fn prune_retention(&self, older_than: &str) -> Result<usize> {
-        let turns = self.conn.execute(
-            "DELETE FROM turns WHERE COALESCE(completed_at,started_at,'') < ?1",
+        chrono::DateTime::parse_from_rfc3339(older_than)
+            .context("活动保留期截止时间不是有效 RFC3339 时间")?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE activity_maintenance SET retention_cutoff=?1 WHERE singleton=1 AND retention_cutoff IS NOT ?1",
             params![older_than],
         )?;
-        self.conn.execute(
-            "DELETE FROM sessions WHERE NOT EXISTS(SELECT 1 FROM turns WHERE turns.session_id=sessions.session_id)",
-            [],
-        )?;
-        let otel = self.conn.execute(
-            "DELETE FROM otel_events WHERE received_at < ?1",
-            params![older_than],
-        )?;
-        Ok(turns + otel)
+        let removed = prune_retention_tx(&tx, older_than, None)?;
+        tx.commit()?;
+        Ok(removed)
     }
+
     pub fn trim_revisions(&self, path: &str, keep: i64) -> Result<usize> {
         let keep = keep.clamp(1, 1000);
         Ok(self.conn.execute("DELETE FROM agents_revisions WHERE path=?1 AND id IN (SELECT id FROM agents_revisions WHERE path=?1 ORDER BY created_at DESC LIMIT -1 OFFSET ?2)",params![path,keep])?)
@@ -1638,7 +1822,7 @@ mod tests {
             total_tokens: total,
         }
     }
-    fn snapshot(
+    pub(super) fn snapshot(
         session_id: &str,
         turn_id: &str,
         cwd: &str,
@@ -1697,7 +1881,7 @@ mod tests {
         }
     }
 
-    fn otel_event<'a>(id: &'a str, occurred_at: Option<&'a str>) -> OtelMetadata<'a> {
+    pub(super) fn otel_event<'a>(id: &'a str, occurred_at: Option<&'a str>) -> OtelMetadata<'a> {
         OtelMetadata {
             id,
             signal: "logs",

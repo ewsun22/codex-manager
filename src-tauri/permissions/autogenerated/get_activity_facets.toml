@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-activity-facets"
+description = "Enables the get_activity_facets command without any pre-configured scope."
+commands.allow = ["get_activity_facets"]
+
+[[permission]]
+identifier = "deny-get-activity-facets"
+description = "Denies the get_activity_facets command without any pre-configured scope."
+commands.deny = ["get_activity_facets"]

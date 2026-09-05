@@ -41,26 +41,6 @@ const globalAgentsPath = "/Users/example/.codex/AGENTS.md";
 const projectAgentsPath = `${projectPath}/AGENTS.md`;
 const activityRevision = "demo-activity-60";
 
-const summary: DashboardSummary = {
-  activityRevision,
-  rangeLabel: "最近 24 小时",
-  records: 60,
-  modelCalls: 60,
-  successful: 45,
-  failed: 15,
-  inputTokens: 7_642_600,
-  cachedInputTokens: 7_422_180,
-  cacheWriteInputTokens: 75_904,
-  outputTokens: 10_912,
-  reasoningOutputTokens: 1_305,
-  equivalentCostUsd: 7.8642,
-  pricedCalls: 57,
-  totalCostCalls: 60,
-  pricedTokens: 7_645_920,
-  observedTokens: 7_730_721,
-  unpricedCalls: 3,
-};
-
 const activitySeed: ActivityRecord[] = [
   {
     id: "turn-00042",
@@ -215,6 +195,28 @@ const activity: ActivityRecord[] = Array.from({ length: 60 }, (_, index) => {
     statusCode: isModelCall ? null : seed.statusCode,
   };
 });
+
+// Keep the first demo page and task counters on the same semantic view as native.
+const demoTurns = activity.filter((record) => record.activityKind === "turn");
+const summary: DashboardSummary = {
+  activityRevision,
+  rangeLabel: "最近 24 小时",
+  records: demoTurns.length,
+  modelCalls: demoTurns.reduce((count, record) => count + record.modelCallCount, 0),
+  successful: demoTurns.filter((record) => record.result === "success").length,
+  failed: demoTurns.filter((record) => record.result === "failure").length,
+  inputTokens: 7_642_600,
+  cachedInputTokens: 7_422_180,
+  cacheWriteInputTokens: 75_904,
+  outputTokens: 10_912,
+  reasoningOutputTokens: 1_305,
+  equivalentCostUsd: 7.8642,
+  pricedCalls: 57,
+  totalCostCalls: 60,
+  pricedTokens: 7_645_920,
+  observedTokens: 7_730_721,
+  unpricedCalls: 3,
+};
 
 const projects: ProjectSummary[] = [
   {
@@ -615,7 +617,7 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
     case COMMANDS.bootstrap:
       return {
         summary,
-        activity: page(activity),
+        activity: page(filterActivity({ view: "turns" })),
         projects,
         sources,
         pricingRules,
@@ -631,6 +633,14 @@ export async function invokeDemo<T>(command: string, args: Record<string, unknow
       } satisfies BootstrapPayload as T;
     case COMMANDS.getDashboard:
       return summary as T;
+    case COMMANDS.getActivityFacets: {
+      const records = activity.filter((record) => args.view === "modelCalls" ? record.activityKind !== "turn" : record.activityKind === "turn");
+      return {
+        models: [...new Set(records.flatMap((record) => record.model.value ? [record.model.value] : []))].sort(),
+        efforts: [...new Set(records.flatMap((record) => record.effort.value ? [record.effort.value] : []))].sort(),
+        revision: activityRevision,
+      } as T;
+    }
     case COMMANDS.listActivity:
       if (query?.revisionOnly) {
         return {

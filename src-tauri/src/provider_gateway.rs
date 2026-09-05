@@ -462,12 +462,20 @@ impl ServerHandle {
             },
         )
     }
-    pub async fn stop(mut self) -> Result<(), String> {
+    pub async fn stop(self) -> Result<(), String> {
+        // Process waits, checkpoint writes and Keychain access must never block
+        // the UI thread or an async runtime worker. Keep their ordering intact.
+        tauri::async_runtime::spawn_blocking(move || self.stop_blocking())
+            .await
+            .map_err(|_| "CLIProxyAPI 停止任务异常结束。".to_string())?
+    }
+
+    fn stop_blocking(mut self) -> Result<(), String> {
         let sidecar = self
             .sidecar
             .take()
             .ok_or_else(|| "CLIProxyAPI 进程状态不可用。".to_string())?;
-        stop_sidecar(sidecar).await?;
+        stop_sidecar(sidecar)?;
         self.checkpoint_proxy_auth()
     }
 
@@ -500,6 +508,13 @@ impl Drop for ServerHandle {
 /// lookup: a new upstream CLIProxyAPI release must be reviewed in this project
 /// before its version and per-platform digest are changed here.
 pub async fn check_latest_core(data_dir: &Path) -> Result<(), String> {
+    let data_dir = data_dir.to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || check_latest_core_blocking(&data_dir))
+        .await
+        .map_err(|_| "CLIProxyAPI 内核检查任务异常结束。".to_string())?
+}
+
+fn check_latest_core_blocking(data_dir: &Path) -> Result<(), String> {
     let mut metadata = read_core_metadata(data_dir)?;
     metadata.latest_version = Some(PINNED_CORE_VERSION.into());
     write_core_metadata(data_dir, &metadata)
@@ -508,6 +523,17 @@ pub async fn check_latest_core(data_dir: &Path) -> Result<(), String> {
 /// Installs the reviewed prebuilt CLIProxyAPI baseline. CLIProxyAPI source code
 /// is never downloaded, built or linked into the desktop application.
 pub async fn install_latest_core(data_dir: &Path) -> Result<(), String> {
+    let data_dir = data_dir.to_path_buf();
+    // The installation transaction mixes network I/O with archive extraction,
+    // hashing and atomic filesystem recovery. Isolate the complete transaction.
+    tauri::async_runtime::spawn_blocking(move || {
+        tauri::async_runtime::block_on(install_latest_core_inner(&data_dir))
+    })
+    .await
+    .map_err(|_| "CLIProxyAPI 内核安装任务异常结束。".to_string())?
+}
+
+async fn install_latest_core_inner(data_dir: &Path) -> Result<(), String> {
     let root = core_root(data_dir);
     ensure_private_dir(&root)?;
     recover_incomplete_core_rollback(&root)?;
@@ -521,6 +547,19 @@ pub async fn install_latest_core(data_dir: &Path) -> Result<(), String> {
 }
 
 pub async fn start_oauth(
+    port: u16,
+    data_dir: &Path,
+    proxy_auth_store: Arc<ProxyAuthStore>,
+) -> Result<ServerHandle, String> {
+    let data_dir = data_dir.to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        tauri::async_runtime::block_on(start_oauth_inner(port, &data_dir, proxy_auth_store))
+    })
+    .await
+    .map_err(|_| "CLIProxyAPI 启动任务异常结束。".to_string())?
+}
+
+async fn start_oauth_inner(
     port: u16,
     data_dir: &Path,
     proxy_auth_store: Arc<ProxyAuthStore>,
@@ -539,6 +578,10 @@ pub async fn start_oauth(
     // Holding the port before touching recovery evidence proves that no
     // orphaned CLIProxyAPI process is still serving/writing the auth-dir.
     let port_guard = reserve_loopback_port(port)?;
+    // Status reads can run concurrently with startup/shutdown. Only the
+    // serialized startup path may clean stale configuration directories, after
+    // the loopback reservation proves that the previous server is not serving.
+    cleanup_stale_runtime(data_dir);
     let auth_parent = proxy_auth_runtime_dir(data_dir);
     let materialization = match proxy_auth_store.materialize_enabled_for_runtime(&auth_parent) {
         Ok(value) => value,
@@ -1294,11 +1337,25 @@ async fn start_oauth_sidecar(
 }
 
 async fn wait_for_health(handle: &mut ServerHandle) -> Result<(), String> {
+    wait_for_health_with_timeout(handle, CORE_HEALTH_TIMEOUT).await
+}
+
+async fn wait_for_health_with_timeout(
+    handle: &mut ServerHandle,
+    timeout: Duration,
+) -> Result<(), String> {
+    tokio::time::timeout(timeout, poll_health(handle))
+        .await
+        .map_err(|_| "CLIProxyAPI 内核健康检查超时。".to_string())?
+}
+
+async fn poll_health(handle: &mut ServerHandle) -> Result<(), String> {
     let client = Client::builder()
         .no_proxy()
+        .redirect(Policy::none())
+        .timeout(Duration::from_millis(500))
         .build()
         .map_err(|_| "创建 CLIProxyAPI 健康检查客户端失败。".to_string())?;
-    let deadline = tokio::time::Instant::now() + CORE_HEALTH_TIMEOUT;
     loop {
         if handle.sidecar.as_ref().is_some_and(|sidecar| {
             sidecar
@@ -1334,14 +1391,11 @@ async fn wait_for_health(handle: &mut ServerHandle) -> Result<(), String> {
             }
             return Ok(());
         }
-        if tokio::time::Instant::now() >= deadline {
-            return Err("CLIProxyAPI 内核健康检查超时。".into());
-        }
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
 }
 
-async fn stop_sidecar(sidecar: SidecarProcess) -> Result<(), String> {
+fn stop_sidecar(sidecar: SidecarProcess) -> Result<(), String> {
     let mut child = sidecar
         .child
         .lock()
@@ -1406,7 +1460,9 @@ struct CoreStatusFields {
 }
 
 fn status_from_core(data_dir: &Path, port: u16, mut fields: CoreStatusFields) -> GatewayStatus {
-    let metadata = match read_core_metadata(data_dir) {
+    // A polling read must not recover journals owned by an active install.
+    // Recovery belongs exclusively to serialized start/install operations.
+    let metadata = match read_core_metadata_from_root(&core_root(data_dir)) {
         Ok(metadata) => metadata,
         Err(error) => {
             fields.state = "error";
@@ -1448,7 +1504,6 @@ pub fn stopped_status_with_core(
     last_error: Option<String>,
     installing: bool,
 ) -> GatewayStatus {
-    cleanup_stale_runtime(data_dir);
     status_from_core(
         data_dir,
         port,
@@ -1678,10 +1733,133 @@ mod sidecar_tests {
         assert!(!runtime.exists());
     }
 
+    #[cfg(unix)]
+    fn fixture_live_handle(directory: &Path, port: u16) -> ServerHandle {
+        let runtime = directory.join("runtime");
+        ensure_private_dir(&runtime).unwrap();
+        let child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        ServerHandle {
+            port,
+            source: "fixture".into(),
+            provider_id: None,
+            provider_name: "fixture".into(),
+            started_at: Utc::now().to_rfc3339(),
+            endpoint: format!("http://127.0.0.1:{port}/v1"),
+            token: Zeroizing::new("artificial-test-token".into()),
+            sidecar: Some(SidecarProcess {
+                child: Mutex::new(child),
+                data_dir: directory.to_path_buf(),
+                runtime_dir: runtime,
+            }),
+            proxy_auth_store: None,
+            proxy_auth_runtime: None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn health_deadline_includes_a_server_that_accepts_but_never_responds() {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (_connection, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let mut handle = fixture_live_handle(directory.path(), port);
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(2),
+            wait_for_health_with_timeout(&mut handle, Duration::from_millis(150)),
+        )
+        .await
+        .expect("health deadline must include the pending HTTP request");
+        assert!(outcome.unwrap_err().contains("健康检查超时"));
+        handle.stop().await.unwrap();
+        server.abort();
+        let _ = server.await;
+        assert!(!directory.path().join("runtime").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn health_check_rejects_an_exited_managed_child() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut handle = fixture_live_handle(directory.path(), 8317);
+        {
+            let mut child = handle.sidecar.as_ref().unwrap().child.lock().unwrap();
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+        let error = wait_for_health_with_timeout(&mut handle, Duration::from_millis(150))
+            .await
+            .unwrap_err();
+        assert!(error.contains("异常退出"));
+        handle.stop().await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn stopping_a_stubborn_child_does_not_block_async_timers() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut handle = fixture_live_handle(directory.path(), 8317);
+        let sidecar = handle.sidecar.as_mut().unwrap();
+        let old = sidecar.child.get_mut().unwrap();
+        old.kill().unwrap();
+        old.wait().unwrap();
+        // exec preserves ignored SIGTERM, so only the owned sleep child remains.
+        let ready = directory.path().join("ready");
+        *old = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("trap '' TERM; touch \"$1\"; exec /bin/sleep 30")
+            .arg("fixture")
+            .arg(&ready)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while !ready.exists() {
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let started = tokio::time::Instant::now();
+        let stopping = handle.stop();
+        let timer = async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "child wait blocked the async worker"
+            );
+        };
+        let (result, ()) = tokio::join!(stopping, timer);
+        result.unwrap();
+        assert!(started.elapsed() >= CORE_STOP_TIMEOUT);
+        assert!(!directory.path().join("runtime").exists());
+    }
+
     #[test]
     fn archive_paths_fail_closed() {
         assert!(safe_archive_path(Path::new("../escape")).is_err());
         assert!(safe_archive_path(Path::new("/absolute")).is_err());
+    }
+
+    #[test]
+    fn status_read_never_removes_runtime_owned_by_an_inflight_transition() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = runtime_dir(directory.path()).join("session-fixture");
+        ensure_private_dir(&runtime).unwrap();
+        let config = runtime.join("config.yaml");
+        fs::write(&config, b"artificial-config").unwrap();
+        let status = stopped_status_with_core(directory.path(), 8317, None, false);
+        assert_eq!(status.state, "stopped");
+        assert_eq!(fs::read(&config).unwrap(), b"artificial-config");
     }
 
     #[test]
@@ -1807,6 +1985,20 @@ mod sidecar_tests {
             },
         )
         .unwrap();
+
+        let journal_before = fs::read(install_journal_path(&root)).unwrap();
+        let metadata_before = fs::read(metadata_path(directory.path())).unwrap();
+        let _ = stopped_status_with_core(directory.path(), 8317, None, true);
+        assert_eq!(
+            fs::read(install_journal_path(&root)).unwrap(),
+            journal_before
+        );
+        assert_eq!(
+            fs::read(metadata_path(directory.path())).unwrap(),
+            metadata_before
+        );
+        assert_eq!(fs::read(core.join("new-marker")).unwrap(), b"new");
+        assert_eq!(fs::read(backup.join("old-marker")).unwrap(), b"old");
 
         recover_incomplete_core_install(&root).unwrap();
 

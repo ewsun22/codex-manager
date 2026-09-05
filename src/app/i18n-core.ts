@@ -35,6 +35,15 @@ let currentLocale: Locale = typeof window === "undefined" ? "zh-CN" : resolveLoc
 
 /** Chinese source copy is the stable message key for this two-locale catalog. */
 const englishCatalog: Record<string, string> = {
+  "账户状态尚未复核，请手动刷新。": "Account status has not yet been verified. Refresh it manually.",
+  "正在保存 AGENTS 修改，请等待完成后再离开。": "AGENTS changes are being saved. Wait for completion before leaving.",
+  "AGENTS 有未保存修改。放弃这些修改并继续？": "AGENTS has unsaved changes. Discard them and continue?",
+  "设置已保存到本机。": "Settings saved locally.",
+  "筛选选项读取失败：": "Filter options could not be loaded: ",
+  "本地数据刷新失败，当前显示上次数据：": "Local data refresh failed; showing the previous data: ",
+  "代理状态刷新失败，当前显示上次数据：": "Proxy status refresh failed; showing the previous data: ",
+  "状态确认：": "Status checked: ",
+  " 状态刷新失败：": " Status refresh failed: ",
   "总览": "Overview", "活动记录": "Activity", "项目与 AGENTS": "Projects & AGENTS", "Codex 配置": "Codex Config",
   "本地代理": "Local Proxy", "官方订阅": "Official Subscription", "价格目录": "Pricing Catalog", "设置": "Settings",
   "采集与使用概览": "Usage and collection overview", "每次模型调用的元数据": "Metadata for each model call",

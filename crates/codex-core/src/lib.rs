@@ -409,30 +409,20 @@ impl RolloutNormalizer {
         let id = val_str(p, "turn_id").or_else(|| self.current_turn_id.clone());
         let Some(id) = id else { return };
         self.current_turn_id = Some(id.clone());
-        let (model, effort, provider) = {
-            let turn = self.turn(&id);
-            if let Some(v) = val_str(p, "model") {
-                turn.model = Some(v)
-            }
-            if let Some(v) = val_str(p, "effort") {
-                turn.effort = Some(v)
-            }
-            if let Some(v) = val_str(p, "cwd") {
-                turn.cwd = Some(v)
-            }
-            (
-                turn.model.clone(),
-                turn.effort.clone(),
-                turn.provider.clone(),
-            )
-        };
-        for call in &mut self.model_calls {
-            if call.turn_id == id {
-                call.model = model.clone();
-                call.effort = effort.clone();
-                call.provider = provider.clone();
-            }
+        let turn = self.turn(&id);
+        if let Some(v) = val_str(p, "model") {
+            turn.model = Some(v)
         }
+        if let Some(v) = val_str(p, "effort") {
+            turn.effort = Some(v)
+        }
+        if let Some(v) = val_str(p, "cwd") {
+            turn.cwd = Some(v)
+        }
+        // A call keeps the context known when it occurred. Retrospectively
+        // changing only this batch would make enrichment depend on checkpoint
+        // boundaries, and could overwrite an earlier call's explicit model.
+        // Storage resolves missing call fields against the canonical turn.
         self.dirty_turns.insert(id);
     }
     fn parse_item(

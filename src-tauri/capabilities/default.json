@@ -5,9 +5,11 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-destroy",
     "allow-bootstrap",
     "allow-get-dashboard",
     "allow-list-activity",
+    "allow-get-activity-facets",
     "allow-list-projects",
     "allow-discover-projects",
     "allow-get-agents-chain",

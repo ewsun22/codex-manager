@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { commitAndRefresh, safeErrorMessage } from "../src/app/operations.ts";
 import { invokeDemo } from "../src/app/demo.ts";
 import {
   COMMANDS,
@@ -124,7 +125,7 @@ test("两个产品页拆分本地代理与 Codex 配置的信任边界", () => {
   assert.match(configSource, /打开官方订阅/);
   assert.match(shell, /id: "config", label: t\("Codex 配置"\)/);
   assert.match(shell, /id: "gateway", label: t\("本地代理"\)/);
-  assert.match(shell, /onOpenOfficialSubscription=\{\(\) => setView\("oauth"\)\}/);
+  assert.match(shell, /onOpenOfficialSubscription=\{\(\) => navigate\("oauth"\)\}/);
 });
 
 test("代理 OAuth DTO 与 Codex 配置快照不回传 token 或原始认证文件", async () => {
@@ -152,7 +153,7 @@ test("代理 OAuth 导入契约允许 WebView 省略标签并处理空结果", a
   assert.match(command, /\.import\(&source, label\.as_deref\(\)\)/);
   assert.match(proxySource, /ProxyAuthImportOutcome \| null/);
   assert.match(proxySource, /if \(!outcome\)/);
-  assert.match(proxySource, /typeof error === "string"/);
+  assert.equal(safeErrorMessage("人工构造的认证文件读取错误"), "人工构造的认证文件读取错误");
 
   const imported = await invokeDemo<{ profile: { label: string }; action: string }>(
     COMMANDS.importProxyAuthProfile,
@@ -180,15 +181,19 @@ test("首页代理快捷控制仅复制 endpoint，支持可访问的启停状�
   assert.doesNotMatch(source, /全局提示词|插件与市场|会话管理/);
 });
 
-test("停止本地代理后重新读取 OAuth checkpoint 状态", () => {
-  const source = readFileSync(new URL("../src/app/codex-gateway.tsx", import.meta.url), "utf8");
-  const start = source.lastIndexOf("const stopGateway = async");
-  const stopGateway = source.slice(start, source.indexOf("\n\n  return", start));
-  const stop = stopGateway.indexOf("await invokeBackend<CodexGatewayStatus>(COMMANDS.stopCodexGateway)");
-  const keepStoppedStatus = stopGateway.indexOf("setStatus(nextStatus)");
-  const refreshCheckpoint = stopGateway.indexOf("await refresh()");
-
-  assert.ok(stop >= 0 && stop < keepStoppedStatus && keepStoppedStatus < refreshCheckpoint);
+test("停止成功后先发布 stopped 状态，checkpoint 刷新失败不会误报停止失败", async () => {
+  const events: string[] = [];
+  const notice = await commitAndRefresh(
+    async () => { events.push("stop"); return { state: "stopped" }; },
+    (status) => { events.push(status.state); },
+    "代理已停止。",
+    async () => { events.push("checkpoint"); throw "checkpoint read unavailable"; },
+    "info",
+  );
+  assert.deepEqual(events, ["stop", "stopped", "checkpoint"]);
+  assert.equal(notice.tone, "info");
+  assert.match(notice.message, /代理已停止/);
+  assert.match(notice.message, /checkpoint read unavailable/);
 });
 
 test("CLIProxyAPI 内核版本与桌面应用独立检查和更新", async () => {

@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { invokeBackend, isDesktopRuntime } from "./app/client.ts";
+import { AgentsDraft } from "./app/agents-draft.ts";
+import { facetOptions, queryForView } from "./app/activity-filters.ts";
+import { LatestRequest, refreshAfterCommit, safeErrorMessage } from "./app/operations.ts";
 import { preferredAgentsFile } from "./app/agents.ts";
 import { CodexGatewayQuickControl, CodexGatewayView } from "./app/codex-gateway.tsx";
 import { CodexConfigView } from "./app/codex-config.tsx";
@@ -24,6 +27,7 @@ import {
 } from "./app/format.ts";
 import {
   COMMANDS,
+  type ActivityFacets,
   type ActivityPage,
   type ActivityQuery,
   type ActivityRecord,
@@ -87,16 +91,12 @@ function resultLabel(result: ActivityRecord["result"]): string {
   }[result];
 }
 
-function uniqueStrings(values: Array<string | null>): string[] {
-  return [...new Set(values.filter((value): value is string => Boolean(value)))].sort();
-}
-
 function activityQueryKey(query: ActivityQuery): string {
   return JSON.stringify(query);
 }
 
 function appError(error: unknown): string {
-  return error instanceof Error ? error.message : t("操作未完成，请查看本地采集状态后重试。");
+  return safeErrorMessage(error);
 }
 
 function authorizedRootFor(path: string, roots: string[]): string | null {
@@ -302,19 +302,19 @@ function Overview({ payload, onNavigate }: { payload: BootstrapPayload; onNaviga
 
 function ActivityFilters({
   query,
-  records,
+  facets,
   projects,
   onChange,
   onReset,
 }: {
   query: ActivityQuery;
-  records: ActivityRecord[];
+  facets: ActivityFacets | null;
   projects: ProjectSummary[];
   onChange: (next: ActivityQuery) => void;
   onReset: () => void;
 }) {
-  const models = uniqueStrings(records.map((record) => record.model.value));
-  const efforts = uniqueStrings(records.map((record) => record.effort.value));
+  const models = facetOptions(facets?.models ?? [], query.model);
+  const efforts = facetOptions(facets?.efforts ?? [], query.effort);
   return (
     <form className="filters" onSubmit={(event) => event.preventDefault()} aria-label={t("活动记录筛选")}>
       <label>
@@ -530,6 +530,9 @@ function ActivityView({
   const [query, setQuery] = useState<ActivityQuery>({ limit: 50, view: "turns" });
   const [page, setPage] = useState<ActivityPage>(initial);
   const [selected, setSelected] = useState<ActivityRecord | null>(null);
+  const [facets, setFacets] = useState<ActivityFacets | null>(null);
+  const [facetsError, setFacetsError] = useState<string | null>(null);
+  const facetRequest = useRef(new LatestRequest());
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
@@ -548,6 +551,15 @@ function ActivityView({
   const modelCallsTabRef = useRef<HTMLButtonElement>(null);
 
   queryRef.current = query;
+
+  useEffect(() => {
+    const request = facetRequest.current;
+    void request.run(
+      () => invokeBackend<ActivityFacets>(COMMANDS.getActivityFacets, { view: query.view ?? "turns" }),
+      (next) => { setFacets(next); setFacetsError(null); },
+    ).then((result) => { if (result.status === "failed") setFacetsError(tt`筛选选项读取失败：${appError(result.error)}`); });
+    return () => request.invalidate();
+  }, [query.view, page.revision, fullRefreshRevision]);
 
   const requestLoad = useCallback((nextQuery: ActivityQuery, blocking: boolean, countTotal = blocking) => {
     const request = { id: ++latestLoadId.current, query: nextQuery, blocking, countTotal };
@@ -659,7 +671,7 @@ function ActivityView({
           : null;
     if (!nextView) return;
     event.preventDefault();
-    updateQuery({ ...query, view: nextView });
+    updateQuery(queryForView(query, nextView));
     window.requestAnimationFrame(() => {
       (nextView === "turns" ? turnTabRef : modelCallsTabRef).current?.focus();
     });
@@ -697,16 +709,17 @@ function ActivityView({
     <div className="view-content">
       <SectionHeader title={t("活动记录")} subtitle={t("默认按任务汇总展示真实状态和任务级耗时；模型交互保留 token 结算与 OTel 请求，不把任务状态或耗时伪造为调用结果。")} />
       <div className="activity-view-tabs" role="tablist" aria-label={t("活动记录视图")}>
-        <button ref={turnTabRef} type="button" role="tab" aria-selected={(query.view ?? "turns") === "turns"} tabIndex={(query.view ?? "turns") === "turns" ? 0 : -1} className={(query.view ?? "turns") === "turns" ? "is-active" : ""} onClick={() => updateQuery({ ...query, view: "turns" })} onKeyDown={handleViewTabKeyDown}>{t("任务汇总")}</button>
-        <button ref={modelCallsTabRef} type="button" role="tab" aria-selected={query.view === "modelCalls"} tabIndex={query.view === "modelCalls" ? 0 : -1} className={query.view === "modelCalls" ? "is-active" : ""} onClick={() => updateQuery({ ...query, view: "modelCalls" })} onKeyDown={handleViewTabKeyDown}>{t("模型交互")}</button>
+        <button ref={turnTabRef} type="button" role="tab" aria-selected={(query.view ?? "turns") === "turns"} tabIndex={(query.view ?? "turns") === "turns" ? 0 : -1} className={(query.view ?? "turns") === "turns" ? "is-active" : ""} onClick={() => updateQuery(queryForView(query, "turns"))} onKeyDown={handleViewTabKeyDown}>{t("任务汇总")}</button>
+        <button ref={modelCallsTabRef} type="button" role="tab" aria-selected={query.view === "modelCalls"} tabIndex={query.view === "modelCalls" ? 0 : -1} className={query.view === "modelCalls" ? "is-active" : ""} onClick={() => updateQuery(queryForView(query, "modelCalls"))} onKeyDown={handleViewTabKeyDown}>{t("模型交互")}</button>
       </div>
       <ActivityFilters
         query={query}
-        records={page.items}
+        facets={facets}
         projects={projects}
         onChange={updateQuery}
         onReset={() => { setCursorHistory([]); setQuery({ limit: 50, view: query.view ?? "turns" }); }}
       />
+      {facetsError ? <InlineNotice notice={{ tone: "error", message: facetsError }} onClose={() => setFacetsError(null)} /> : null}
       <section className="panel table-panel" aria-labelledby="activity-table-heading">
         <div className="panel-title-row">
           <div>
@@ -809,6 +822,8 @@ function AgentsEditor({
   onSave,
   onRestore,
   onCreate,
+  content,
+  onContentChange,
 }: {
   chain: AgentsChain | null;
   snapshot: AgentsFileSnapshot | null;
@@ -820,20 +835,15 @@ function AgentsEditor({
   onSave: (content: string, snapshot: AgentsFileSnapshot) => void;
   onRestore: (revision: AgentsRevision) => void;
   onCreate: () => void;
+  content: string;
+  onContentChange: (content: string) => void;
 }) {
-  const [content, setContent] = useState("");
-  const [baseHash, setBaseHash] = useState<string | null>(null);
-
-  useEffect(() => {
-    setContent(snapshot?.content ?? "");
-    setBaseHash(snapshot?.sha256 ?? null);
-  }, [snapshot]);
 
   if (!chain) {
     return <section className="panel agents-editor-panel"><EmptyState title={t("请选择一个项目")} detail={t("选择项目后会解析当前工作目录的 AGENTS 层级。")} /></section>;
   }
 
-  const changed = Boolean(snapshot && baseHash === snapshot.sha256 && content !== snapshot.content);
+  const changed = Boolean(snapshot && content !== snapshot.content);
   return (
     <section className="panel agents-editor-panel" aria-labelledby="agents-editor-heading">
       <div className="panel-title-row">
@@ -882,13 +892,13 @@ function AgentsEditor({
                 id="agents-content"
                 className="agents-textarea"
                 value={content}
-                onChange={(event) => setContent(event.target.value)}
+                onChange={(event) => onContentChange(event.target.value)}
                 spellCheck={false}
-                readOnly={!snapshot.writable}
+                readOnly={!snapshot.writable || busy}
               />
               <div className="editor-actions">
                 <span className={changed ? "changed-indicator" : "muted"}>{changed ? t("存在未保存修改") : t("已与磁盘快照一致")}</span>
-                <button type="button" className="button button-secondary" onClick={() => setContent(snapshot.content)} disabled={!changed || busy}>{t("放弃修改")}</button>
+                <button type="button" className="button button-secondary" onClick={() => onContentChange(snapshot.content)} disabled={!changed || busy}>{t("放弃修改")}</button>
                 <button type="button" className="button button-primary" onClick={() => onSave(content, snapshot)} disabled={!changed || !snapshot.writable || !canSave || busy}>{busy ? t("保存中…") : t("安全保存")}</button>
               </div>
             </>
@@ -924,181 +934,185 @@ function AgentsEditor({
 }
 
 function ProjectsView({
-  projects,
-  authorizedRoots,
-  onProjectsChange,
-  showNotice,
+  projects, authorizedRoots, onProjectsChange, showNotice, registerNavigationGuard,
 }: {
   projects: ProjectSummary[];
   authorizedRoots: string[];
   onProjectsChange: (projects: ProjectSummary[]) => void;
   showNotice: (notice: Notice) => void;
+  registerNavigationGuard: (guard: () => boolean) => () => void;
 }) {
   const [selectedProject, setSelectedProject] = useState<ProjectSummary | null>(projects[0] ?? null);
   const [chain, setChain] = useState<AgentsChain | null>(null);
   const [snapshot, setSnapshot] = useState<AgentsFileSnapshot | null>(null);
   const [revisions, setRevisions] = useState<AgentsRevision[]>([]);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [discovering, setDiscovering] = useState(false);
+  const [, renderDraft] = useState(0);
+  const draft = useRef(new AgentsDraft());
+  const reads = useRef(new LatestRequest());
+  const discoveryRead = useRef(new LatestRequest());
+  const selectedProjectRef = useRef(selectedProject);
+  selectedProjectRef.current = selectedProject;
+  const savingRef = useRef(false);
+
+  const publishSnapshot = useCallback((next: AgentsFileSnapshot | null, committed = false) => {
+    if (committed) draft.current.accept(next);
+    else draft.current.open(next);
+    setSnapshot(draft.current.snapshot);
+    renderDraft((revision) => revision + 1);
+  }, []);
+  const canLeave = useCallback(() => {
+    if (savingRef.current) {
+      showNotice({ tone: "info", message: t("正在保存 AGENTS 修改，请等待完成后再离开。") });
+      return false;
+    }
+    const allowed = draft.current.canLeave(false, () => window.confirm(t("AGENTS 有未保存修改。放弃这些修改并继续？")));
+    if (allowed) renderDraft((revision) => revision + 1);
+    return allowed;
+  }, [showNotice]);
+
+  useEffect(() => registerNavigationGuard(canLeave), [canLeave, registerNavigationGuard]);
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (!draft.current.dirty && !savingRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const release = (stop: (() => void) | undefined) => { if (stop) { try { void Promise.resolve(stop()).catch(() => undefined); } catch { /* Window already closed. */ } } };
+    if (isDesktopRuntime()) void import("@tauri-apps/api/window")
+      .then(({ getCurrentWindow }) => getCurrentWindow().onCloseRequested((event) => { if (!canLeave()) event.preventDefault(); }))
+      .then((stop) => { if (disposed) release(stop); else unlisten = stop; })
+      .catch(() => undefined);
+    return () => { disposed = true; window.removeEventListener("beforeunload", beforeUnload); release(unlisten); reads.current.invalidate(); discoveryRead.current.invalidate(); };
+  }, [canLeave]);
 
   const rootAgentsPath = selectedProject ? `${selectedProject.canonicalPath}/AGENTS.md` : null;
-  const canCreate = Boolean(
-    selectedProject
-      && rootAgentsPath
-      && authorizedRootFor(selectedProject.canonicalPath, authorizedRoots)
-      && !chain?.files.some((file) => file.path === rootAgentsPath),
-  );
+  const canCreate = Boolean(selectedProject && chain && rootAgentsPath
+    && authorizedRootFor(selectedProject.canonicalPath, authorizedRoots)
+    && !chain.files.some((file) => file.path === rootAgentsPath));
 
   const loadChain = useCallback(async (project: ProjectSummary) => {
     setLoading(true);
-    try {
+    const result = await reads.current.run(async () => {
       const nextChain = await invokeBackend<AgentsChain>(COMMANDS.getAgentsChain, { projectPath: project.canonicalPath, selectedCwd: project.canonicalPath });
-      setChain(nextChain);
       const candidate = preferredAgentsFile(nextChain);
-      if (!candidate) {
-        setSnapshot(null);
-        setRevisions([]);
-        return;
-      }
-      const [nextSnapshot, nextRevisions] = await Promise.all([
+      const [nextSnapshot, nextRevisions] = candidate ? await Promise.all([
         invokeBackend<AgentsFileSnapshot>(COMMANDS.openAgentsFile, { path: candidate.path }),
         invokeBackend<AgentsRevision[]>(COMMANDS.listAgentsRevisions, { path: candidate.path }),
-      ]);
-      setSnapshot(nextSnapshot);
-      setRevisions(nextRevisions);
-    } catch (error: unknown) {
-      showNotice({ tone: "error", message: tt`无法读取 AGENTS 层级：${appError(error)}` });
-    } finally {
-      setLoading(false);
-    }
-  }, [showNotice]);
+      ]) : [null, []] as const;
+      return { nextChain, nextSnapshot, nextRevisions };
+    }, ({ nextChain, nextSnapshot, nextRevisions }) => {
+      setChain(nextChain); publishSnapshot(nextSnapshot); setRevisions([...nextRevisions]);
+    });
+    if (result.status === "ignored") return;
+    if (result.status === "failed") showNotice({ tone: "error", message: tt`无法读取 AGENTS 层级：${appError(result.error)}` });
+    setLoading(false);
+  }, [publishSnapshot, showNotice]);
 
-  useEffect(() => {
-    if (selectedProject) void loadChain(selectedProject);
-  }, [loadChain, selectedProject]);
+  useEffect(() => { if (selectedProject) void loadChain(selectedProject); }, [loadChain, selectedProject]);
 
-  const openFile = async (path: string) => {
-    setLoading(true);
-    try {
-      const [nextSnapshot, nextRevisions] = await Promise.all([
-        invokeBackend<AgentsFileSnapshot>(COMMANDS.openAgentsFile, { path }),
-        invokeBackend<AgentsRevision[]>(COMMANDS.listAgentsRevisions, { path }),
-      ]);
-      setSnapshot(nextSnapshot);
-      setRevisions(nextRevisions);
-    } catch (error: unknown) {
-      showNotice({ tone: "error", message: tt`无法打开文件：${appError(error)}` });
-    } finally {
-      setLoading(false);
-    }
+  const selectProject = (project: ProjectSummary | null) => {
+    if (project === selectedProject || !canLeave()) return;
+    reads.current.invalidate();
+    setChain(null); publishSnapshot(null); setRevisions([]); setLoading(Boolean(project));
+    setSelectedProject(project);
   };
+  const openFile = async (path: string) => {
+    if (!canLeave()) return;
+    publishSnapshot(null); setRevisions([]); setLoading(true);
+    const result = await reads.current.run(() => Promise.all([
+      invokeBackend<AgentsFileSnapshot>(COMMANDS.openAgentsFile, { path }),
+      invokeBackend<AgentsRevision[]>(COMMANDS.listAgentsRevisions, { path }),
+    ]), ([nextSnapshot, nextRevisions]) => { publishSnapshot(nextSnapshot); setRevisions(nextRevisions); });
+    if (result.status === "ignored") return;
+    if (result.status === "failed") showNotice({ tone: "error", message: tt`无法打开文件：${appError(result.error)}` });
+    setLoading(false);
+  };
+  const beginSave = () => { reads.current.invalidate(); savingRef.current = true; setSaving(true); };
+  const finishSave = () => { savingRef.current = false; setSaving(false); };
+  const refreshRevisions = async (path: string) => setRevisions(await invokeBackend<AgentsRevision[]>(COMMANDS.listAgentsRevisions, { path }));
 
   const save = async (content: string, current: AgentsFileSnapshot) => {
-    if (!selectedProject) return;
-    setLoading(true);
-    try {
-      const authorizedRoot = authorizedRootFor(current.path, authorizedRoots);
-      if (!authorizedRoot) {
-        showNotice({ tone: "error", message: t("该文件不位于已授权根目录内，应用不会发送写入请求。") });
-        return;
-      }
-      const result = await invokeBackend<{ snapshot: AgentsFileSnapshot; revisionId: string }>(COMMANDS.saveAgentsFile, {
-        input: {
-          path: current.path,
-          authorizedRoot,
-          content,
-          expectedSha256: current.sha256,
-          expectedMtimeMs: current.mtimeMs,
-        },
-      });
-      setSnapshot(result.snapshot);
-      setRevisions(await invokeBackend<AgentsRevision[]>(COMMANDS.listAgentsRevisions, { path: result.snapshot.path }));
-      showNotice({ tone: "success", message: tt`已原子保存，并创建 revision ${result.revisionId}。` });
-    } catch (error: unknown) {
-      showNotice({ tone: "error", message: tt`保存被拒绝或发生外部冲突：${appError(error)}` });
-    } finally {
-      setLoading(false);
+    if (!selectedProject || savingRef.current) return;
+    const authorizedRoot = authorizedRootFor(current.path, authorizedRoots);
+    if (!authorizedRoot) {
+      showNotice({ tone: "error", message: t("该文件不位于已授权根目录内，应用不会发送写入请求。") });
+      return;
     }
+    beginSave();
+    try {
+      const result = await invokeBackend<{ snapshot: AgentsFileSnapshot; revisionId: string }>(COMMANDS.saveAgentsFile, {
+        input: { path: current.path, authorizedRoot, content, expectedSha256: current.sha256, expectedMtimeMs: current.mtimeMs },
+      });
+      publishSnapshot(result.snapshot, true);
+      showNotice(await refreshAfterCommit(tt`已原子保存，并创建 revision ${result.revisionId}。`, () => refreshRevisions(result.snapshot.path)));
+    } catch (error) { showNotice({ tone: "error", message: tt`保存被拒绝或发生外部冲突：${appError(error)}` }); }
+    finally { finishSave(); }
   };
 
   const createProjectAgents = async () => {
-    if (!selectedProject) return;
+    if (!selectedProject || savingRef.current || !canLeave()) return;
     const authorizedRoot = authorizedRootFor(selectedProject.canonicalPath, authorizedRoots);
     if (!authorizedRoot) {
       showNotice({ tone: "error", message: t("项目根目录不在授权范围内，应用不会创建文件。") });
       return;
     }
-    const confirmed = window.confirm(tt`将在项目根目录创建 AGENTS.md：\n${selectedProject.canonicalPath}\n\n继续吗？`);
-    if (!confirmed) return;
-    setLoading(true);
+    if (!window.confirm(tt`将在项目根目录创建 AGENTS.md：\n${selectedProject.canonicalPath}\n\n继续吗？`)) return;
+    beginSave();
     try {
       const input: CreateAgentsFileInput = {
-        projectPath: selectedProject.canonicalPath,
-        authorizedRoot,
-        content: t("# 项目 AGENTS 说明\n\n## 工作边界\n\n- 在此处维护该项目的 Codex 协作规则。\n- 修改后请运行相关测试并报告实际结果。\n"),
-        fileName: "AGENTS.md",
+        projectPath: selectedProject.canonicalPath, authorizedRoot,
+        content: t("# 项目 AGENTS 说明\n\n## 工作边界\n\n- 在此处维护该项目的 Codex 协作规则。\n- 修改后请运行相关测试并报告实际结果。\n"), fileName: "AGENTS.md",
       };
       const result = await invokeBackend<{ snapshot: AgentsFileSnapshot; revisionId: string }>(COMMANDS.createAgentsFile, { input });
-      setSnapshot(result.snapshot);
-      setRevisions(await invokeBackend<AgentsRevision[]>(COMMANDS.listAgentsRevisions, { path: result.snapshot.path }));
-      const [refreshedChain, refreshedProjects] = await Promise.all([
-        invokeBackend<AgentsChain>(COMMANDS.getAgentsChain, {
-          projectPath: selectedProject.canonicalPath,
-          selectedCwd: selectedProject.canonicalPath,
-        }),
-        invokeBackend<ProjectSummary[]>(COMMANDS.listProjects),
-      ]);
-      setChain(refreshedChain);
-      onProjectsChange(refreshedProjects);
-      showNotice({ tone: "success", message: tt`已创建项目级 AGENTS.md，并生成 revision ${result.revisionId}。` });
-    } catch (error: unknown) {
-      showNotice({ tone: "error", message: tt`创建被拒绝或未完成：${appError(error)}` });
-    } finally {
-      setLoading(false);
-    }
+      publishSnapshot(result.snapshot, true);
+      showNotice(await refreshAfterCommit(tt`已创建项目级 AGENTS.md，并生成 revision ${result.revisionId}。`, async () => {
+        const [nextChain, nextProjects] = await Promise.all([
+          invokeBackend<AgentsChain>(COMMANDS.getAgentsChain, { projectPath: selectedProject.canonicalPath, selectedCwd: selectedProject.canonicalPath }),
+          invokeBackend<ProjectSummary[]>(COMMANDS.listProjects), refreshRevisions(result.snapshot.path),
+        ]);
+        setChain(nextChain); onProjectsChange(nextProjects);
+      }));
+    } catch (error) { showNotice({ tone: "error", message: tt`创建被拒绝或未完成：${appError(error)}` }); }
+    finally { finishSave(); }
   };
 
   const restore = async (revision: AgentsRevision) => {
-    if (!snapshot) return;
-    const confirmed = window.confirm(tt`恢复 ${formatDate(revision.createdAt)} 的 revision？当前磁盘内容会先由后端进行冲突校验。`);
-    if (!confirmed) return;
-    setLoading(true);
+    if (!snapshot || savingRef.current || !canLeave()) return;
+    if (!window.confirm(tt`恢复 ${formatDate(revision.createdAt)} 的 revision？当前磁盘内容会先由后端进行冲突校验。`)) return;
+    beginSave();
     try {
-      const result = await invokeBackend<{ snapshot: AgentsFileSnapshot; revisionId: string }>(COMMANDS.restoreAgentsRevision, {
-        revisionId: revision.id,
-        expectedSha256: snapshot.sha256,
-      });
-      setSnapshot(result.snapshot);
-      setRevisions(await invokeBackend<AgentsRevision[]>(COMMANDS.listAgentsRevisions, { path: result.snapshot.path }));
-      showNotice({ tone: "success", message: tt`已恢复 revision，并创建 ${result.revisionId}。` });
-    } catch (error: unknown) {
-      showNotice({ tone: "error", message: tt`恢复被拒绝或发生外部冲突：${appError(error)}` });
-    } finally {
-      setLoading(false);
-    }
+      const result = await invokeBackend<{ snapshot: AgentsFileSnapshot; revisionId: string }>(COMMANDS.restoreAgentsRevision, { revisionId: revision.id, expectedSha256: snapshot.sha256 });
+      publishSnapshot(result.snapshot, true);
+      showNotice(await refreshAfterCommit(tt`已恢复 revision，并创建 ${result.revisionId}。`, () => refreshRevisions(result.snapshot.path)));
+    } catch (error) { showNotice({ tone: "error", message: tt`恢复被拒绝或发生外部冲突：${appError(error)}` }); }
+    finally { finishSave(); }
   };
 
   const discover = async () => {
+    if (savingRef.current || !canLeave()) return;
     setDiscovering(true);
-    try {
-      const next = await invokeBackend<ProjectSummary[]>(COMMANDS.discoverProjects);
+    const result = await discoveryRead.current.run(() => invokeBackend<ProjectSummary[]>(COMMANDS.discoverProjects), (next) => {
       onProjectsChange(next);
-      const current = next.find((project) => project.canonicalPath === selectedProject?.canonicalPath) ?? next[0] ?? null;
-      setSelectedProject(current);
+      selectProject(next.find((project) => project.canonicalPath === selectedProjectRef.current?.canonicalPath) ?? next[0] ?? null);
       showNotice({ tone: "success", message: tt`项目发现完成：${formatCount(next.length)} 个项目。` });
-    } catch (error: unknown) {
-      showNotice({ tone: "error", message: tt`项目发现未完成：${appError(error)}` });
-    } finally {
-      setDiscovering(false);
-    }
+    });
+    if (result.status === "ignored") return;
+    if (result.status === "failed") showNotice({ tone: "error", message: tt`项目发现未完成：${appError(result.error)}` });
+    setDiscovering(false);
   };
 
   return (
     <div className="view-content">
       <SectionHeader title={t("项目与 AGENTS")} subtitle={t("查看所有已观测项目，并在授权根目录内安全编辑 AGENTS.md。")} />
       <div className="projects-grid">
-        <ProjectList projects={projects} selectedPath={selectedProject?.canonicalPath ?? null} onSelect={setSelectedProject} onDiscover={discover} discovering={discovering} />
-        {loading && !chain ? <LoadingState label={t("正在解析项目层级…")} /> : <AgentsEditor chain={chain} snapshot={snapshot} revisions={revisions} busy={loading} canSave={Boolean(snapshot && authorizedRootFor(snapshot.path, authorizedRoots))} canCreate={canCreate} onOpen={(path) => void openFile(path)} onSave={(content, current) => void save(content, current)} onRestore={(revision) => void restore(revision)} onCreate={() => void createProjectAgents()} />}
+        <ProjectList projects={projects} selectedPath={selectedProject?.canonicalPath ?? null} onSelect={selectProject} onDiscover={discover} discovering={discovering || saving} />
+        {loading && !chain ? <LoadingState label={t("正在解析项目层级…")} /> : <AgentsEditor chain={chain} snapshot={snapshot} revisions={revisions} busy={loading || saving} canSave={Boolean(snapshot && authorizedRootFor(snapshot.path, authorizedRoots))} canCreate={canCreate} content={draft.current.content} onContentChange={(content) => { draft.current.edit(content, savingRef.current); renderDraft((revision) => revision + 1); }} onOpen={(path) => void openFile(path)} onSave={(content, current) => void save(content, current)} onRestore={(revision) => void restore(revision)} onCreate={() => void createProjectAgents()} />}
       </div>
     </div>
   );
@@ -1307,13 +1321,14 @@ function OAuthView({ showNotice }: { showNotice: (notice: Notice) => void }) {
     return () => window.clearInterval(timer);
   }, [refresh, snapshot?.loginInProgress]);
 
-  const refreshProfiles = useCallback(async () => {
+  const refreshProfiles = useCallback(async (report = true) => {
     setProfilesLoading(true);
     try {
       const next = await invokeBackend<AuthProfilesSnapshot>(COMMANDS.listAuthProfiles);
       setProfiles(next);
       return next;
     } catch (nextError: unknown) {
+      if (!report) throw nextError;
       showNotice({ tone: "error", message: tt`认证档案读取失败：${appError(nextError)}` });
       return null;
     } finally {
@@ -1328,11 +1343,12 @@ function OAuthView({ showNotice }: { showNotice: (notice: Notice) => void }) {
   }, [activeTab, profiles, refreshProfiles]);
 
   const finishProfileOperation = async (result: AuthProfileOperationResult) => {
-    showNotice({ tone: result.changed ? "success" : "info", message: result.message });
-    if (result.changed) {
-      await refreshProfiles();
-      await refresh(true, true);
-    }
+    if (!result.changed) { showNotice({ tone: "info", message: result.message }); return; }
+    showNotice(await refreshAfterCommit(result.message, async () => {
+      await refreshProfiles(false);
+      const confirmed = await refresh(true, true);
+      if (!confirmed) throw new Error(t("账户状态尚未复核，请手动刷新。"));
+    }));
   };
 
   const importProfile = async () => {
@@ -1572,6 +1588,12 @@ export function App() {
   const { locale } = useI18n();
   const navItems = getNavItems();
   const [view, setView] = useState<View>("overview");
+  const navigationGuard = useRef<() => boolean>(() => true);
+  const registerNavigationGuard = useCallback((guard: () => boolean) => {
+    navigationGuard.current = guard;
+    return () => { if (navigationGuard.current === guard) navigationGuard.current = () => true; };
+  }, []);
+  const navigate = useCallback((next: View) => { if (navigationGuard.current()) setView(next); }, []);
   const [payload, setPayload] = useState<BootstrapPayload | null>(null);
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
   const [updateBusy, setUpdateBusy] = useState<"check" | "install" | null>(null);
@@ -1721,13 +1743,13 @@ export function App() {
   }, [checkForUpdate, payload, updateStatus]);
 
   const refreshLocalData = useCallback(async () => {
-    if (activeViewRef.current === "activity" && isDesktopRuntime()) {
+    if (activeViewRef.current === "activity") {
       if (activityRescanInFlight.current) return;
       activityRescanInFlight.current = true;
       setLoading(true);
       setError(null);
       try {
-        await invokeBackend<SourceHealth[]>(COMMANDS.rescan);
+        if (isDesktopRuntime()) await invokeBackend<SourceHealth[]>(COMMANDS.rescan);
         setActivityFullRefreshRevision((revision) => revision + 1);
       } catch (nextError: unknown) {
         setError(appError(nextError));
@@ -1791,9 +1813,11 @@ export function App() {
     setSaving(true);
     try {
       const saved = await invokeBackend<AppSettings>(COMMANDS.updateSettings, { settings: next });
-      const sources = await invokeBackend<SourceHealth[]>(COMMANDS.listSources);
-      setPayload((current) => current ? { ...current, settings: saved, sources } : current);
-      setNotice({ tone: "success", message: t("设置已保存到本机，来源健康状态已刷新。") });
+      setPayload((current) => current ? { ...current, settings: saved } : current);
+      setNotice(await refreshAfterCommit(t("设置已保存到本机。"), async () => {
+        const sources = await invokeBackend<SourceHealth[]>(COMMANDS.listSources);
+        setPayload((current) => current ? { ...current, sources } : current);
+      }));
     } catch (nextError: unknown) {
       setNotice({ tone: "error", message: tt`设置未保存：${appError(nextError)}` });
     } finally {
@@ -1820,23 +1844,23 @@ export function App() {
   const current = useMemo(() => {
     if (!payload) return null;
     switch (view) {
-      case "overview": return <Overview payload={payload} onNavigate={setView} />;
+      case "overview": return <Overview payload={payload} onNavigate={navigate} />;
       case "activity": return <ActivityView initial={payload.activity} projects={projects} onLoad={loadActivity} refreshRevision={activityRefreshRevision} fullRefreshRevision={activityFullRefreshRevision} />;
-      case "projects": return <ProjectsView projects={projects} authorizedRoots={payload.settings.authorizedRoots} onProjectsChange={(next) => setPayload((old) => old ? { ...old, projects: next } : old)} showNotice={setNotice} />;
-      case "config": return <CodexConfigView onNotice={showGatewayNotice} onOpenOfficialSubscription={() => setView("oauth")} />;
+      case "projects": return <ProjectsView projects={projects} authorizedRoots={payload.settings.authorizedRoots} onProjectsChange={(next) => setPayload((old) => old ? { ...old, projects: next } : old)} showNotice={setNotice} registerNavigationGuard={registerNavigationGuard} />;
+      case "config": return <CodexConfigView onNotice={showGatewayNotice} onOpenOfficialSubscription={() => navigate("oauth")} />;
       case "gateway": return <CodexGatewayView onNotice={showGatewayNotice} />;
       case "oauth": return <OAuthView showNotice={setNotice} />;
       case "pricing": return <PricingView rules={payload.pricingRules} />;
       case "settings": return <SettingsView settings={payload.settings} capability={payload.capability} updateStatus={updateStatus} updateBusy={updateBusy} updateMessage={updateMessage} onSave={(next) => void updateSettings(next)} onProbe={() => void probe()} onCheckUpdate={() => void checkForUpdate()} onInstallUpdate={() => void installUpdate()} saving={saving} />;
     }
-  }, [activityFullRefreshRevision, activityRefreshRevision, checkForUpdate, installUpdate, loadActivity, locale, payload, projects, saving, showGatewayNotice, updateBusy, updateMessage, updateStatus, view]);
+  }, [activityFullRefreshRevision, activityRefreshRevision, checkForUpdate, installUpdate, loadActivity, locale, navigate, payload, projects, registerNavigationGuard, saving, showGatewayNotice, updateBusy, updateMessage, updateStatus, view]);
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">CM</span><div><strong>Codex Manager</strong><small>{t("本地桌面管理器")}</small></div></div>
         <nav className="side-nav" aria-label={t("主导航")}>
-          {navItems.map((item) => <button type="button" key={item.id} className={view === item.id ? "is-active" : ""} onClick={() => setView(item.id)}><span>{item.label}{item.id === "settings" && updateStatus?.available ? <><span className="update-nav-dot" aria-hidden="true" /><span className="sr-only">{t("，有新版本可用")}</span></> : null}</span><small>{item.helper}</small></button>)}
+          {navItems.map((item) => <button type="button" key={item.id} className={view === item.id ? "is-active" : ""} onClick={() => { if (item.id !== view) navigate(item.id); }}><span>{item.label}{item.id === "settings" && updateStatus?.available ? <><span className="update-nav-dot" aria-hidden="true" /><span className="sr-only">{t("，有新版本可用")}</span></> : null}</span><small>{item.helper}</small></button>)}
         </nav>
         <div className="sidebar-foot"><span className="runtime-mark" aria-hidden="true" /><span>{shellLabel}</span><small>{buildLabel}</small><small>{t("网关默认停止；不自动修改 Codex 配置。")}</small></div>
       </aside>
@@ -1845,6 +1869,7 @@ export function App() {
         {notice ? <InlineNotice notice={notice} onClose={() => setNotice(null)} /> : null}
         {loading && !payload ? <LoadingState /> : null}
         {error && !payload ? <div className="fatal-error"><EmptyState title={t("无法连接本地管理服务")} detail={error} action={<button type="button" className="button button-primary" onClick={() => void refreshBootstrap()}>{t("重试")}</button>} /></div> : null}
+        {error && payload ? <InlineNotice notice={{ tone: "error", message: tt`本地数据刷新失败，当前显示上次数据：${error}` }} onClose={() => setError(null)} /> : null}
         {current}
       </main>
     </div>

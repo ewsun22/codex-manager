@@ -56,6 +56,7 @@ test("所有主要界面源码文案都有英文翻译，且不再扫描 DOM", a
     readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/app/codex-config.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/app/codex-gateway.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/app/operations.ts", import.meta.url), "utf8"),
   ]);
   assert.match(core, /codex-manager\.locale\.v1/);
   assert.match(source, /aria-pressed/);

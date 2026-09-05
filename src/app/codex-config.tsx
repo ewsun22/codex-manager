@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { refreshAfterCommit, safeErrorMessage } from "./operations.ts";
 import { invokeBackend } from "./client.ts";
 import { useI18n } from "./i18n.tsx";
 import { t, tt } from "./i18n-core.ts";
@@ -36,7 +37,7 @@ const emptyDraft = (kind: CodexConfigProfileKind = "local-cliproxy"): Draft => (
 });
 
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : t("操作未完成，请刷新后重试。");
+  return safeErrorMessage(error);
 }
 
 function kindLabel(kind: CodexConfigProfileKind): string {
@@ -55,8 +56,8 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
 
   const active = useMemo(() => snapshot?.profiles.find((profile) => profile.id === snapshot.activeProfileId) ?? null, [snapshot]);
 
-  const refresh = useCallback(async () => {
-    setBusy("refresh");
+  const refresh = useCallback(async (report = true) => {
+    if (report) setBusy("refresh");
     try {
       const [nextSnapshot, nextProviders] = await Promise.all([
         invokeBackend<CodexConfigSnapshot>(COMMANDS.getCodexConfigSnapshot),
@@ -65,9 +66,10 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
       setSnapshot(nextSnapshot);
       setProviders(nextProviders);
     } catch (error) {
+      if (!report) throw error;
       onNotice("error", tt`Codex 配置状态不可用：${errorText(error)}`);
     } finally {
-      setBusy(null);
+      if (report) setBusy(null);
     }
   }, [onNotice]);
 
@@ -123,9 +125,9 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
           updatedAt: "",
         },
       });
-      await refresh();
       editProfile(profile);
-      onNotice("success", tt`配置档案“${profile.name}”已保存；尚未应用到 Codex。`);
+      const notice = await refreshAfterCommit(tt`配置档案“${profile.name}”已保存；尚未应用到 Codex。`, () => refresh(false));
+      onNotice(notice.tone, notice.message);
     } catch (error) {
       onNotice("error", tt`配置档案未保存：${errorText(error)}`);
     } finally {
@@ -149,8 +151,8 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
     setBusy(`apply:${profile.id}`);
     try {
       const result = await invokeBackend<CodexConfigApplyResult>(COMMANDS.applyCodexConfigProfile, { profileId: profile.id, expectedRevision: snapshot?.activeRevision ?? undefined });
-      await refresh();
-      onNotice(result.verified ? "success" : "info", result.message ?? tt`“${profile.name}”已应用。`);
+      const notice = await refreshAfterCommit(result.message ?? tt`“${profile.name}”已应用。`, () => refresh(false), result.verified ? "success" : "info");
+      onNotice(notice.tone, notice.message);
     } catch (error) {
       onNotice("error", tt`配置未应用：${errorText(error)}`);
     } finally {
@@ -163,9 +165,9 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
     setBusy("restore");
     try {
       const result = await invokeBackend<CodexConfigApplyResult>(COMMANDS.restoreCodexConfig, { expectedRevision: snapshot?.activeRevision ?? undefined });
-      await refresh();
       setPreview(null);
-      onNotice(result.verified ? "success" : "info", result.message ?? t("Codex 配置已恢复。 "));
+      const notice = await refreshAfterCommit(result.message ?? t("Codex 配置已恢复。 "), () => refresh(false), result.verified ? "success" : "info");
+      onNotice(notice.tone, notice.message);
     } catch (error) {
       onNotice("error", tt`配置未恢复：${errorText(error)}`);
     } finally {
@@ -180,8 +182,8 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
       await invokeBackend<boolean>(COMMANDS.deleteCodexConfigProfile, { profileId: profile.id });
       setDraft(null);
       setPreview(null);
-      await refresh();
-      onNotice("success", tt`配置档案“${profile.name}”已删除。`);
+      const notice = await refreshAfterCommit(tt`配置档案“${profile.name}”已删除。`, () => refresh(false));
+      onNotice(notice.tone, notice.message);
     } catch (error) {
       onNotice("error", tt`配置档案未删除：${errorText(error)}`);
     } finally {
@@ -202,9 +204,9 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
       const saved = await invokeBackend<CodexProviderProfile>(COMMANDS.saveCodexProvider, {
         input: { ...providerDraft, name: providerDraft.name.trim(), baseUrl: providerDraft.baseUrl.trim(), model: providerDraft.model.trim(), apiKey: providerDraft.apiKey?.trim() || undefined },
       });
-      await refresh();
       editProvider(saved);
-      onNotice("success", tt`外部供应商“${saved.name}”已保存。Codex 将直接访问其 endpoint，不经过 CLIProxyAPI。`);
+      const notice = await refreshAfterCommit(tt`外部供应商“${saved.name}”已保存。Codex 将直接访问其 endpoint，不经过 CLIProxyAPI。`, () => refresh(false));
+      onNotice(notice.tone, notice.message);
     } catch (error) {
       onNotice("error", tt`外部供应商未保存：${errorText(error)}`);
     } finally { setBusy(null); }
@@ -216,8 +218,8 @@ export function CodexConfigView({ onNotice, onOpenOfficialSubscription }: { onNo
     try {
       await invokeBackend<CodexProviderProfile[]>(COMMANDS.deleteCodexProvider, { providerId: provider.id });
       if (providerDraft?.id === provider.id) setProviderDraft(null);
-      await refresh();
-      onNotice("success", tt`外部供应商“${provider.name}”已删除。`);
+      const notice = await refreshAfterCommit(tt`外部供应商“${provider.name}”已删除。`, () => refresh(false));
+      onNotice(notice.tone, notice.message);
     } catch (error) {
       onNotice("error", tt`外部供应商未删除：${errorText(error)}`);
     } finally { setBusy(null); }

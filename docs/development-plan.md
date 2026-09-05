@@ -1,6 +1,17 @@
 # 开发计划与状态
 
-状态日期：2026-08-31。`implemented`、`verified locally`、`packaged`、`signed`、`notarized`、`released` 和 `updater E2E accepted` 是不同边界。
+状态日期：2026-09-06。`implemented`、`verified locally`、`packaged`、`signed`、`notarized`、`released` 和 `updater E2E accepted` 是不同边界。
+
+## 当前未发布可靠性切片
+
+- [x] S1：任务用量完整性传播、跨批次缺失元数据回退、首次导入/重建/常驻保留期维护及删除水位。
+- [x] S2：AGENTS 草稿与读取顺序保护、保存期间锁定、原生错误脱敏、写入和刷新结果分别反馈。
+- [x] S3：原生耗时任务隔离、代理健康检查硬超时、状态查询与安装/运行目录恢复隔离。
+- [x] S4：全量活动筛选候选、视图条件清理、可见页面共享代理状态校验。
+- [ ] S5：人工规模基准、变更文件优先处理、扫描预算续扫；本轮未实施。
+- [ ] S6：扩充自动文档链接/资产检查和真实桌面、OAuth、updater 业务验收；本轮仅完成适用文档同步及 Chrome demo 验证。
+
+S1–S4 已完成本地自动化与人工数据浏览器验证，源码提交和推送已获授权，未打包签名或发布。具体结果及限制见 [S1–S4 验证记录](validation/reliability-s1-s4.md)。
 
 ## Phase 0：可行性探针 — completed
 

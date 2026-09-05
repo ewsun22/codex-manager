@@ -75,6 +75,17 @@ All screenshots use synthetic, sanitized demo data.
 | --- | --- |
 | ![Projects and AGENTS](output/playwright/final-desktop-project-agents.png) | ![Local CLIProxyAPI and OAuth profiles](output/playwright/codex-gateway-desktop.png) |
 
+## Unreleased reliability improvements
+
+The following changes are implemented in the working source and have not been published in a new desktop release:
+
+- Task totals remain `unavailable` after an invalid token snapshot; earlier valid calls still contribute to explicitly partial API-equivalent estimates. Missing call metadata uses the same fallback for activity and pricing across incremental batches.
+- Retention also applies during initial import, rebuild and scheduled maintenance. Tasks without an observed terminal state or a usable timestamp are retained; source rollout files and credentials are unaffected.
+- AGENTS editing protects unsaved changes and rejects stale read results. Activity filter choices cover the selected view's full history. Write success and a subsequent refresh failure are reported separately.
+- Local proxy status refreshes while its page is visible. Slow native work runs off the UI thread, and proxy startup health checks have a bounded deadline.
+
+Implementation and validation boundaries are recorded in [unreleased notes](docs/release-notes/unreleased.md).
+
 ## Supported platforms
 
 - **Supported:** macOS 13+, arm64 release artifacts.

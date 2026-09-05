@@ -106,6 +106,14 @@ CLIProxyAPI Management API 与 OAuth callback 不向 WebView 开放：OAuth 档�
 
 ## 存储与并发
 
+### 未发布的完整性与增量一致性修复
+
+任务级 token 可用性同时取决于已观测调用和解析器的任务完整性标记。任务出现异常快照后，活动汇总不再把此前的部分调用提升为完整任务用量；有效调用仍可用于模型交互明细和有覆盖边界的估价。调用发生时明确记录的模型、provider、effort 保持原值；缺失字段在活动与成本查询中统一回退到对应任务，避免读取批次边界改变估价输入。查询修复可补全已有数据的缺失字段；已有非空调用模型保持原值，不追溯重判旧版本保存的字段，也不重写源 rollout。
+
+`get_activity_facets` 返回所选活动视图全部记录的模型、推理级别候选和同一读取事务中的 revision，不接受任意 SQL 或文件路径。候选不依赖分页、当前模型或搜索条件；前端仍保留当前选择，切换视图时清理不适用的结果条件。
+
+保留期截止时间及删除水位保存在独立 singleton 元数据表。截止时间在启动、修改设置和按小时维护时推进，每次 ingest 事务按已保存截止时间清理当前 source namespace 的过期终态任务，避免初次导入和重建复活旧数据。全库维护使用事务清理关联调用、timeline 与空会话，保持 checkpoint，并使活动 revision 感知删除。时间比较使用解析后的日期而非 RFC3339 字符串排序；未观测终态或没有可用时间的任务暂不自动删除。没有可监听目录时仍启动周期维护线程。
+
 SQLite 位于平台应用数据目录，启用 WAL、foreign keys、busy timeout、页数硬上限和单后端写入。Unix 上应用数据目录与数据库分别收紧为 `0700` 与 `0600`。Rollout 投影以稳定文件身份（不可得时为路径）生成内部 source namespace；对外仍显示 Codex 原 session/event id，但不允许另一来源转移数据所有权。另外为 turn 和 model call 计算不含所有权的 logical fingerprint；字节等价的 rollout 副本在列表、总览和价格查询时折叠，存储与重建仍完全隔离。
 
 主要投影：
@@ -133,6 +141,12 @@ SQLite 位于平台应用数据目录，启用 WAL、foreign keys、busy timeout
 发现文件不等于写授权。写入必须同时通过已知项目、显式授权根目录、canonical containment、文件名 allowlist、逐段 no-follow、安全文件身份、expected SHA/mtime 和最大大小检查。Unix 上从 `/` 开始打开根目录链，每个组件均通过 `openat(O_DIRECTORY | O_NOFOLLOW)` 验证；随后在同一目录创建临时文件、fsync，并在 atomic swap 后以同一安全路径重验 CAS，冲突时原子回滚，最后提交 revision。应用不会执行或信任 AGENTS 内容中的命令。
 
 ## 前端与 IPC
+
+未发布的可靠性切片为项目/AGENTS 读取增加请求序号，迟到响应不能覆盖当前文件；未保存内容保留基准 SHA，离开前需要明确放弃，写入期间禁止继续编辑或导航。写入结果与修订/页面后续刷新分别反馈，刷新失败保留已成功写入的状态和可恢复内容。经过后端限定的字符串错误与 `Error` 通过统一转换提供操作提示，不回传原始凭据或任意网络响应。
+
+主窗口限定授予 `core:window:allow-destroy`，供 Tauri `onCloseRequested` 在未保存保护允许关闭后完成其原有窗口销毁流程；不增加 shell、process、通用文件或 dialog 插件权限。新增 `get_activity_facets` 也须出现在构建命令表和主窗口精确 allow 权限中。
+
+首页与本地代理页复用非秘密状态读取；页面可见时低频校验，并对并发读取去重。OAuth 档案不随状态轮询读取，仅在页面需要档案或显式变更后刷新。内核安装、启动、停止及相关阻塞文件/Keychain/进程操作在阻塞工作池执行；Tauri 入口保持异步和 transition 单飞行锁，gateway 锁只保护状态接管。启动健康检查覆盖整个等待循环的 10 秒截止期，每次请求最多 500ms，禁止重定向；超时后仍按受管进程结束、checkpoint 和回滚流程处理。扫描、项目发现和 CLI 探测同样移出 UI 线程。
 
 React 只使用显式 Tauri commands；CLIProxyAPI 新增的能力仅限确认审核基线、安装审核基线、读取脱敏状态和启停受管进程。OTel 凭据只在用户点击显示配置并通过原生确认后进入专用配置片段；CLIProxyAPI client key 与 provider API Key 永不返回 WebView，前端只能获得非秘密 endpoint、运行状态和 `hasApiKey`。OAuth/认证档案只获得账户摘要、登录状态、档案白名单 DTO 与变更结果。原生导入和确认由 Rust dialog 完成，WebView 没有通用路径、JSON、HTTP、shell、process、dialog 或 updater 插件能力。WebView 使用严格 CSP；浏览器开发模式使用人工构造的 demo adapter，不读取本机 Codex 数据、下载内核或启动真实 listener。
 

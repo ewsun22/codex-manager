@@ -34,6 +34,7 @@ fn main() {
         "bootstrap",
         "get_dashboard",
         "list_activity",
+        "get_activity_facets",
         "list_projects",
         "discover_projects",
         "get_agents_chain",

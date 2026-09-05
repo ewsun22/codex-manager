@@ -50,6 +50,7 @@ const MAX_SCAN_DISCOVERY_DURATION: Duration = Duration::from_secs(5);
 const MAX_SCAN_DURATION: Duration = Duration::from_secs(20);
 const WATCH_RECONCILE_INTERVAL: Duration = Duration::from_secs(60);
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(350);
+const RETENTION_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const REVISION_LIMIT: i64 = 20;
 const MAX_SCHEMA_PROBE_BYTES: u64 = 64 * 1024 * 1024;
 const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -64,6 +65,7 @@ struct AppState {
     database_path: PathBuf,
     data_dir: PathBuf,
     scan_gate: Mutex<()>,
+    retention_maintenance: Mutex<Option<(i64, Instant)>>,
     otel: Mutex<Option<otel::ServerHandle>>,
     otel_error: Mutex<Option<String>>,
     watcher: Mutex<Option<WatchRuntime>>,
@@ -493,14 +495,38 @@ fn list_activity(state: State<'_, AppState>, query: ActivityQuery) -> Result<Act
 }
 
 #[tauri::command]
+async fn get_activity_facets(
+    app: AppHandle,
+    view: Option<String>,
+) -> Result<codex_storage::ActivityFacets, String> {
+    if !matches!(view.as_deref(), None | Some("turns" | "modelCalls")) {
+        return Err("活动视图不符合要求。".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let store = state.store.lock().map_err(lock_err)?;
+        store
+            .activity_facets(view.as_deref())
+            .map_err(display_error)
+    })
+    .await
+    .map_err(|_| "读取活动筛选候选失败。".to_string())?
+}
+
+#[tauri::command]
 fn list_projects(state: State<'_, AppState>) -> Result<Vec<Project>, String> {
     list_projects_inner(&state)
 }
 
 #[tauri::command]
-fn discover_projects(state: State<'_, AppState>) -> Result<Vec<Project>, String> {
-    discover_projects_inner(&state)?;
-    list_projects_inner(&state)
+async fn discover_projects(app: AppHandle) -> Result<Vec<Project>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        discover_projects_inner(&state)?;
+        list_projects_inner(&state)
+    })
+    .await
+    .map_err(|_| "后台采集任务异常结束。".to_string())?
 }
 
 #[tauri::command]
@@ -599,23 +625,33 @@ fn update_settings(
 }
 
 #[tauri::command]
-fn rescan(state: State<'_, AppState>) -> Result<Vec<SourceHealth>, String> {
-    scan_all(&state)?;
-    discover_projects_inner(&state)?;
-    list_sources_inner(&state)
+async fn rescan(app: AppHandle) -> Result<Vec<SourceHealth>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        scan_all(&state)?;
+        discover_projects_inner(&state)?;
+        list_sources_inner(&state)
+    })
+    .await
+    .map_err(|_| "后台采集任务异常结束。".to_string())?
 }
 
 #[tauri::command]
-fn probe_codex(state: State<'_, AppState>) -> Result<Capability, String> {
-    let capability = probe_codex_inner(&state)?;
-    state
-        .store
-        .lock()
-        .map_err(lock_err)?
-        .save_cli_schema_capability(&capability_row(&capability))
-        .map_err(display_error)?;
-    *state.capability.lock().map_err(lock_err)? = Some(capability.clone());
-    Ok(capability)
+async fn probe_codex(app: AppHandle) -> Result<Capability, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let capability = probe_codex_inner(&state)?;
+        state
+            .store
+            .lock()
+            .map_err(lock_err)?
+            .save_cli_schema_capability(&capability_row(&capability))
+            .map_err(display_error)?;
+        *state.capability.lock().map_err(lock_err)? = Some(capability.clone());
+        Ok(capability)
+    })
+    .await
+    .map_err(|_| "后台采集任务异常结束。".to_string())?
 }
 
 #[tauri::command]
@@ -950,7 +986,7 @@ async fn import_proxy_auth_profile(
 }
 
 #[tauri::command]
-fn set_proxy_auth_profile_enabled(
+async fn set_proxy_auth_profile_enabled(
     state: State<'_, AppState>,
     profile_id: String,
     enabled: bool,
@@ -959,18 +995,20 @@ fn set_proxy_auth_profile_enabled(
         .gateway_transition_gate
         .try_lock()
         .map_err(|_| "本地反代正在启动或停止；请稍后重试。".to_string())?;
-    tauri::async_runtime::block_on(clear_exited_codex_gateway(&state))?;
+    clear_exited_codex_gateway(&state).await?;
     if state.gateway.lock().map_err(lock_err)?.is_some() {
         return Err("本地反代运行中不能变更 OAuth 档案。".into());
     }
-    state
-        .proxy_auth_profiles
-        .enable(&profile_id, enabled)
-        .map_err(display_error)
+    let store = std::sync::Arc::clone(&state.proxy_auth_profiles);
+    tauri::async_runtime::spawn_blocking(move || {
+        store.enable(&profile_id, enabled).map_err(display_error)
+    })
+    .await
+    .map_err(|_| "CLIProxyAPI OAuth 档案任务异常结束。".to_string())?
 }
 
 #[tauri::command]
-fn delete_proxy_auth_profile(
+async fn delete_proxy_auth_profile(
     state: State<'_, AppState>,
     profile_id: String,
 ) -> Result<proxy_auth::ProxyAuthProfile, String> {
@@ -978,18 +1016,20 @@ fn delete_proxy_auth_profile(
         .gateway_transition_gate
         .try_lock()
         .map_err(|_| "本地反代正在启动或停止；请稍后重试。".to_string())?;
-    tauri::async_runtime::block_on(clear_exited_codex_gateway(&state))?;
+    clear_exited_codex_gateway(&state).await?;
     if state.gateway.lock().map_err(lock_err)?.is_some() {
         return Err("本地反代运行中不能删除 OAuth 档案。".into());
     }
-    state
-        .proxy_auth_profiles
-        .soft_delete(&profile_id)
-        .map_err(display_error)
+    let store = std::sync::Arc::clone(&state.proxy_auth_profiles);
+    tauri::async_runtime::spawn_blocking(move || {
+        store.soft_delete(&profile_id).map_err(display_error)
+    })
+    .await
+    .map_err(|_| "CLIProxyAPI OAuth 档案任务异常结束。".to_string())?
 }
 
 #[tauri::command]
-fn restore_proxy_auth_profile(
+async fn restore_proxy_auth_profile(
     state: State<'_, AppState>,
     profile_id: String,
 ) -> Result<proxy_auth::ProxyAuthProfile, String> {
@@ -997,14 +1037,14 @@ fn restore_proxy_auth_profile(
         .gateway_transition_gate
         .try_lock()
         .map_err(|_| "本地反代正在启动或停止；请稍后重试。".to_string())?;
-    tauri::async_runtime::block_on(clear_exited_codex_gateway(&state))?;
+    clear_exited_codex_gateway(&state).await?;
     if state.gateway.lock().map_err(lock_err)?.is_some() {
         return Err("本地反代运行中不能恢复 OAuth 档案。".into());
     }
-    state
-        .proxy_auth_profiles
-        .restore(&profile_id)
-        .map_err(display_error)
+    let store = std::sync::Arc::clone(&state.proxy_auth_profiles);
+    tauri::async_runtime::spawn_blocking(move || store.restore(&profile_id).map_err(display_error))
+        .await
+        .map_err(|_| "CLIProxyAPI OAuth 档案任务异常结束。".to_string())?
 }
 
 #[tauri::command]
@@ -1054,10 +1094,14 @@ fn delete_codex_provider(
 }
 
 #[tauri::command]
-fn get_codex_gateway_status(
-    state: State<'_, AppState>,
+async fn get_codex_gateway_status(
+    app: AppHandle,
 ) -> Result<provider_gateway::GatewayStatus, String> {
-    codex_gateway_status_inner(&state)
+    tauri::async_runtime::spawn_blocking(move || {
+        codex_gateway_status_inner(&app.state::<AppState>())
+    })
+    .await
+    .map_err(|_| "读取本地反代状态的后台任务异常结束。".to_string())?
 }
 
 fn codex_gateway_status_inner(state: &AppState) -> Result<provider_gateway::GatewayStatus, String> {
@@ -1103,7 +1147,7 @@ async fn clear_exited_codex_gateway(state: &AppState) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn update_codex_gateway_port(
+async fn update_codex_gateway_port(
     state: State<'_, AppState>,
     port: u16,
 ) -> Result<provider_gateway::GatewayStatus, String> {
@@ -1111,7 +1155,7 @@ fn update_codex_gateway_port(
         .gateway_transition_gate
         .try_lock()
         .map_err(|_| "本地反代正在启动或停止；请稍后再修改端口。".to_string())?;
-    tauri::async_runtime::block_on(clear_exited_codex_gateway(&state))?;
+    clear_exited_codex_gateway(&state).await?;
     if !(1024..=65535).contains(&port) {
         return Err("本地反代端口必须在 1024 到 65535 之间。".into());
     }
@@ -1152,16 +1196,15 @@ fn update_codex_gateway_port(
 }
 
 #[tauri::command]
-fn start_codex_gateway(
+async fn start_codex_gateway(
     state: State<'_, AppState>,
 ) -> Result<provider_gateway::GatewayStatus, String> {
     let _transition_guard = state
         .gateway_transition_gate
         .try_lock()
         .map_err(|_| "本地反代正在启动或停止；请稍后重试。".to_string())?;
-    tauri::async_runtime::block_on(clear_exited_codex_gateway(&state))?;
-    let mut gateway = state.gateway.lock().map_err(lock_err)?;
-    if gateway.is_some() {
+    clear_exited_codex_gateway(&state).await?;
+    if state.gateway.lock().map_err(lock_err)?.is_some() {
         return Err("本地反代已在运行；请先停止后再切换供应商。".into());
     }
     let port = state
@@ -1170,15 +1213,16 @@ fn start_codex_gateway(
         .map_err(lock_err)?
         .codex_gateway_port()
         .map_err(display_error)?;
-    let started = tauri::async_runtime::block_on(provider_gateway::start_oauth(
+    let started = provider_gateway::start_oauth(
         port,
         &state.data_dir,
         std::sync::Arc::clone(&state.proxy_auth_profiles),
-    ));
+    )
+    .await;
     match started {
         Ok(server) => {
             let status = server.status();
-            *gateway = Some(server);
+            *state.gateway.lock().map_err(lock_err)? = Some(server);
             *state.gateway_error.lock().map_err(lock_err)? = None;
             Ok(status)
         }
@@ -1223,32 +1267,31 @@ async fn stop_codex_gateway(
 }
 
 #[tauri::command]
-fn check_latest_cliproxy_core(
+async fn check_latest_cliproxy_core(
     state: State<'_, AppState>,
 ) -> Result<provider_gateway::GatewayStatus, String> {
     let _transition_guard = state
         .gateway_transition_gate
         .try_lock()
         .map_err(|_| "本地反代正在启动、停止或更新；请稍后重试。".to_string())?;
-    tauri::async_runtime::block_on(provider_gateway::check_latest_core(&state.data_dir))?;
+    provider_gateway::check_latest_core(&state.data_dir).await?;
     codex_gateway_status_inner(&state)
 }
 
 #[tauri::command]
-fn install_latest_cliproxy_core(
+async fn install_latest_cliproxy_core(
     state: State<'_, AppState>,
 ) -> Result<provider_gateway::GatewayStatus, String> {
     let _transition_guard = state
         .gateway_transition_gate
         .try_lock()
         .map_err(|_| "本地反代正在启动、停止或更新；请稍后重试。".to_string())?;
-    tauri::async_runtime::block_on(clear_exited_codex_gateway(&state))?;
+    clear_exited_codex_gateway(&state).await?;
     if state.gateway.lock().map_err(lock_err)?.is_some() {
         return Err("反代运行中不能更新 CLIProxyAPI 内核；请先关闭反代。".into());
     }
     *state.gateway_installing.lock().map_err(lock_err)? = true;
-    let install =
-        tauri::async_runtime::block_on(provider_gateway::install_latest_core(&state.data_dir));
+    let install = provider_gateway::install_latest_core(&state.data_dir).await;
     *state.gateway_installing.lock().map_err(lock_err)? = false;
     match install {
         Ok(()) => {
@@ -2216,7 +2259,7 @@ fn update_settings_inner(
         let _ = restart_watcher(app);
         return Err(format!("文件监听器更新失败，设置已回滚：{error}"));
     }
-    prune_retention(state, next.retention_days)?;
+    prune_retention(state)?;
     Ok(settings_public(next))
 }
 
@@ -2259,21 +2302,53 @@ fn stop_otel(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
-fn prune_retention(state: &AppState, retention_days: i64) -> Result<(), String> {
-    let older_than =
-        (Utc::now() - ChronoDuration::days(retention_days.clamp(1, 3650))).to_rfc3339();
-    state
-        .store
-        .lock()
-        .map_err(lock_err)?
+fn prune_retention(state: &AppState) -> Result<(), String> {
+    maintain_retention(state, true)
+}
+
+fn retention_maintenance_due(
+    last_run: Option<(i64, Instant)>,
+    retention_days: i64,
+    now: Instant,
+) -> bool {
+    last_run.is_none_or(|(previous_days, started)| {
+        previous_days != retention_days
+            || now.saturating_duration_since(started) >= RETENTION_MAINTENANCE_INTERVAL
+    })
+}
+
+fn maintain_retention(state: &AppState, force: bool) -> Result<(), String> {
+    let mut maintenance = state.retention_maintenance.lock().map_err(lock_err)?;
+    // Read the current setting and apply its cutoff under the same store lock.
+    // A scan may hold an older settings snapshot while the user saves a shorter
+    // retention period; that snapshot must never restore the older cutoff.
+    let store = state.store.lock().map_err(lock_err)?;
+    let retention_days = store
+        .settings()
+        .map_err(display_error)?
+        .retention_days
+        .clamp(1, 3650);
+    let now = Instant::now();
+    if !force && !retention_maintenance_due(*maintenance, retention_days, now) {
+        return Ok(());
+    }
+    let older_than = (Utc::now() - ChronoDuration::days(retention_days)).to_rfc3339();
+    store
         .prune_retention(&older_than)
         .map(|_| ())
-        .map_err(display_error)
+        .map_err(display_error)?;
+    *maintenance = Some((retention_days, now));
+    Ok(())
 }
 
 fn scan_all(state: &AppState) -> Result<(), String> {
     let _gate = state.scan_gate.lock().map_err(lock_err)?;
-    let homes = get_settings_inner(state)?.codex_homes;
+    let settings = get_settings_inner(state)?;
+    // Install/advance the cutoff before ingest. Store applies that cutoff in
+    // every ingest transaction so initial import and rebuild cannot revive
+    // expired metadata between maintenance rounds.
+    maintain_retention(state, false)?;
+    let homes = settings.codex_homes;
     let mut files = Vec::new();
     let mut visited = 0_usize;
     let mut warning = None;
@@ -2627,7 +2702,6 @@ fn restart_watcher(app: &AppHandle) -> Result<(), String> {
         let _ = callback_signal.try_send(WatchSignal::Reconcile);
     })
     .map_err(display_error)?;
-    let mut watched = 0_usize;
     for home in settings.codex_homes {
         for directory in ["sessions", "archived_sessions"] {
             let root = Path::new(&home).join(directory);
@@ -2635,13 +2709,12 @@ fn restart_watcher(app: &AppHandle) -> Result<(), String> {
                 watcher
                     .watch(&root, RecursiveMode::Recursive)
                     .map_err(display_error)?;
-                watched += 1;
             }
         }
     }
-    if watched == 0 {
-        return Ok(());
-    }
+    // Keep periodic maintenance alive even when no source directory exists.
+    // Existing metadata must still expire, and a later-created source can be
+    // picked up by reconciliation without restarting the application.
     let worker_app = app.clone();
     thread::Builder::new()
         .name("codex-manager-rollout".into())
@@ -3626,6 +3699,7 @@ fn main() {
                 database_path,
                 data_dir,
                 scan_gate: Mutex::new(()),
+                retention_maintenance: Mutex::new(None),
                 otel: Mutex::new(None),
                 otel_error: Mutex::new(None),
                 watcher: Mutex::new(None),
@@ -3668,7 +3742,7 @@ fn main() {
                         .map_err(|_| anyhow!("OTel 状态锁异常"))? = Some(error);
                 }
             }
-            prune_retention(&state, settings.retention_days).map_err(anyhow::Error::msg)?;
+            prune_retention(&state).map_err(anyhow::Error::msg)?;
             thread::spawn(move || {
                 if let Some(state) = handle.try_state::<AppState>() {
                     if scan_all(&state).is_ok() {
@@ -3683,6 +3757,7 @@ fn main() {
             bootstrap,
             get_dashboard,
             list_activity,
+            get_activity_facets,
             list_projects,
             discover_projects,
             get_agents_chain,
@@ -3762,6 +3837,165 @@ fn run_credential_helper() -> Option<i32> {
 mod tests {
     use super::*;
     use std::io::{Cursor, Write};
+
+    #[test]
+    fn retention_maintenance_is_due_on_start_interval_and_setting_change() {
+        let start = Instant::now();
+        assert!(retention_maintenance_due(None, 30, start));
+        assert!(!retention_maintenance_due(Some((30, start)), 30, start));
+        assert!(retention_maintenance_due(Some((30, start)), 7, start));
+        assert!(!retention_maintenance_due(
+            Some((30, start)),
+            30,
+            start + RETENTION_MAINTENANCE_INTERVAL - Duration::from_secs(1),
+        ));
+        assert!(retention_maintenance_due(
+            Some((30, start)),
+            30,
+            start + RETENTION_MAINTENANCE_INTERVAL,
+        ));
+    }
+
+    #[test]
+    fn scanner_maintains_retention_even_without_source_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("codex-home");
+        fs::create_dir_all(home.join("sessions")).unwrap();
+        let home = fs::canonicalize(home).unwrap();
+        let rollout = home.join("sessions/rollout-retention-fixture.jsonl");
+        let records = [
+            (
+                "session_meta",
+                serde_json::json!({"session_id":"retention-fixture","model_provider":"openai"}),
+            ),
+            (
+                "event_msg",
+                serde_json::json!({"type":"task_started","turn_id":"old-turn"}),
+            ),
+            (
+                "event_msg",
+                serde_json::json!({"type":"task_complete","turn_id":"old-turn"}),
+            ),
+        ];
+        let contents = records.iter().enumerate().map(|(ordinal, (kind, payload))| {
+            serde_json::json!({"type":kind,"ordinal":ordinal,"timestamp":"2020-01-01T00:00:00Z","payload":payload}).to_string() + "\n"
+        }).collect::<String>();
+        fs::write(&rollout, contents).unwrap();
+        let database_path = directory.path().join("manager.db");
+        let store = Store::open(&database_path).unwrap();
+        let mut settings = store.settings().unwrap();
+        settings.codex_homes = vec![home.to_string_lossy().into_owned()];
+        settings.retention_days = 30;
+        store.save_settings(&settings).unwrap();
+        // The keychain adapters below are only constructed; this scanner test
+        // never invokes an account, profile, gateway or credential operation.
+        let state = AppState {
+            store: Mutex::new(store),
+            database_path,
+            data_dir: directory.path().join("data"),
+            scan_gate: Mutex::new(()),
+            retention_maintenance: Mutex::new(None),
+            otel: Mutex::new(None),
+            otel_error: Mutex::new(None),
+            watcher: Mutex::new(None),
+            capability: Mutex::new(None),
+            scan_warning: Mutex::new(None),
+            project_warning: Mutex::new(None),
+            update_gate: tokio::sync::Mutex::new(()),
+            pending_update: Mutex::new(None),
+            account_gate: tokio::sync::Mutex::new(()),
+            credential_mutation_gate: tokio::sync::Mutex::new(()),
+            auth_stage_gate: tokio::sync::Mutex::new(()),
+            login: Mutex::new(account::LoginRuntime::default()),
+            auth_executable: Mutex::new(None),
+            auth_profiles: std::sync::Arc::new(auth_profiles::AuthProfileStore::load()),
+            proxy_auth_profiles: std::sync::Arc::new(proxy_auth::ProxyAuthStore::load()),
+            auth_profile_revisions: Mutex::new(VecDeque::new()),
+            codex_config_gate: Mutex::new(()),
+            gateway_transition_gate: tokio::sync::Mutex::new(()),
+            gateway: Mutex::new(None),
+            gateway_error: Mutex::new(None),
+            gateway_installing: Mutex::new(false),
+        };
+        // Simulate a legacy database populated before a retention cutoff was
+        // installed, then a user removing all watched sources.
+        scan_file_unlocked(&state, &rollout, &mut ScanBudget::new()).unwrap();
+        assert_eq!(dashboard_inner(&state).unwrap().records, 1);
+        let before = state.store.lock().unwrap().activity_revision().unwrap();
+        settings.codex_homes.clear();
+        state
+            .store
+            .lock()
+            .unwrap()
+            .save_settings(&settings)
+            .unwrap();
+        scan_all(&state).unwrap();
+        assert_eq!(dashboard_inner(&state).unwrap().records, 0);
+        assert_ne!(
+            before,
+            state.store.lock().unwrap().activity_revision().unwrap()
+        );
+        assert!(
+            state
+                .store
+                .lock()
+                .unwrap()
+                .checkpoint(rollout.to_str().unwrap())
+                .unwrap()
+                > 0
+        );
+        // The next maintenance window advances even though there are no roots.
+        *state.retention_maintenance.lock().unwrap() =
+            Some((30, Instant::now() - RETENTION_MAINTENANCE_INTERVAL));
+        scan_all(&state).unwrap();
+        assert!(
+            state
+                .retention_maintenance
+                .lock()
+                .unwrap()
+                .unwrap()
+                .1
+                .elapsed()
+                < RETENTION_MAINTENANCE_INTERVAL
+        );
+        // Rebuilding an old source applies the same saved cutoff atomically.
+        settings.codex_homes = vec![home.to_string_lossy().into_owned()];
+        state
+            .store
+            .lock()
+            .unwrap()
+            .save_settings(&settings)
+            .unwrap();
+        state
+            .store
+            .lock()
+            .unwrap()
+            .rebuild_source(rollout.to_str().unwrap())
+            .unwrap();
+        scan_all(&state).unwrap();
+        assert_eq!(dashboard_inner(&state).unwrap().records, 0);
+
+        // A scan can already have read the old settings when the user saves
+        // a shorter period. Maintenance must consult the current stored value,
+        // and a later wake must preserve that value and its maintenance time.
+        let earlier_scan_settings = get_settings_inner(&state).unwrap();
+        assert_eq!(earlier_scan_settings.retention_days, 30);
+        settings.retention_days = 7;
+        state
+            .store
+            .lock()
+            .unwrap()
+            .save_settings(&settings)
+            .unwrap();
+        maintain_retention(&state, false).unwrap();
+        let current_maintenance = *state.retention_maintenance.lock().unwrap();
+        assert_eq!(current_maintenance.unwrap().0, 7);
+        maintain_retention(&state, false).unwrap();
+        assert_eq!(
+            *state.retention_maintenance.lock().unwrap(),
+            current_maintenance
+        );
+    }
 
     #[test]
     fn account_read_uses_cache_fallback_when_trusted_cli_resolution_fails() {
@@ -4031,6 +4265,7 @@ mod tests {
             database_path,
             data_dir: directory.path().join("data"),
             scan_gate: Mutex::new(()),
+            retention_maintenance: Mutex::new(None),
             otel: Mutex::new(None),
             otel_error: Mutex::new(None),
             watcher: Mutex::new(None),
@@ -4183,6 +4418,7 @@ mod tests {
             database_path,
             data_dir: root.join("data"),
             scan_gate: Mutex::new(()),
+            retention_maintenance: Mutex::new(None),
             otel: Mutex::new(None),
             otel_error: Mutex::new(None),
             watcher: Mutex::new(None),

@@ -89,6 +89,12 @@ export interface ActivityQuery {
   revisionOnly?: boolean;
 }
 
+export interface ActivityFacets {
+  models: string[];
+  efforts: string[];
+  revision: string;
+}
+
 export interface ActivityPage {
   items: ActivityRecord[];
   nextCursor: string | null;
@@ -439,6 +445,7 @@ export const COMMANDS = {
   bootstrap: "bootstrap",
   getDashboard: "get_dashboard",
   listActivity: "list_activity",
+  getActivityFacets: "get_activity_facets",
   listProjects: "list_projects",
   discoverProjects: "discover_projects",
   getAgentsChain: "get_agents_chain",

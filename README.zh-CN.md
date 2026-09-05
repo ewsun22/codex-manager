@@ -75,6 +75,17 @@ Codex 配置应用需要用户明确确认；不会改写 `auth.json`。正式�
 | --- | --- |
 | ![项目与 AGENTS](output/playwright/final-desktop-project-agents.png) | ![本地 CLIProxyAPI 与 OAuth 档案](output/playwright/codex-gateway-desktop.png) |
 
+## 未发布的可靠性改进
+
+以下改动已进入当前工作源码，尚未随新的桌面版本发布：
+
+- 异常 token 快照出现后，任务总用量保持 `unavailable`；此前有效调用仍参与明确标注覆盖范围的部分 API 等价估算。缺失的调用元数据在活动和计价查询中使用一致的跨批次回退规则。
+- 保留期同时约束首次导入、重建和定期维护。未观测到终态或缺少可用时间戳的任务暂予保留；不影响源 rollout 文件或凭据。
+- AGENTS 编辑保护未保存修改并拒绝迟到的读取结果。活动筛选候选覆盖所选视图的全部历史。写入成功与后续状态刷新失败分别反馈。
+- 本地代理页面可见时持续校验状态。耗时原生操作移出 UI 线程，代理启动健康检查具有明确的超时上限。
+
+实施与验证边界见[未发布说明](docs/release-notes/unreleased.md)。
+
 ## 平台支持
 
 - **已支持：** macOS 13+，当前发布资产为 arm64。
