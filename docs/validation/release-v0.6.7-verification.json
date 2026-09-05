@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 1,
+  "status": "published-publicly-verified",
+  "verifiedAt": "2026-09-05T19:22:22Z",
+  "source": {
+    "repository": "ewsun22/codex-manager",
+    "sha": "bb85f954889ead4b6894a9a258ea1299884050a5",
+    "ref": "refs/heads/main"
+  },
+  "verificationRun": {
+    "workflowRef": "ewsun22/codex-manager/.github/workflows/verify-release.yml@refs/heads/main",
+    "workflowSha": "bb85f954889ead4b6894a9a258ea1299884050a5",
+    "runId": "33986855993",
+    "runAttempt": "1"
+  },
+  "release": {
+    "id": 383348682,
+    "tag": "v0.6.7",
+    "mode": "published"
+  },
+  "assets": [
+    {
+      "id": 546208081,
+      "name": "BUILD-PROVENANCE.json",
+      "size": 5537,
+      "digest": "sha256:efe128b1bf8e0c4a6f678960e9327c3fd21ddb8eb9f9780c292083234295a19e",
+      "stableUrl": "https://github.com/ewsun22/codex-manager/releases/download/v0.6.7/BUILD-PROVENANCE.json"
+    },
+    {
+      "id": 546208091,
+      "name": "SHA256SUMS-v0.6.7-signed",
+      "size": 765,
+      "digest": "sha256:fde674d89917e78cd999468ca93169e956152e59dac7c8e00ab0cd2765d0de6a",
+      "stableUrl": "https://github.com/ewsun22/codex-manager/releases/download/v0.6.7/SHA256SUMS-v0.6.7-signed"
+    },
+    {
+      "id": 546207930,
+      "name": "SIGNING-EVIDENCE.json",
+      "size": 2096,
+      "digest": "sha256:d234c7882817b2b445c08d63b10fc183f1ee43627e57c80e750fd08a60195495",
+      "stableUrl": "https://github.com/ewsun22/codex-manager/releases/download/v0.6.7/SIGNING-EVIDENCE.json"
+    },
+    {
+      "id": 546207940,
+      "name": "codex-manager-v0.6.7-aarch64.app.tar.gz",
+      "size": 10796361,
+      "digest": "sha256:ff557cdd8bc9574f7e5aad48db038aab0c854e651bd63355e6a33f7f578f7a8b",
+      "stableUrl": "https://github.com/ewsun22/codex-manager/releases/download/v0.6.7/codex-manager-v0.6.7-aarch64.app.tar.gz"
+    },
+    {
+      "id": 546207965,
+      "name": "codex-manager-v0.6.7-aarch64.app.tar.gz.sig",
+      "size": 432,
+      "digest": "sha256:5a8edf8522b888622d9df5078b200e2da46744a850c752ccdaeb0e16827c607c",
+      "stableUrl": "https://github.com/ewsun22/codex-manager/releases/download/v0.6.7/codex-manager-v0.6.7-aarch64.app.tar.gz.sig"
+    },
+    {
+      "id": 546207978,
+      "name": "codex-manager-v0.6.7-aarch64.dmg",
+      "size": 11703630,
+      "digest": "sha256:f4118d704af74eb9d386192ccd4dd09c68dbca9f1560cc2f19178ee8efa09299",
+      "stableUrl": "https://github.com/ewsun22/codex-manager/releases/download/v0.6.7/codex-manager-v0.6.7-aarch64.dmg"
+    },
+    {
+      "id": 546207990,
+      "name": "codex-manager-v0.6.7-licenses.zip",
+      "size": 29973,
+      "digest": "sha256:0a60a0f5e8fc72c74a61c5634443974b1eb5bf59ce91b46d8669c8152061b357",
+      "stableUrl": "https://github.com/ewsun22/codex-manager/releases/download/v0.6.7/codex-manager-v0.6.7-licenses.zip"
+    },
+    {
+      "id": 546208041,
+      "name": "codex-manager-v0.6.7-sbom.zip",
+      "size": 79004,
+      "digest": "sha256:b09e0b731a74f6b9d1e0fccba25ebd8d0c766812228dccbb0974e4a803f32364",
+      "stableUrl": "https://github.com/ewsun22/codex-manager/releases/download/v0.6.7/codex-manager-v0.6.7-sbom.zip"
+    },
+    {
+      "id": 546208121,
+      "name": "latest.json",
+      "size": 2383,
+      "digest": "sha256:973eaf6a8fc2de665b4ab22adf56234c2e7f58bb01f33dafa13ab6fb45b5731a",
+      "stableUrl": "https://github.com/ewsun22/codex-manager/releases/download/v0.6.7/latest.json"
+    }
+  ],
+  "provenanceSha256": "efe128b1bf8e0c4a6f678960e9327c3fd21ddb8eb9f9780c292083234295a19e",
+  "attestations": {
+    "files": [
+      {
+        "name": "BUILD-PROVENANCE.json.attestation.json",
+        "sha256": "73f5fa1da1b3504bd256e26d707683f458d3eeb9a6cbaa0e55e93a3e62f5a158"
+      },
+      {
+        "name": "SHA256SUMS-v0.6.7-signed.attestation.json",
+        "sha256": "73f5fa1da1b3504bd256e26d707683f458d3eeb9a6cbaa0e55e93a3e62f5a158"
+      },
+      {
+        "name": "SIGNING-EVIDENCE.json.attestation.json",
+        "sha256": "73f5fa1da1b3504bd256e26d707683f458d3eeb9a6cbaa0e55e93a3e62f5a158"
+      },
+      {
+        "name": "codex-manager-v0.6.7-aarch64.app.tar.gz.attestation.json",
+        "sha256": "73f5fa1da1b3504bd256e26d707683f458d3eeb9a6cbaa0e55e93a3e62f5a158"
+      },
+      {
+        "name": "codex-manager-v0.6.7-aarch64.app.tar.gz.sig.attestation.json",
+        "sha256": "73f5fa1da1b3504bd256e26d707683f458d3eeb9a6cbaa0e55e93a3e62f5a158"
+      },
+      {
+        "name": "codex-manager-v0.6.7-aarch64.dmg.attestation.json",
+        "sha256": "73f5fa1da1b3504bd256e26d707683f458d3eeb9a6cbaa0e55e93a3e62f5a158"
+      },
+      {
+        "name": "codex-manager-v0.6.7-licenses.zip.attestation.json",
+        "sha256": "73f5fa1da1b3504bd256e26d707683f458d3eeb9a6cbaa0e55e93a3e62f5a158"
+      },
+      {
+        "name": "codex-manager-v0.6.7-sbom.zip.attestation.json",
+        "sha256": "73f5fa1da1b3504bd256e26d707683f458d3eeb9a6cbaa0e55e93a3e62f5a158"
+      },
+      {
+        "name": "latest.json.attestation.json",
+        "sha256": "73f5fa1da1b3504bd256e26d707683f458d3eeb9a6cbaa0e55e93a3e62f5a158"
+      }
+    ]
+  },
+  "checks": {
+    "exactAssetSetAndDigests": true,
+    "updaterSignatureAndStableUrl": true,
+    "appAndDmgTrustChain": true,
+    "sbomAndLicenses": true,
+    "anonymousStableDownloads": true,
+    "latestAlias": true
+  }
+}

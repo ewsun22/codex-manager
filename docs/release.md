@@ -171,3 +171,6 @@ xcrun stapler validate path/to/CodexManager.dmg
 用户明确授权提交、推送并发布 v0.6.7，本机更新由用户操作。本版将 SQLite 主数据库预算从 512 MiB 调整为固定 1 GiB，并按实际页大小计算，修复此次旧库迁移 14 的容量失败。容量事务回滚、重试及原始旧库私有副本验证见[故障记录](validation/startup-migration-capacity.md)，用户可见面检查及后续发布证据见[发布记录](validation/release-v0.6.7.md)。
 
 源代码定版不表示已公开；签名、公证、草稿复验和独立公开复验仍须分别完成。本机安装和启动验收保留为用户待执行，真实 OAuth 业务仍未验收，采用 [SECURITY.md](../SECURITY.md) 记录的本版限定发布例外。不得重写 v0.6.6 tag、资产或历史 note。
+
+
+v0.6.7 已完成 `published publicly verified`：发布时间 `2026-09-05T19:21:13Z`，Release ID `383348682`，source `bb85f954889ead4b6894a9a258ea1299884050a5`。CI `33985881583`、签名发布 `33985887656` 与独立公开复验 `33986855993` 全部成功；九项资产、app/DMG 双 `Accepted` 公证、签名/Gatekeeper、updater、供应链证明和匿名 latest 下载已验证。见[完整证据](validation/release-v0.6.7.md)和[公开验证 JSON](validation/release-v0.6.7-verification.json)。本机更新由用户自行执行，不记录为已安装或启动已验收。

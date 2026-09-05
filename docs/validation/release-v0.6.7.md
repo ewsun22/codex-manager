@@ -31,3 +31,15 @@
 `implemented` / 本地 `tested` 已完成；源码定版不提前宣称 `published`。公开验证状态在执行完成后另记，不改写不可变 tag。用户本机安装和实际启动仍待用户操作，不记为 `accepted`；真实 OAuth 业务验收仍未完成。本版限定发布授权见 [SECURITY.md](../../SECURITY.md)。
 
 `deployment_decision=project-authorized`：用户明确指定 v0.6.7 的提交、推送与发布；不包含代理替换本机应用、认证切换或付费业务调用。
+
+## 公开发布结果
+
+v0.6.7 已于 `2026-09-05T19:21:13Z` 公开，Release ID `383348682`，tag source 为 `bb85f954889ead4b6894a9a258ea1299884050a5`。
+
+- [主线 CI 33985881583](https://github.com/ewsun22/codex-manager/actions/runs/33985881583) 成功：Node 125 项、默认 Rust 151 项通过，另有 4 项显式 ignored；代码检查、依赖审计、macOS 打包及安装包校验通过。
+- [签名发布 33985887656](https://github.com/ewsun22/codex-manager/actions/runs/33985887656) 全部 job 成功：构建输入 SHA-256 `bc6aa8906cf8a33f527d4c6904b5d9240890fc9b72fac984bd3437fc9f836304` 已在批准签名前核对，版本、源提交和完整 note 一致。
+- app 公证 `b4dee6f1-7556-4780-b12b-643551ba0d43` 与 DMG 公证 `0e4da7f8-680c-4393-b426-98b448284686` 均为 `Accepted`，app CDHash 为 `dc02d3aa4d7624ca30c307919edb71022d63dfcb`，与 updater / DMG 内嵌 app 一致。
+- [独立公开复验 33986855993](https://github.com/ewsun22/codex-manager/actions/runs/33986855993) 成功，验证时间 `2026-09-05T19:22:22Z`。九项资产、正式 tag URL、匿名 latest alias、SHA-256、updater 签名、Developer ID、Hardened Runtime、secure timestamp、stapling、Gatekeeper、SBOM、许可证、provenance 与 attestation 通过。[公开验证 JSON](release-v0.6.7-verification.json) 保留资产 ID、大小、摘要及检查结果。
+- 本机匿名读取 latest.json 返回 HTTP 200，版本 `0.6.7`，SHA-256 `973eaf6a8fc2de665b4ab22adf56234c2e7f58bb01f33dafa13ab6fb45b5731a`；778 字符摘要与同一版本 note 生成结果完全相同，updater URL 使用正式 `v0.6.7` tag。
+
+`published publicly verified` 已完成。`cleanup`：工作流临时签名材料已按门禁清理，下载用于批准核对的本地签名输入归档已删除；公开证明保留。本任务没有替换本机应用或原始数据库，本机安装与实际启动验收由用户执行，仍不宣称 `accepted`。真实 OAuth 业务状态不变。
